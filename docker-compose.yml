@@ -183,6 +183,9 @@ services:
       - backend
     environment:
       - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-http://localhost:18000}
+      # Server-side only: used by next.config.mjs rewrites to proxy /api/v1/*
+      # to the backend container. Uses the docker-compose service name.
+      - BACKEND_URL=http://backend:18000
     restart: unless-stopped
 
 volumes:
