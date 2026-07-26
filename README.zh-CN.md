@@ -42,6 +42,7 @@
 - [Docker 一键部署](#docker-一键部署)
 - [本地开发](#本地开发)
 - [配置说明](#配置说明)
+- [插件系统](#插件系统)
 - [License](#license)
 
 ---
@@ -236,6 +237,9 @@ sequenceDiagram
 - 流式对话绕过缓存（`/api/v1/chat/stream` 直连后端）
 - 安装到桌面 / 移动主屏
 - 主题色适配亮/暗模式
+- 抽屉式侧边栏：在 PWA 模式或视口宽度 < 1024px 时，左侧栏默认隐藏，通过页面左上角的 `SidebarToggleButton` 滑入式唤起；通过内联脚本 + `html.pwa` / `html.drawer-mode` 类在水合前避免侧边栏闪烁
+- iOS `navigator.standalone` 检测，覆盖 `display-mode` 媒体查询遗漏的场景
+- 适配刘海屏 / Home Indicator 的安全区内边距
 
 ---
 
@@ -244,9 +248,11 @@ sequenceDiagram
 ### 前置条件
 
 - Docker + Docker Compose
-- 或者：Python 3.11+、Node.js 20+、pnpm/npm
+- 或者：Python 3.11+、Node.js 20+、pnpm/npm（仅本地开发时需要）
 
 ### 方式一：Docker 一键启动（推荐）
+
+`docker-compose.yml` 默认使用 GHCR 上的预构建镜像（`ghcr.io/caryk753/lifetree-backend`、`ghcr.io/caryk753/lifetree-frontend`），一条命令即可拉起全栈：
 
 ```bash
 # 1. 克隆仓库
@@ -258,7 +264,7 @@ cp .env.example .env
 # 编辑 .env，至少填写一个 LLM API Key
 
 # 3. 一键启动全栈（基础设施 + 后端 + Worker + 前端）
-docker compose up -d --build
+docker compose up -d
 
 # 4. 初始化数据库（首次运行）
 docker compose exec backend python scripts/init_db.py
@@ -266,6 +272,11 @@ docker compose exec backend python scripts/init_db.py
 # 5. 灌入示例数据（可选）
 docker compose exec backend python scripts/seed_fsw.py
 ```
+
+> 想固定到某个版本？通过环境变量覆盖镜像 tag：
+> ```bash
+> BACKEND_IMAGE_TAG=0.1.0 FRONTEND_IMAGE_TAG=0.1.0 docker compose up -d
+> ```
 
 启动后访问：
 - 前端：http://localhost:3000
@@ -275,7 +286,18 @@ docker compose exec backend python scripts/seed_fsw.py
 - MinIO 控制台：http://localhost:9001
 - Neo4j 浏览器：http://localhost:7474
 
-### 方式二：本地开发
+### 方式二：本地构建镜像启动
+
+如果你需要修改后端 / 前端代码或临时调试，传 `--build` 让 compose 用本地 Dockerfile 构建：
+
+```bash
+cp .env.example .env
+# 编辑 .env，至少填写一个 LLM API Key
+docker compose up -d --build
+docker compose exec backend python scripts/init_db.py
+```
+
+### 方式三：本地开发
 
 详见 [本地开发](#本地开发) 章节。
 
@@ -291,14 +313,17 @@ docker compose exec backend python scripts/seed_fsw.py
 | `neo4j` | `neo4j:5.20` | 7687, 7474 | 知识图谱 + APOC |
 | `redis` | `redis:7-alpine` | 6379 | Celery broker + 缓存 |
 | `minio` | `minio/minio:latest` | 9000, 9001 | 对象存储 |
-| `backend` | 本地构建 | 8000 | FastAPI 应用 |
-| `worker` | 本地构建 | - | Celery Worker |
-| `beat` | 本地构建 | - | Celery Beat 调度器 |
+| `backend` | `ghcr.io/caryk753/lifetree-backend` | 8000 | FastAPI 应用 |
+| `worker` | `ghcr.io/caryk753/lifetree-backend` | - | Celery Worker |
+| `beat` | `ghcr.io/caryk753/lifetree-backend` | - | Celery Beat 调度器 |
 | `flower` | `mher/flower:latest` | 5555 | Celery 监控 |
-| `frontend` | 本地构建 | 3000 | Next.js standalone |
+| `frontend` | `ghcr.io/caryk753/lifetree-frontend` | 3000 | Next.js standalone |
 
 ```bash
-# 启动所有服务
+# 启动所有服务（默认拉取 GHCR 预构建镜像）
+docker compose up -d
+
+# 强制本地构建后启动
 docker compose up -d --build
 
 # 查看日志
@@ -311,18 +336,19 @@ docker compose down
 docker compose down -v
 ```
 
-### 使用预构建镜像（GHCR）
+### 镜像 tag 控制
+
+默认拉取 `latest`，可通过环境变量固定版本：
 
 ```bash
-# 拉取最新镜像
+BACKEND_IMAGE_TAG=0.1.0 FRONTEND_IMAGE_TAG=0.1.0 docker compose up -d
+```
+
+如需手动拉取镜像（如离线环境预下载）：
+
+```bash
 docker pull ghcr.io/caryk753/lifetree-backend:latest
 docker pull ghcr.io/caryk753/lifetree-frontend:latest
-
-# 在 docker-compose.yml 中替换 build 为 image
-# backend:
-#   image: ghcr.io/caryk753/lifetree-backend:latest
-# frontend:
-#   image: ghcr.io/caryk753/lifetree-frontend:latest
 ```
 
 ---
@@ -402,11 +428,97 @@ python scripts/seed_fsw.py
 
 ### SMTP 邮件配置
 
-在设置页面配置 SMTP，启用风险预警邮件推送。支持发送测试邮件验证配置。
+在设置页面配置 SMTP，启用风险预警邮件推送。支持发送测试邮件验证配置（发送前先做权限校验）。配置项包括：
+
+- SMTP 服务器地址、端口
+- 用户名、密码
+- 发件人邮箱、发件人名称
+- 使用 TLS（STARTTLS，端口 587）/ 使用 SSL（端口 465）
+
+### 认证与多用户模式
+
+LifeTree 支持两种使用模式，由环境变量 `LIFETREE_USE_MODE` 控制（默认 `single`），并持久化到数据库 `app_config.use_mode`，可通过 `PUT /settings/use-mode` 切换：
+
+- **单用户模式（`single`，默认）**：无需登录即可使用，后端通过 default-user 兜底服务数据。用户若希望拥有个人数据范围，仍可通过用户菜单手动登录。AuthGate 不会弹出登录对话框。
+- **多用户模式（`multi`）**：必须登录才能使用，AuthGate 弹出的登录对话框不可关闭。管理员角色由 `LIFETREE_ADMIN_USER_IDS` 环境变量指定。
+
+支持的登录方式：
+
+- 邮箱 + 密码（JWT access/refresh token），可选邮件验证码注册流程（`send-code` / `register-with-code`）
+- OAuth 登录：Google / GitHub / Microsoft，端点 `/auth/oauth/{id}/start` 与 `/auth/oauth/{id}/callback`
+
+数据隔离：events / sources / plugins / chat 对话按 `user_id` 隔离。前端聊天数据按 `lifetree.chat.conversations.v2.<userId>` 分区存储到 localStorage，未登录用户使用 `default` 作用域。
+
+### 管理员平台配置
+
+多用户模式下，管理员可见独立的平台配置页面，集中管理：
+
+- 模型与服务 API 密钥（OpenAI / Anthropic / 阿里云百炼 / Tavily / SMTP 等）
+- 用户管理（`GET/PATCH/DELETE /admin/users`）与平台统计（`GET /admin/stats`）
+
+非管理员用户在设置页面看不到管理员配置的 API 密钥。
 
 ### 环境变量
 
 完整变量见 [`.env.example`](.env.example)。
+
+---
+
+## 插件系统
+
+LifeTree 的插件系统允许通过自定义 Python 脚本接入任意数据源（RSS、网页爬虫、API 等），将外部信息自动结构化为知识图谱中的事件、指标、断言和关系。支持内置插件和用户上传插件两种来源。
+
+### 插件契约
+
+每个插件是一个 Python 文件，需实现以下静态方法：
+
+```python
+from app.services.plugins import Plugin, PluginManifest, PluginParam
+
+class Plugin:
+    @staticmethod
+    def manifest() -> PluginManifest:
+        """返回插件元数据：名称、描述、参数定义"""
+
+    @staticmethod
+    def fetch(params: dict) -> str | bytes:
+        """抓取原始数据，返回文本或二进制"""
+
+    @staticmethod
+    def transform(raw, llm) -> str:  # 可选
+        """可选：用 LLM 预处理原始数据后再交给结构化服务"""
+```
+
+- **内置插件**：放在 `backend/plugins/` 目录下，随镜像发布。参考示例：[`sample_rss_feed.py`](backend/plugins/sample_rss_feed.py)、[`sample_web_scraper.py`](backend/plugins/sample_web_scraper.py)。
+- **用户上传插件**：通过 `/plugins/upload` 接口上传，存储在 `backend/plugins/user_uploaded/{plugin_id}.py`，元数据记录在 `user_plugins` 表中。Docker Compose 已为 `/app/plugins/user_uploaded/` 配置 named volume，重启容器后自定义插件不会丢失。
+
+### 插件上传
+
+插件页面支持直接上传 `.py` 文件，无需重新构建镜像即可添加自定义插件。上传流程经过多重安全校验：
+
+1. **AST 语法检查**：拒绝无法解析的源码
+2. **导入黑名单**：禁止 `os` / `sys` / `subprocess` / `shutil` / `ctypes` / `socket` / `multiprocessing` / `importlib` / `pickle` / `marshal` / `pty` / `posix` / `nt` / `resource` 等危险模块
+3. **危险内建调用检查**：拦截 `eval` / `exec` / `__import__` 等调用
+4. **契约校验**：必须暴露有效的 `Plugin` 类与 `manifest()` 方法
+5. **临时模块加载验证**：在临时路径中导入模块，确保 `manifest()` 可正常调用
+
+接口列表：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/plugins/upload` | 上传用户插件（支持 `overwrite=true` 覆盖） |
+| `DELETE` | `/plugins/{id}` | 软删除用户插件（内置插件不可删除） |
+| `PATCH` | `/plugins/{id}/enabled` | 启用 / 禁用用户插件 |
+| `POST` | `/plugins/{id}/run` | 抓取 + 转换 + 入库 |
+
+### 贡献插件
+
+欢迎通过 Pull Request 提交自定义插件：
+
+1. Fork 仓库并在 `backend/plugins/` 下创建插件文件（文件名须为小写蛇形，如 `my_feed.py`）
+2. 实现插件契约，确保 `manifest()` 和 `fetch()` 正常工作
+3. 在 PR 描述中说明插件用途、参数说明和测试方式
+4. 通过审核后合并到主线版本，随正式版本发布
 
 ---
 

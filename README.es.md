@@ -42,6 +42,7 @@
 - [Despliegue Docker con Un Clic](#despliegue-docker-con-un-clic)
 - [Desarrollo Local](#desarrollo-local)
 - [Configuración](#configuración)
+- [Sistema de Plugins](#sistema-de-plugins)
 - [License](#license)
 
 ---
@@ -236,6 +237,9 @@ sequenceDiagram
 - Chat en streaming omite caché (`/api/v1/chat/stream` directo al backend)
 - Instalación en escritorio / pantalla de inicio móvil
 - Color de tema se adapta a modo claro/oscuro
+- Barra lateral en modo drawer: en modo PWA o ancho de ventana < 1024px, la barra lateral se oculta por defecto y se desliza mediante el `SidebarToggleButton` de la esquina superior izquierda de cada página. Un script inline + las clases `html.pwa` / `html.drawer-mode` evitan el parpadeo antes de la hidratación.
+- Detección de `navigator.standalone` en iOS, cubre casos que la media query `display-mode` no detecta.
+- Padding de área segura para notch / indicador de inicio.
 
 ---
 
@@ -244,9 +248,11 @@ sequenceDiagram
 ### Requisitos Previos
 
 - Docker + Docker Compose
-- O: Python 3.11+, Node.js 20+, pnpm/npm
+- O: Python 3.11+, Node.js 20+, pnpm/npm (solo para desarrollo local)
 
-### Opción 1: Lanzamiento con Un Clic Docker (Recomendado)
+### Opción 1: Lanzamiento Docker Un Clic (Recomendado)
+
+`docker-compose.yml` usa por defecto las imágenes pre-construidas de GHCR (`ghcr.io/caryk753/lifetree-backend`, `ghcr.io/caryk753/lifetree-frontend`), con un solo comando levanta toda la pila:
 
 ```bash
 # 1. Clonar el repositorio
@@ -258,7 +264,7 @@ cp .env.example .env
 # Editar .env, completar al menos una LLM API Key
 
 # 3. Lanzamiento con un clic de pila completa (infraestructura + backend + worker + frontend)
-docker compose up -d --build
+docker compose up -d
 
 # 4. Inicializar la base de datos (primera ejecución)
 docker compose exec backend python scripts/init_db.py
@@ -266,6 +272,11 @@ docker compose exec backend python scripts/init_db.py
 # 5. Cargar datos de ejemplo (opcional)
 docker compose exec backend python scripts/seed_fsw.py
 ```
+
+> ¿Quieres fijar una versión? Sobrescribe el tag de imagen con variables de entorno:
+> ```bash
+> BACKEND_IMAGE_TAG=0.1.0 FRONTEND_IMAGE_TAG=0.1.0 docker compose up -d
+> ```
 
 Después del lanzamiento, visitar:
 - Frontend: http://localhost:3000
@@ -275,7 +286,18 @@ Después del lanzamiento, visitar:
 - Consola MinIO: http://localhost:9001
 - Navegador Neo4j: http://localhost:7474
 
-### Opción 2: Desarrollo Local
+### Opción 2: Construir Imágenes Localmente
+
+Si necesitas modificar código del backend / frontend o depurar, pasa `--build` para que compose construya con el Dockerfile local:
+
+```bash
+cp .env.example .env
+# Editar .env, completar al menos una LLM API Key
+docker compose up -d --build
+docker compose exec backend python scripts/init_db.py
+```
+
+### Opción 3: Desarrollo Local
 
 Consultar la sección [Desarrollo Local](#desarrollo-local).
 
@@ -291,14 +313,17 @@ El `docker-compose.yml` completo incluye los siguientes servicios:
 | `neo4j` | `neo4j:5.20` | 7687, 7474 | Grafo de conocimiento + APOC |
 | `redis` | `redis:7-alpine` | 6379 | Celery broker + caché |
 | `minio` | `minio/minio:latest` | 9000, 9001 | Almacenamiento de objetos |
-| `backend` | Build local | 8000 | Aplicación FastAPI |
-| `worker` | Build local | - | Celery Worker |
-| `beat` | Build local | - | Programador Celery Beat |
+| `backend` | `ghcr.io/caryk753/lifetree-backend` | 8000 | Aplicación FastAPI |
+| `worker` | `ghcr.io/caryk753/lifetree-backend` | - | Celery Worker |
+| `beat` | `ghcr.io/caryk753/lifetree-backend` | - | Programador Celery Beat |
 | `flower` | `mher/flower:latest` | 5555 | Monitor Celery |
-| `frontend` | Build local | 3000 | Next.js standalone |
+| `frontend` | `ghcr.io/caryk753/lifetree-frontend` | 3000 | Next.js standalone |
 
 ```bash
-# Iniciar todos los servicios
+# Iniciar todos los servicios (por defecto usa imágenes GHCR pre-construidas)
+docker compose up -d
+
+# Forzar construcción local y luego iniciar
 docker compose up -d --build
 
 # Ver logs
@@ -311,18 +336,19 @@ docker compose down
 docker compose down -v
 ```
 
-### Usar Imágenes Pre-construidas (GHCR)
+### Control de Tag de Imagen
+
+Por defecto se usa `latest`, se puede fijar una versión con variables de entorno:
 
 ```bash
-# Pull de las últimas imágenes
+BACKEND_IMAGE_TAG=0.1.0 FRONTEND_IMAGE_TAG=0.1.0 docker compose up -d
+```
+
+Si necesitas descargar las imágenes manualmente (por ejemplo, para un entorno offline):
+
+```bash
 docker pull ghcr.io/caryk753/lifetree-backend:latest
 docker pull ghcr.io/caryk753/lifetree-frontend:latest
-
-# Reemplazar build con image en docker-compose.yml
-# backend:
-#   image: ghcr.io/caryk753/lifetree-backend:latest
-# frontend:
-#   image: ghcr.io/caryk753/lifetree-frontend:latest
 ```
 
 ---
@@ -402,11 +428,97 @@ Completar Tavily API Key en la página de ajustes para habilitar:
 
 ### Configuración de Correo SMTP
 
-Configurar SMTP en la página de ajustes para habilitar el envío de alertas de riesgo por correo. Soporta envío de correos de prueba para verificar la configuración.
+Configurar SMTP en la página de ajustes para habilitar el envío de alertas de riesgo por correo. Soporta envío de correos de prueba para verificar la configuración (la verificación de permisos se realiza antes del envío). Campos de configuración:
+
+- Dirección del servidor SMTP, puerto
+- Nombre de usuario, contraseña
+- Correo del remitente, nombre del remitente
+- Usar TLS (STARTTLS, puerto 587) / Usar SSL (puerto 465)
+
+### Autenticación y Modo Multiusuario
+
+LifeTree soporta dos modos de uso, controlados por la variable de entorno `LIFETREE_USE_MODE` (por defecto `single`), persistidos en la base de datos `app_config.use_mode`, conmutables vía `PUT /settings/use-mode`:
+
+- **Modo un solo usuario (`single`, por defecto)**: no requiere inicio de sesión — el backend sirve los datos mediante el fallback de usuario predeterminado. Los usuarios que deseen un ámbito de datos personal pueden iniciar sesión manualmente desde el menú de usuario. AuthGate no muestra el diálogo de inicio de sesión.
+- **Modo multiusuario (`multi`)**: requiere inicio de sesión — el diálogo de AuthGate no se puede cerrar. El rol de administrador se controla con la variable de entorno `LIFETREE_ADMIN_USER_IDS`.
+
+Métodos de inicio de sesión soportados:
+
+- Correo + contraseña (tokens JWT access/refresh), con flujo opcional de registro por código de verificación por correo (`send-code` / `register-with-code`)
+- OAuth: Google / GitHub / Microsoft, endpoints `/auth/oauth/{id}/start` y `/auth/oauth/{id}/callback`
+
+Aislamiento de datos: events / sources / plugins / conversaciones de chat se aíslan por `user_id`. Los datos de chat en el frontend se particionan por `lifetree.chat.conversations.v2.<userId>` en localStorage; los usuarios no autenticados usan el ámbito `default`.
+
+### Configuración de Plataforma de Administrador
+
+En modo multiusuario, los administradores tienen acceso a una página dedicada de configuración de plataforma para gestionar:
+
+- API keys de modelos y servicios (OpenAI / Anthropic / Alibaba Cloud Bailian / Tavily / SMTP, etc.)
+- Gestión de usuarios (`GET/PATCH/DELETE /admin/users`) y estadísticas de plataforma (`GET /admin/stats`)
+
+Los usuarios no administradores no pueden ver las API keys configuradas por el administrador en la página de ajustes.
 
 ### Variables de Entorno
 
-Para la lista completa de variables, consultar [`.env.example`](.env.example).
+Para la lista completa de variables, ver [`.env.example`](.env.example).
+
+---
+
+## Sistema de Plugins
+
+El sistema de plugins de LifeTree permite conectar a cualquier fuente de datos (RSS, scraper web, API, etc.) mediante scripts de Python personalizados, estructurando automáticamente la información externa en eventos, métricas, aserciones y relaciones del grafo de conocimiento. Soporta tanto plugins integrados como subidos por el usuario.
+
+### Contrato del Plugin
+
+Cada plugin es un archivo Python que implementa los siguientes métodos estáticos:
+
+```python
+from app.services.plugins import Plugin, PluginManifest, PluginParam
+
+class Plugin:
+    @staticmethod
+    def manifest() -> PluginManifest:
+        """Devuelve los metadatos del plugin: nombre, descripción, definición de parámetros."""
+
+    @staticmethod
+    def fetch(params: dict) -> str | bytes:
+        """Captura datos crudos, devuelve texto o bytes."""
+
+    @staticmethod
+    def transform(raw, llm) -> str:  # opcional
+        """Opcional: preprocesa los datos crudos con un LLM antes de pasarlos al servicio de estructuración."""
+```
+
+- **Plugins integrados**: ubicados en `backend/plugins/`, se distribuyen con la imagen. Ver [`sample_rss_feed.py`](backend/plugins/sample_rss_feed.py) y [`sample_web_scraper.py`](backend/plugins/sample_web_scraper.py).
+- **Plugins subidos por el usuario**: se suben vía el endpoint `/plugins/upload`, se almacenan en `backend/plugins/user_uploaded/{plugin_id}.py`, con metadatos en la tabla `user_plugins`. Docker Compose configura un named volume para `/app/plugins/user_uploaded/` para que los plugins personalizados persistan tras reinicios del contenedor.
+
+### Subida de Plugins
+
+La página de plugins soporta la subida directa de archivos `.py` — no es necesario reconstruir la imagen para añadir plugins personalizados. La subida pasa por múltiples comprobaciones de seguridad:
+
+1. **Comprobación de sintaxis AST**: rechaza código fuente que no se pueda analizar.
+2. **Lista de importaciones prohibidas**: bloquea módulos peligrosos incluyendo `os` / `sys` / `subprocess` / `shutil` / `ctypes` / `socket` / `multiprocessing` / `importlib` / `pickle` / `marshal` / `pty` / `posix` / `nt` / `resource`.
+3. **Comprobación de builtins peligrosos**: intercepta llamadas `eval` / `exec` / `__import__`.
+4. **Validación del contrato**: debe exponer una clase `Plugin` válida con un método `manifest()`.
+5. **Verificación de carga en módulo temporal**: importa el módulo desde una ruta temporal para asegurar que `manifest()` es invocable.
+
+Endpoints de la API:
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| `POST` | `/plugins/upload` | Sube un plugin de usuario (soporta `overwrite=true`) |
+| `DELETE` | `/plugins/{id}` | Borrado lógico de un plugin de usuario (los plugins integrados no se pueden borrar) |
+| `PATCH` | `/plugins/{id}/enabled` | Habilitar / deshabilitar un plugin de usuario |
+| `POST` | `/plugins/{id}/run` | Captura + transformación + ingesta |
+
+### Contribuir Plugins
+
+Se aceptan Pull Requests para plugins personalizados:
+
+1. Haz un fork del repositorio y crea el archivo del plugin en `backend/plugins/` (el nombre debe ser snake_case en minúsculas, p. ej. `my_feed.py`).
+2. Implementa el contrato del plugin — asegúrate de que `manifest()` y `fetch()` funcionan correctamente.
+3. Describe el propósito, parámetros y forma de probar el plugin en la descripción del PR.
+4. Tras la revisión, se fusionará con la rama principal y se publicará con la siguiente versión.
 
 ---
 

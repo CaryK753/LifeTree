@@ -1,5 +1,16 @@
 # LifeTree full stack — infrastructure + app services.
-# Infra services preserve their original config (images, ports, volumes, healthchecks).
+#
+# By default this compose file pulls pre-built images from GHCR
+# (ghcr.io/caryk753/lifetree-backend, ghcr.io/caryk753/lifetree-frontend)
+# so a plain `docker compose up -d` is enough — no local build required.
+#
+# To force a local build (e.g. for development), pass `--build`:
+#
+#     docker compose up -d --build
+#
+# Pin to a specific version by setting the image tag env vars:
+#
+#     BACKEND_IMAGE_TAG=0.1.0 FRONTEND_IMAGE_TAG=0.1.0 docker compose up -d
 
 services:
   # ==================== Infrastructure ====================
@@ -70,7 +81,11 @@ services:
       retries: 5
 
   # ==================== Application ====================
+  # `image:` is the default (pre-built from GHCR). `build:` is used only
+  # when `--build` is passed, in which case compose builds locally and
+  # tags the result with the same image name.
   backend:
+    image: ghcr.io/caryk753/lifetree-backend:${BACKEND_IMAGE_TAG:-latest}
     build:
       context: ./backend
     container_name: lifetree-backend
@@ -95,6 +110,7 @@ services:
     restart: unless-stopped
 
   worker:
+    image: ghcr.io/caryk753/lifetree-backend:${BACKEND_IMAGE_TAG:-latest}
     build:
       context: ./backend
     container_name: lifetree-worker
@@ -120,6 +136,7 @@ services:
     restart: unless-stopped
 
   beat:
+    image: ghcr.io/caryk753/lifetree-backend:${BACKEND_IMAGE_TAG:-latest}
     build:
       context: ./backend
     container_name: lifetree-beat
@@ -153,6 +170,7 @@ services:
     restart: unless-stopped
 
   frontend:
+    image: ghcr.io/caryk753/lifetree-frontend:${FRONTEND_IMAGE_TAG:-latest}
     build:
       context: ./frontend
       args:
