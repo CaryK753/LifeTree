@@ -49,6 +49,6 @@ USER node
 EXPOSE 13000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD wget --quiet --tries=1 --spider http://localhost:13000/ || exit 1
+    CMD wget -q -O /dev/null http://localhost:13000/ || exit 1
 
 CMD ["node", "server.js"]

@@ -127,6 +127,7 @@ const zhCN: Dict = {
   "nav.plugins": "插件",
   "nav.profile": "我的资料",
   "nav.settings": "设置",
+  "auth.defaultUser": "默认用户",
   "nav.admin": "管理后台",
 
   // Sidebar controls
@@ -1132,6 +1133,7 @@ const zhTW: Dict = {
   "nav.plugins": "外掛",
   "nav.profile": "我的資料",
   "nav.settings": "設定",
+  "auth.defaultUser": "預設使用者",
   "nav.admin": "管理後台",
 
   "sidebar.openMenu": "開啟選單",
@@ -2093,6 +2095,7 @@ const en: Dict = {
   "nav.plugins": "Plugins",
   "nav.profile": "My profile",
   "nav.settings": "Settings",
+  "auth.defaultUser": "Default user",
   "nav.admin": "Admin",
 
   "sidebar.openMenu": "Open menu",
@@ -3051,6 +3054,7 @@ const es: Dict = {
   "nav.plugins": "Complementos",
   "nav.profile": "Mi perfil",
   "nav.settings": "Ajustes",
+  "auth.defaultUser": "Usuario predeterminado",
   "nav.admin": "Administración",
 
   "sidebar.openMenu": "Abrir menú",
@@ -4012,6 +4016,7 @@ const de: Dict = {
   "nav.plugins": "Plugins",
   "nav.profile": "Mein Profil",
   "nav.settings": "Einstellungen",
+  "auth.defaultUser": "Standardbenutzer",
   "nav.admin": "Verwaltung",
 
   "sidebar.openMenu": "Menü öffnen",
@@ -4973,6 +4978,7 @@ const fr: Dict = {
   "nav.plugins": "Plugins",
   "nav.profile": "Mon profil",
   "nav.settings": "Paramètres",
+  "auth.defaultUser": "Utilisateur par défaut",
   "nav.admin": "Administration",
 
   "sidebar.openMenu": "Ouvrir le menu",

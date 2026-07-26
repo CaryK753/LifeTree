@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
-import { useAuth, useNotifications } from "@/lib/hooks";
+import { useAuth, useAuthConfig, useNotifications } from "@/lib/hooks";
 import { useSidebarCollapsed } from "@/lib/use-sidebar-collapsed";
 import { useSidebarDrawerMode } from "@/lib/use-sidebar-drawer-mode";
 import { usePwaSidebarDrawer } from "@/lib/use-pwa-sidebar-drawer";
@@ -354,6 +354,16 @@ function UserChip({
   t: (key: string, vars?: Record<string, string | number>) => string;
 }) {
   const { user, isAuthenticated, isAdmin, logout } = useAuth();
+  // In single-user mode, the app is usable without login (default-user
+  // fallback on the backend). We still render the chip so the user can
+  // access Settings / Profile / Theme from the sidebar; the Sign-out item
+  // is hidden when not actually authenticated.
+  const { data: authConfig } = useAuthConfig();
+  const useMode = authConfig?.use_mode ?? (authConfig?.multi_user_mode ? "multi" : "single");
+  const singleMode = useMode === "single";
+  // Render the chip if: (a) user is logged in, OR (b) single mode where
+  // anonymous access is allowed.
+  const showChip = isAuthenticated || singleMode;
   const [open, setOpen] = useState(false);
   // ``visible`` is true while the dropdown is shown (open or animating
   // out). It stays true for one tick after ``open`` flips to false so
@@ -417,9 +427,13 @@ function UserChip({
     setOpen(false);
   }, [pathname]);
 
-  if (!isAuthenticated || !user) {
+  if (!showChip) {
     return null;
   }
+
+  // Fallback display for anonymous single-mode users.
+  const displayName = user?.display_name ?? t("auth.defaultUser");
+  const displayEmail = user?.email ?? "";
 
   const avatar = (
     <div
@@ -428,10 +442,10 @@ function UserChip({
         "h-8 w-8 text-xs"
       )}
     >
-      {user.avatar_url ? (
+      {user?.avatar_url ? (
         <img src={user.avatar_url} alt="" className="h-full w-full object-cover" />
       ) : (
-        user.display_name?.[0]?.toUpperCase() || "?"
+        displayName?.[0]?.toUpperCase() || "?"
       )}
     </div>
   );
@@ -442,7 +456,7 @@ function UserChip({
         ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
-        title={compact ? user.display_name : undefined}
+        title={compact ? displayName : undefined}
         aria-haspopup="menu"
         aria-expanded={open}
         className={cn(
@@ -457,16 +471,18 @@ function UserChip({
           <>
             <div className="flex-1 min-w-0 leading-tight">
               <div className="text-xs font-medium text-zinc-900 dark:text-zinc-100 truncate flex items-center gap-1">
-                {user.display_name}
-                {isAdmin && (
+                {displayName}
+                {isAuthenticated && isAdmin && (
                   <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 font-medium uppercase tracking-wide">
                     {t("auth.adminBadge")}
                   </span>
                 )}
               </div>
-              <div className="text-[10px] text-zinc-500 truncate">
-                {user.email}
-              </div>
+              {displayEmail && (
+                <div className="text-[10px] text-zinc-500 truncate">
+                  {displayEmail}
+                </div>
+              )}
             </div>
             <svg
               viewBox="0 0 12 12"
@@ -494,6 +510,7 @@ function UserChip({
           triggerRef={triggerRef}
           pathname={pathname}
           t={t}
+          isAuthenticated={isAuthenticated}
           onClose={() => setOpen(false)}
           onLogout={() => {
             // Close the dropdown first, then surface the confirmation
@@ -546,6 +563,7 @@ function DropdownMenu({
   triggerRef,
   pathname,
   t,
+  isAuthenticated,
   onClose,
   onLogout,
 }: {
@@ -554,6 +572,7 @@ function DropdownMenu({
   triggerRef: React.RefObject<HTMLButtonElement | null>;
   pathname: string;
   t: (key: string, vars?: Record<string, string | number>) => string;
+  isAuthenticated: boolean;
   onClose: () => void;
   onLogout: () => void;
 }) {
@@ -644,13 +663,15 @@ function DropdownMenu({
       )}
     >
       {/* Menu items — no user/email header by request. */}
-      <MenuLink
-        href="/profile"
-        icon={User}
-        label={t("nav.profile")}
-        active={pathname.startsWith("/profile")}
-        onClick={onClose}
-      />
+      {isAuthenticated && (
+        <MenuLink
+          href="/profile"
+          icon={User}
+          label={t("nav.profile")}
+          active={pathname.startsWith("/profile")}
+          onClick={onClose}
+        />
+      )}
       <MenuLink
         href="/settings"
         icon={Settings}
@@ -664,17 +685,21 @@ function DropdownMenu({
           preview multiple themes), so we don't pass ``onClose`` here. */}
       <ThemeSliderRow />
 
-      <div className="my-1 border-t border-black/5 dark:border-white/5" />
+      {isAuthenticated && (
+        <>
+          <div className="my-1 border-t border-black/5 dark:border-white/5" />
 
-      <button
-        type="button"
-        role="menuitem"
-        onClick={onLogout}
-        className="flex items-center gap-2.5 w-full px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400 transition-colors"
-      >
-        <LogOut className="h-3.5 w-3.5 shrink-0" />
-        <span className="truncate">{t("auth.logout")}</span>
-      </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={onLogout}
+            className="flex items-center gap-2.5 w-full px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+          >
+            <LogOut className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{t("auth.logout")}</span>
+          </button>
+        </>
+      )}
     </div>,
     document.body
   );
