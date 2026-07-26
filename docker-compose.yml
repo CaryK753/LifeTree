@@ -90,7 +90,7 @@ services:
       context: ./backend
     container_name: lifetree-backend
     ports:
-      - "${APP_BACKEND_PORT:-18000}:8000"
+      - "${APP_BACKEND_PORT:-18000}:18000"
     depends_on:
       - postgres
       - neo4j
@@ -161,12 +161,12 @@ services:
     image: mher/flower:latest
     container_name: lifetree-flower
     ports:
-      - "${APP_FLOWER_PORT:-15555}:5555"
+      - "${APP_FLOWER_PORT:-15555}:15555"
     depends_on:
       - redis
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
-      - FLOWER_PORT=5555
+      - FLOWER_PORT=15555
     restart: unless-stopped
 
   frontend:
@@ -177,7 +177,7 @@ services:
         - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-http://localhost:18000}
     container_name: lifetree-frontend
     ports:
-      - "${APP_FRONTEND_PORT:-13000}:3000"
+      - "${APP_FRONTEND_PORT:-13000}:13000"
     depends_on:
       - backend
     environment:

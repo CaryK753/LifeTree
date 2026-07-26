@@ -31,7 +31,7 @@ FROM node:22-alpine AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production \
-    PORT=3000 \
+    PORT=13000 \
     HOSTNAME=0.0.0.0 \
     NEXT_TELEMETRY_DISABLED=1
 
@@ -46,9 +46,9 @@ COPY --from=builder --chown=node:node /app/public ./public
 
 USER node
 
-EXPOSE 3000
+EXPOSE 13000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD wget --quiet --tries=1 --spider http://localhost:3000/ || exit 1
+    CMD wget --quiet --tries=1 --spider http://localhost:13000/ || exit 1
 
 CMD ["node", "server.js"]

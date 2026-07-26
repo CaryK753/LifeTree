@@ -843,7 +843,7 @@ def get_smtp_config() -> dict[str, Any]:
 #     "token_url":    "https://github.com/login/oauth/access_token",
 #     "userinfo_url": "https://api.github.com/user",
 #     "scopes": ["read:user", "user:email"],
-#     "redirect_uri": "http://localhost:3000/auth/callback/github",
+#     "redirect_uri": "http://localhost:13000/auth/callback/github",
 #     "enabled": true
 #   }
 #
