@@ -6,9 +6,11 @@ windows and quiet hours. We persist every attempt to NotificationLog.
 
 from __future__ import annotations
 
+import json
 import smtplib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from email.mime.text import MIMEText
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -23,6 +25,9 @@ log = get_logger(__name__)
 
 # Default cool-down: same user + same risk_factor_id → no more than 1 push / 6h
 COOLDOWN_SECONDS = 6 * 3600
+
+# Default timezone when the user's demographics don't specify one.
+DEFAULT_TIMEZONE = "Asia/Shanghai"
 
 
 class NotificationService:
@@ -84,7 +89,7 @@ class NotificationService:
                 impact_summary=impact_summary or {},
             )
 
-        return self._log(
+        record = self._log(
             user,
             channel=channel,
             status=NotificationStatus.SENT.value,
@@ -96,6 +101,43 @@ class NotificationService:
             impact_summary=impact_summary or {},
             sent_at=datetime.now(timezone.utc),
         )
+        # Push to the user's SSE channel so connected clients refresh in
+        # real time. Best-effort: a Redis hiccup must never break the
+        # notification pipeline.
+        self._publish_sse(user.id, record)
+        return record
+
+    # ---------------- SSE push ----------------
+
+    def _publish_sse(self, user_id: str, record: NotificationLog) -> None:
+        """Best-effort publish to ``lifetree:risk:{user_id}`` for SSE push."""
+        try:
+            payload = {
+                "type": "notification",
+                "data": {
+                    "id": record.id,
+                    "title": record.title,
+                    "body": record.body,
+                    "severity": record.severity,
+                    "channel": record.channel,
+                    "event_id": record.event_id,
+                    "risk_factor_id": record.risk_factor_id,
+                    "impact_summary": record.impact_summary or {},
+                    "created_at": record.created_at.isoformat()
+                    if record.created_at
+                    else None,
+                },
+            }
+            self.redis.publish(
+                f"lifetree:risk:{user_id}",
+                json.dumps(payload, ensure_ascii=False),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "notification.sse_publish_failed",
+                user_id=user_id,
+                error=str(exc),
+            )
 
     # ---------------- Channel selection ----------------
 
@@ -126,7 +168,15 @@ class NotificationService:
         try:
             start = int(qh.get("start", "22"))
             end = int(qh.get("end", "07"))
-            hour = datetime.now(timezone.utc).hour
+            # Resolve the user's local timezone from demographics (JSONB),
+            # defaulting to Asia/Shanghai. Quiet hours are interpreted in
+            # the user's local time, not server UTC.
+            tz_name = (user.demographics or {}).get("timezone") or DEFAULT_TIMEZONE
+            try:
+                tz = ZoneInfo(tz_name)
+            except (KeyError, ValueError, TypeError):
+                tz = ZoneInfo(DEFAULT_TIMEZONE)
+            hour = datetime.now(tz).hour
             if start <= end:
                 return start <= hour < end
             return hour >= start or hour < end
@@ -232,6 +282,74 @@ class NotificationService:
                 .limit(limit)
             )
         )
+
+    def list_filtered(
+        self,
+        user_id: str,
+        *,
+        severity: str | None = None,
+        status: str | None = None,
+        channel: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[NotificationLog]:
+        """Server-side filtered notification list for one user."""
+        stmt = (
+            select(NotificationLog)
+            .where(NotificationLog.user_id == user_id)
+            .order_by(NotificationLog.created_at.desc())
+        )
+        if severity:
+            stmt = stmt.where(NotificationLog.severity == severity)
+        if status:
+            stmt = stmt.where(NotificationLog.status == status)
+        if channel:
+            stmt = stmt.where(NotificationLog.channel == channel)
+        stmt = stmt.limit(limit).offset(offset)
+        return list(self.db.scalars(stmt))
+
+    def count_unread(self, user_id: str) -> int:
+        """Efficient single COUNT of unread notifications for one user.
+
+        "Unread" = status not in {READ, SUPPRESSED}. SUPPRESSED rows are
+        excluded because the user never saw them and shouldn't see a badge.
+        """
+        from sqlalchemy import func
+
+        result = self.db.scalar(
+            select(func.count(NotificationLog.id)).where(
+                NotificationLog.user_id == user_id,
+                NotificationLog.status.notin_(
+                    [NotificationStatus.READ.value, NotificationStatus.SUPPRESSED.value]
+                ),
+            )
+        )
+        return int(result or 0)
+
+    def bulk_mark_read(
+        self, user_id: str, notification_ids: list[str]
+    ) -> int:
+        """Mark a batch of notifications as READ in a single UPDATE.
+
+        Only touches rows owned by ``user_id`` (prevents cross-user tampering).
+        Returns the number of rows actually updated.
+        """
+        if not notification_ids:
+            return 0
+        from sqlalchemy import update
+
+        now = datetime.now(timezone.utc)
+        result = self.db.execute(
+            update(NotificationLog)
+            .where(
+                NotificationLog.user_id == user_id,
+                NotificationLog.id.in_(notification_ids),
+                NotificationLog.status != NotificationStatus.READ.value,
+            )
+            .values(status=NotificationStatus.READ.value, read_at=now)
+        )
+        self.db.commit()
+        return int(result.rowcount or 0)
 
     def mark_read(self, notification_id: str, user_id: str) -> NotificationLog | None:
         record = self.db.get(NotificationLog, notification_id)

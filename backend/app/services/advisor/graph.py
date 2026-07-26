@@ -14,7 +14,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
@@ -139,7 +145,14 @@ def build_advisor_graph(
 def messages_to_langchain(
     history: list[dict[str, Any]],
 ) -> list[BaseMessage]:
-    """Convert OpenAI-style message dicts to langchain message objects."""
+    """Convert OpenAI-style message dicts to langchain message objects.
+
+    Handles ``user``, ``assistant``, ``system``, and ``tool`` roles. Tool
+    messages are converted to :class:`ToolMessage` so the model retains
+    visibility of previous tool results across conversation turns. Assistant
+    messages carrying ``tool_calls`` are forwarded to :class:`AIMessage` so
+    the model can match them against the corresponding ``ToolMessage`` rows.
+    """
     out: list[BaseMessage] = []
     for m in history:
         role = m.get("role")
@@ -148,10 +161,39 @@ def messages_to_langchain(
         if role == "user":
             out.append(HumanMessage(content=content, name=name))
         elif role == "assistant":
-            out.append(AIMessage(content=content, name=name))
+            tool_calls = m.get("tool_calls")
+            ai_kwargs: dict[str, Any] = {"content": content}
+            if name:
+                ai_kwargs["name"] = name
+            if tool_calls:
+                # Forward prior tool_calls so the model can correlate them
+                # with subsequent ToolMessage responses in the history.
+                ai_kwargs["tool_calls"] = [
+                    {
+                        "name": tc.get("name", ""),
+                        "args": tc.get("args", {}) or {},
+                        "id": tc.get("id", ""),
+                        "type": "tool_call",
+                    }
+                    for tc in tool_calls
+                    if isinstance(tc, dict)
+                ]
+            out.append(AIMessage(**ai_kwargs))
         elif role == "system":
             out.append(SystemMessage(content=content))
-        # tool messages are re-emitted by LangGraph itself during tool execution
+        elif role == "tool":
+            # Tool results from prior turns must be carried as ToolMessage
+            # so the model can see what each tool call returned. The
+            # ``tool_call_id`` is required to match the prior assistant
+            # tool_call.
+            tool_call_id = m.get("tool_call_id") or ""
+            out.append(
+                ToolMessage(
+                    content=content,
+                    tool_call_id=tool_call_id,
+                    name=name,
+                )
+            )
     return out
 
 

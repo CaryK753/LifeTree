@@ -206,6 +206,16 @@ class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
     content: str
     name: str | None = None
+    # For ``assistant`` messages that invoked tools, the list of tool calls
+    # emitted by the model. Each entry is ``{"id": str, "name": str,
+    # "args": dict}``. Required to round-trip tool interactions across turns
+    # — the corresponding ``tool`` role messages reference the same id via
+    # ``tool_call_id``.
+    tool_calls: list[dict[str, Any]] | None = None
+    # For ``tool`` role messages: the id of the assistant tool_call this
+    # result corresponds to. Required so the model can match a tool result
+    # back to the call that produced it.
+    tool_call_id: str | None = None
 
 
 class ChatRequest(BaseModel):

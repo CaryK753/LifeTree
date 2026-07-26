@@ -407,12 +407,25 @@ def build_advisor_tools(
         db.flush()
         db.commit()
         db.refresh(g)
+        result: dict[str, Any] = {
+            "goal_id": g.id,
+            "title": g.title,
+            "status": g.status,
+            "graph_synced": True,
+        }
         try:
             graph_service.upsert_goal(g)
         except Exception as exc:  # noqa: BLE001
             log.warning("advisor.tool.create_goal.graph_failed", error=str(exc))
-        log.info("advisor.tool.create_goal", goal_id=g.id, title=title)
-        return {"goal_id": g.id, "title": g.title, "status": g.status}
+            result["graph_synced"] = False
+            result["graph_sync_error"] = str(exc)
+        log.info(
+            "advisor.tool.create_goal",
+            goal_id=g.id,
+            title=title,
+            graph_synced=result["graph_synced"],
+        )
+        return result
 
     @tool("create_pathway", args_schema=CreatePathwayInput)
     def create_pathway(
@@ -442,17 +455,26 @@ def build_advisor_tools(
         db.add(p)
         db.commit()
         db.refresh(p)
-        try:
-            graph_service.upsert_pathway(p)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("advisor.tool.create_pathway.graph_failed", error=str(exc))
-        log.info("advisor.tool.create_pathway", pathway_id=p.id, goal_id=goal_id)
-        return {
+        result = {
             "pathway_id": p.id,
             "goal_id": p.goal_id,
             "name": p.name,
             "parent_pathway_id": p.parent_pathway_id,
+            "graph_synced": True,
         }
+        try:
+            graph_service.upsert_pathway(p)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("advisor.tool.create_pathway.graph_failed", error=str(exc))
+            result["graph_synced"] = False
+            result["graph_sync_error"] = str(exc)
+        log.info(
+            "advisor.tool.create_pathway",
+            pathway_id=p.id,
+            goal_id=goal_id,
+            graph_synced=result["graph_synced"],
+        )
+        return result
 
     @tool("create_requirement", args_schema=CreateRequirementInput)
     def create_requirement(
@@ -486,11 +508,19 @@ def build_advisor_tools(
         db.add(r)
         db.commit()
         db.refresh(r)
+        result = {
+            "requirement_id": r.id,
+            "pathway_id": pathway_id,
+            "name": r.name,
+            "graph_synced": True,
+        }
         try:
             graph_service.upsert_requirement(r)
         except Exception as exc:  # noqa: BLE001
             log.warning("advisor.tool.create_requirement.graph_failed", error=str(exc))
-        return {"requirement_id": r.id, "pathway_id": pathway_id, "name": r.name}
+            result["graph_synced"] = False
+            result["graph_sync_error"] = str(exc)
+        return result
 
     @tool("create_risk_factor", args_schema=CreateRiskFactorInput)
     def create_risk_factor(
@@ -522,12 +552,25 @@ def build_advisor_tools(
         db.add(rf)
         db.commit()
         db.refresh(rf)
+        result = {
+            "risk_factor_id": rf.id,
+            "name": rf.name,
+            "level": rf.level,
+            "graph_synced": True,
+        }
         try:
             graph_service.upsert_risk_factor(rf)
         except Exception as exc:  # noqa: BLE001
             log.warning("advisor.tool.create_risk_factor.graph_failed", error=str(exc))
-        log.info("advisor.tool.create_risk_factor", rf_id=rf.id, name=name)
-        return {"risk_factor_id": rf.id, "name": rf.name, "level": rf.level}
+            result["graph_synced"] = False
+            result["graph_sync_error"] = str(exc)
+        log.info(
+            "advisor.tool.create_risk_factor",
+            rf_id=rf.id,
+            name=name,
+            graph_synced=result["graph_synced"],
+        )
+        return result
 
     # ---------- Memory tools ----------
 

@@ -36,7 +36,6 @@ import {
   ResponseContainer,
   ResponseMarkdown,
   ToolInvocation,
-  Reasoning,
   ThinkingDots,
   Thread,
   Message,
@@ -268,7 +267,6 @@ export function ChatPanel({ goalId, scenarioId }: Props) {
     // Declare outside `try` so the `catch` block can reference them when
     // finalizing an aborted / errored stream.
     let acc = "";
-    let reasoningAcc = "";
     try {
       const conv = getActiveConversation();
       const apiMessages = (conv?.messages ?? [])
@@ -311,7 +309,6 @@ export function ChatPanel({ goalId, scenarioId }: Props) {
           patchMessage(convId, assistantId, {
             content: pendingContent,
             streaming: true,
-            reasoning: reasoningAcc || undefined,
           });
           pendingContent = null;
         }
@@ -339,7 +336,6 @@ export function ChatPanel({ goalId, scenarioId }: Props) {
               patchMessage(convId, assistantId, {
                 content: pendingContent,
                 streaming: true,
-                reasoning: reasoningAcc || undefined,
               });
               pendingContent = null;
             }
@@ -393,7 +389,6 @@ export function ChatPanel({ goalId, scenarioId }: Props) {
           patchMessage(convId, assistantId, {
             content: pendingContent,
             streaming: true,
-            reasoning: reasoningAcc || undefined,
           });
           pendingContent = null;
         }
@@ -401,7 +396,6 @@ export function ChatPanel({ goalId, scenarioId }: Props) {
 
       patchMessage(convId, assistantId, {
         streaming: false,
-        reasoning: reasoningAcc || undefined,
       });
 
       maybeAutoTitle(convId);
@@ -411,7 +405,6 @@ export function ChatPanel({ goalId, scenarioId }: Props) {
       if ((err as Error).name === "AbortError") {
         patchMessage(convId, assistantId, {
           streaming: false,
-          reasoning: reasoningAcc || undefined,
         });
         maybeAutoTitle(convId);
       } else {
@@ -865,9 +858,8 @@ const MessageBubble = memo(function MessageBubble({
   const t = useT();
   const isUser = message.role === "user";
   const hasTools = (message.toolCalls?.length ?? 0) > 0;
-  const hasReasoning = !!message.reasoning;
   const isStreaming = !!message.streaming;
-  const isEmpty = !message.content && !hasTools && !hasReasoning;
+  const isEmpty = !message.content && !hasTools;
   const [copied, setCopied] = useState(false);
 
   // Version navigation state — purely a UI concern. We don't mutate the
@@ -888,17 +880,15 @@ const MessageBubble = memo(function MessageBubble({
   }, [previousVersions.length]);
 
   // Pick the displayed snapshot based on viewingVersion.
-  const snapshot: Pick<ChatMessage, "content" | "reasoning" | "toolCalls"> =
+  const snapshot: Pick<ChatMessage, "content" | "toolCalls"> =
     viewingVersion === 0
       ? {
           content: message.content,
-          reasoning: message.reasoning,
           toolCalls: message.toolCalls,
         }
       : previousVersions[viewingVersion - 1];
 
   const hasToolsNow = (snapshot.toolCalls?.length ?? 0) > 0;
-  const hasReasoningNow = !!snapshot.reasoning;
 
   // Show action bar when: not streaming, not empty, and has actual content.
   const showActions = !isStreaming && !disabled && (snapshot.content || hasToolsNow);
@@ -961,14 +951,6 @@ const MessageBubble = memo(function MessageBubble({
             </div>
           ))}
         </div>
-      )}
-
-      {/* Reasoning (chain-of-thought) */}
-      {!isUser && hasReasoningNow && (
-        <Reasoning
-          content={snapshot.reasoning ?? ""}
-          isStreaming={isStreaming && !snapshot.content}
-        />
       )}
 
       {/* Text content — user messages keep a tinted bubble; AI messages

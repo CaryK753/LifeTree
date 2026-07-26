@@ -223,6 +223,19 @@ input[type="range"]:focus {
   animation: lifetree-fade-in 220ms ease-out both;
 }
 
+/* Subtle pulse used for newly-arrived notification rows (SSE revalidation).
+   Runs once on mount of a fresh row so the user notices the new entry
+   without being distracted by a perpetual animation. Uses the brand-500
+   RGB triplet (59 141 97) directly so it works in both light/dark themes. */
+@keyframes lifetree-row-pulse {
+  0%   { background-color: rgb(59 141 97 / 0.18); }
+  60%  { background-color: rgb(59 141 97 / 0.06); }
+  100% { background-color: transparent; }
+}
+.animate-row-pulse {
+  animation: lifetree-row-pulse 1600ms ease-out both;
+}
+
 /* On small screens, slim down the default page padding. */
 @media (max-width: 640px) {
   .animate-fade-in { animation-duration: 160ms; }

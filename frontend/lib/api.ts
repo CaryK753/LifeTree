@@ -159,14 +159,35 @@ export const api = {
     request<DashboardSummary>(`/dashboard/${goalId}`),
 
   // Notifications
-  listNotifications: (limit?: number) =>
-    request<NotificationRead[]>(
-      `/notifications${limit ? `?limit=${limit}` : ""}`
-    ),
+  listNotifications: (params?: {
+    severity?: NotificationSeverity | string;
+    status?: NotificationStatus | string;
+    channel?: NotificationChannel | string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.severity) q.set("severity", params.severity);
+    if (params?.status) q.set("status", params.status);
+    if (params?.channel) q.set("channel", params.channel);
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.offset != null) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return request<NotificationRead[]>(
+      `/notifications${qs ? `?${qs}` : ""}`
+    );
+  },
   markRead: (id: string) =>
     request<NotificationRead>(`/notifications/${id}/read`, {
       method: "POST",
     }),
+  bulkMarkRead: (notificationIds: string[]) =>
+    request<{ updated: number }>(`/notifications/bulk-read`, {
+      method: "POST",
+      body: JSON.stringify({ notification_ids: notificationIds }),
+    }),
+  getUnreadCount: () =>
+    request<{ count: number }>(`/notifications/unread-count`),
 
   // Ingest
   ingestText: (body: unknown) =>

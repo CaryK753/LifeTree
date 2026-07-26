@@ -1,8 +1,19 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useNotifications } from "@/lib/hooks";
-import { api, type NotificationRead, type NotificationSeverity } from "@/lib/api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import useSWRInfinite from "swr/infinite";
+import {
+  useUnreadCount,
+  type NotificationFilter,
+} from "@/lib/hooks";
+import {
+  api,
+  type NotificationChannel,
+  type NotificationRead,
+  type NotificationSeverity,
+} from "@/lib/api";
+import { swrConfig } from "@/lib/api";
 import {
   Card,
   CardContent,
@@ -12,7 +23,7 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
-import { cn, formatDate } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import {
   Bell,
   BellOff,
@@ -25,11 +36,19 @@ import {
   MessageSquare,
   Smartphone,
   Radio,
+  ChevronRight,
+  Inbox,
 } from "lucide-react";
-import { useT } from "@/lib/i18n/provider";
+import { useI18n, useT } from "@/lib/i18n/provider";
+import type { Locale } from "@/lib/i18n/messages";
+import { formatDistanceToNow } from "date-fns";
+import { zhCN, zhTW, enUS, es, de, fr as frLocale } from "date-fns/locale";
 
 type SeverityFilter = "all" | NotificationSeverity;
 type ReadFilter = "all" | "unread" | "read";
+type ChannelFilter = "all" | NotificationChannel;
+
+const PAGE_SIZE = 50;
 
 const SEVERITY_META: Record<
   string,
@@ -65,6 +84,16 @@ const CHANNEL_META: Record<
   push: { labelKey: "channel.push", icon: Radio },
 };
 
+// Map LifeTree i18n locale → date-fns locale for relative-time formatting.
+const DATE_FNS_LOCALES: Record<Locale, typeof zhCN> = {
+  "zh-CN": zhCN,
+  "zh-TW": zhTW,
+  en: enUS,
+  es,
+  de,
+  fr: frLocale,
+};
+
 function sevMeta(s?: string) {
   return SEVERITY_META[s ?? "info"] ?? SEVERITY_META.info;
 }
@@ -73,73 +102,212 @@ function chanMeta(c?: string) {
   return CHANNEL_META[c ?? "in_app"] ?? CHANNEL_META.in_app;
 }
 
+/**
+ * Resolve the deep-link target for a notification, if any.
+ *
+ * - `event_id` present → `/sources?event={event_id}`
+ * - `risk_factor_id` starts with `risk_transition:` → `/goals/{goal_id}`
+ *   (goal_id is taken from a `goal_id` field if present, otherwise
+ *   extracted from the suffix of `risk_factor_id`).
+ */
+function getDeepLink(n: NotificationRead): string | null {
+  if (n.event_id) {
+    return `/sources?event=${encodeURIComponent(n.event_id)}`;
+  }
+  const rfid = n.risk_factor_id;
+  if (rfid && rfid.startsWith("risk_transition:")) {
+    const suffix = rfid.slice("risk_transition:".length);
+    const fromImpact = (n.impact_summary as Record<string, unknown> | null)?.goal_id;
+    const goalId =
+      (typeof fromImpact === "string" && fromImpact) ||
+      (n as NotificationRead & { goal_id?: string }).goal_id ||
+      suffix;
+    if (goalId) return `/goals/${encodeURIComponent(goalId)}`;
+  }
+  return null;
+}
+
+function formatRelative(
+  value: string | Date | null | undefined,
+  locale: Locale
+): string {
+  if (!value) return "—";
+  const d = typeof value === "string" ? new Date(value) : value;
+  if (Number.isNaN(d.getTime())) return "—";
+  return formatDistanceToNow(d, {
+    addSuffix: true,
+    locale: DATE_FNS_LOCALES[locale] ?? zhCN,
+  });
+}
+
 export default function NotificationsPage() {
   const t = useT();
-  const { data, mutate, isLoading } = useNotifications();
+  const { locale } = useI18n();
+  const router = useRouter();
   const toast = useToast();
+
   const [sevFilter, setSevFilter] = useState<SeverityFilter>("all");
   const [readFilter, setReadFilter] = useState<ReadFilter>("all");
+  const [chanFilter, setChanFilter] = useState<ChannelFilter>("all");
   const [markingAll, setMarkingAll] = useState(false);
 
-  const notifications = (data ?? []) as NotificationRead[];
-
-  const unreadCount = useMemo(
-    () => notifications.filter((n) => !n.read_at).length,
-    [notifications]
+  // Server-side filter params — sent to the API as query string.
+  const filter: NotificationFilter = useMemo(
+    () => ({
+      severity: sevFilter !== "all" ? sevFilter : undefined,
+      status:
+        readFilter === "unread"
+          ? "unread"
+          : readFilter === "read"
+          ? "read"
+          : undefined,
+      channel: chanFilter !== "all" ? chanFilter : undefined,
+    }),
+    [sevFilter, readFilter, chanFilter]
   );
 
-  const filtered = useMemo(() => {
-    return notifications.filter((n) => {
-      if (sevFilter !== "all" && n.severity !== sevFilter) return false;
-      if (readFilter === "unread" && n.read_at) return false;
-      if (readFilter === "read" && !n.read_at) return false;
-      return true;
-    });
-  }, [notifications, sevFilter, readFilter]);
+  // useSWRInfinite handles "Load more" pagination cleanly: each page has
+  // its own cache key `["notifications", filter, pageIndex]`, so the
+  // SSEProvider's function matcher (which matches any array key whose
+  // first element is "notifications") revalidates every loaded page on
+  // `risk_alert` / `notification` events.
+  type NotificationPageKey = ["notifications", string, number];
+  const filterKey = JSON.stringify(filter);
+  const {
+    data: pages,
+    size,
+    setSize,
+    isLoading,
+    isValidating,
+    mutate: mutatePages,
+  } = useSWRInfinite<NotificationRead[]>(
+    (pageIndex, prevPage): NotificationPageKey | null => {
+      if (prevPage && prevPage.length < PAGE_SIZE) return null;
+      return ["notifications", filterKey, pageIndex];
+    },
+    ([, , pageIndex]: NotificationPageKey) =>
+      api.listNotifications({
+        ...filter,
+        limit: PAGE_SIZE,
+        offset: pageIndex * PAGE_SIZE,
+      }),
+    {
+      ...swrConfig,
+      refreshInterval: 60000,
+      // When the filter changes, reset to the first page so we don't
+      // carry over stale pages from the previous filter.
+      revalidateFirstPage: true,
+    }
+  );
+
+  // Reset to the first page whenever the filter changes.
+  useEffect(() => {
+    setSize(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey]);
+
+  const items = useMemo(
+    () => (pages ?? []).flat() as NotificationRead[],
+    [pages]
+  );
+
+  const lastPage = pages?.[pages.length - 1];
+  const hasMore = !lastPage ? false : lastPage.length >= PAGE_SIZE;
+  const loadingMore = isValidating && size > 1 && !isLoading;
+
+  // Efficient unread badge from `GET /notifications/unread-count`,
+  // polled every 30s. Also revalidated by SSE events thanks to the
+  // array SWR key whose first element is "notifications".
+  const { data: unreadData, mutate: mutateUnreadCount } = useUnreadCount();
+  const unreadCount = unreadData?.count ?? 0;
+
+  // Track newly-arrived IDs so we can pulse those rows briefly.
+  // On the very first load we skip the pulse (would be noisy for 50 rows).
+  const [freshIds, setFreshIds] = useState<Set<string>>(new Set());
+  const prevIdsRef = useRef<Set<string> | null>(null);
+  const freshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (items.length === 0) {
+      prevIdsRef.current = new Set();
+      return;
+    }
+    const currentIds = new Set(items.map((n) => n.id));
+    if (prevIdsRef.current === null) {
+      // First load — initialize without pulsing.
+      prevIdsRef.current = currentIds;
+      return;
+    }
+    const newIds = new Set<string>();
+    for (const id of currentIds) {
+      if (!prevIdsRef.current.has(id)) newIds.add(id);
+    }
+    prevIdsRef.current = currentIds;
+    if (newIds.size === 0) return;
+    setFreshIds(newIds);
+    if (freshTimerRef.current) clearTimeout(freshTimerRef.current);
+    freshTimerRef.current = setTimeout(() => setFreshIds(new Set()), 1700);
+    return () => {
+      if (freshTimerRef.current) clearTimeout(freshTimerRef.current);
+    };
+  }, [items]);
 
   async function handleMarkOne(id: string) {
     try {
       const updated = await api.markRead(id);
-      mutate(
+      mutatePages(
         (prev) =>
-          (prev ?? []).map((n) => (n.id === id ? updated : n)),
+          (prev ?? []).map((page) =>
+            page.map((n) => (n.id === id ? updated : n))
+          ),
         { revalidate: false }
       );
+      mutateUnreadCount();
     } catch (e: any) {
-      toast({ title: t("notifications.toast.markFailed"), description: e?.message, variant: "error" });
+      toast({
+        title: t("notifications.toast.markFailed"),
+        description: e?.message,
+        variant: "error",
+      });
     }
   }
 
   async function handleMarkAll() {
-    if (unreadCount === 0) return;
+    const unreadIds = items.filter((n) => !n.read_at).map((n) => n.id);
+    if (unreadIds.length === 0) return;
     setMarkingAll(true);
     try {
-      // Mark unread notifications sequentially; backend exposes single-id endpoint.
-      const targets = notifications.filter((n) => !n.read_at);
-      const updated: NotificationRead[] = [];
-      for (const n of targets) {
-        try {
-          updated.push(await api.markRead(n.id));
-        } catch {
-          // Skip individual failures.
-        }
-      }
-      if (updated.length > 0) {
-        mutate(
-          (prev) =>
-            (prev ?? []).map(
-              (n) => updated.find((u) => u.id === n.id) ?? n
-            ),
-          { revalidate: false }
-        );
-        toast({
-          title: t("notifications.toast.markedN", { n: updated.length }),
-          variant: "success",
-        });
-      }
+      const result = await api.bulkMarkRead(unreadIds);
+      const nowIso = new Date().toISOString();
+      const idSet = new Set(unreadIds);
+      mutatePages(
+        (prev) =>
+          (prev ?? []).map((page) =>
+            page.map((n) =>
+              idSet.has(n.id) ? { ...n, read_at: nowIso, status: "read" } : n
+            )
+          ),
+        { revalidate: false }
+      );
+      mutateUnreadCount();
+      toast({
+        title: t("notifications.markAllReadSuccess", { n: result.updated }),
+        variant: "success",
+      });
+    } catch (e: any) {
+      toast({
+        title: t("notifications.toast.markFailed"),
+        description: e?.message,
+        variant: "error",
+      });
     } finally {
       setMarkingAll(false);
     }
+  }
+
+  function handleRowClick(n: NotificationRead) {
+    const link = getDeepLink(n);
+    if (link) router.push(link);
   }
 
   return (
@@ -149,8 +317,27 @@ export default function NotificationsPage() {
           <h1 className="text-2xl font-semibold text-zinc-100 flex items-center gap-2">
             <Bell className="h-6 w-6 text-brand-600 dark:text-brand-400" />
             {t("notifications.title")}
+            {/* Real-time indicator — a soft pulsing dot signals the page
+                is wired up for live SSE updates. */}
+            <span
+              className="inline-flex items-center gap-1.5 ml-1 text-[10px] font-normal text-zinc-500 dark:text-zinc-400 px-2 py-0.5 rounded-full border border-white/10 bg-white/[0.03]"
+              title={t("notifications.realTimeConnected")}
+            >
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="absolute inline-flex h-full w-full rounded-full bg-brand-400 opacity-75 animate-ping" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-brand-500" />
+              </span>
+              {t("notifications.realTimeConnected")}
+            </span>
+            {unreadCount > 0 && (
+              <span className="ml-1.5 text-xs font-medium px-2 py-0.5 rounded-full bg-brand-500/15 text-brand-700 dark:text-brand-300 border border-brand-500/30">
+                {t("notifications.unreadBadge", { n: unreadCount })}
+              </span>
+            )}
           </h1>
-          <p className="text-sm text-zinc-500 mt-1">{t("notifications.subtitle")}</p>
+          <p className="text-sm text-zinc-500 mt-1">
+            {t("notifications.subtitle")}
+          </p>
         </div>
         <Button
           variant="outline"
@@ -185,7 +372,7 @@ export default function NotificationsPage() {
             { value: "info", label: t("severity.info") },
           ]}
         />
-        <div className="h-4 w-px bg-white/10 mx-1" />
+        <div className="h-4 w-px bg-black/10 dark:bg-white/10 mx-1" />
         <FilterGroup
           label={t("notifications.filter.status")}
           value={readFilter}
@@ -202,42 +389,80 @@ export default function NotificationsPage() {
             { value: "read", label: t("notifications.filter.read") },
           ]}
         />
+        <div className="h-4 w-px bg-black/10 dark:bg-white/10 mx-1" />
+        <FilterGroup
+          label={t("notifications.filter.channel")}
+          value={chanFilter}
+          onChange={(v) => setChanFilter(v as ChannelFilter)}
+          options={[
+            { value: "all", label: t("notifications.filter.all") },
+            { value: "in_app", label: t("channel.in_app") },
+            { value: "email", label: t("channel.email") },
+            { value: "sms", label: t("channel.sms") },
+            { value: "push", label: t("channel.push") },
+          ]}
+        />
       </div>
 
       {/* List */}
       <Card>
         <CardHeader>
           <div>
-            <CardTitle className="text-base">{t("notifications.list.title")}</CardTitle>
+            <CardTitle className="text-base">
+              {t("notifications.list.title")}
+            </CardTitle>
             <CardDescription className="mt-1">
               {isLoading
                 ? t("common.loading")
-                : filtered.length !== notifications.length
-                ? t("notifications.list.countFiltered", {
-                    n: filtered.length,
-                    total: notifications.length,
-                  })
-                : t("notifications.list.count", { n: filtered.length })}
+                : t("notifications.list.count", { n: items.length })}
             </CardDescription>
           </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
             <div className="text-xs text-zinc-500 py-6 flex items-center gap-2">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" /> {t("common.loading")}
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />{" "}
+              {t("common.loading")}
             </div>
-          ) : filtered.length === 0 ? (
-            <EmptyState unreadCount={unreadCount} />
+          ) : items.length === 0 ? (
+            <EmptyState hasFilters={readFilter !== "all" || sevFilter !== "all" || chanFilter !== "all"} />
           ) : (
-            <ul className="divide-y divide-white/5">
-              {filtered.map((n) => (
-                <NotificationRow
-                  key={n.id}
-                  n={n}
-                  onMark={() => handleMarkOne(n.id)}
-                />
-              ))}
-            </ul>
+            <>
+              <ul className="divide-y divide-black/5 dark:divide-white/5">
+                {items.map((n) => (
+                  <NotificationRow
+                    key={n.id}
+                    n={n}
+                    fresh={freshIds.has(n.id)}
+                    onMark={() => handleMarkOne(n.id)}
+                    onClick={() => handleRowClick(n)}
+                  />
+                ))}
+              </ul>
+              <div className="mt-3 flex items-center justify-center">
+                {hasMore ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSize(size + 1)}
+                    disabled={loadingMore}
+                  >
+                    {loadingMore ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                        {t("notifications.loadingMore")}
+                      </>
+                    ) : (
+                      t("notifications.loadMore")
+                    )}
+                  </Button>
+                ) : (
+                  <span className="text-[10px] text-zinc-500">
+                    {t("notifications.noMore")}
+                  </span>
+                )}
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
@@ -287,30 +512,56 @@ function FilterGroup({
 
 function NotificationRow({
   n,
+  fresh,
   onMark,
+  onClick,
 }: {
   n: NotificationRead;
+  fresh: boolean;
   onMark: () => void;
+  onClick: () => void;
 }) {
   const t = useT();
+  const { locale } = useI18n();
   const sm = sevMeta(n.severity);
   const cm = chanMeta(n.channel);
   const SevIcon = sm.icon;
   const ChanIcon = cm.icon;
   const isUnread = !n.read_at;
+  const deepLink = getDeepLink(n);
+  const clickable = !!deepLink;
 
   const impactEntries = Object.entries(n.impact_summary ?? {}).filter(
-    ([k, v]) => v != null && k !== "personalized_level"
+    ([k, v]) => v != null && k !== "personalized_level" && k !== "goal_id"
   );
   const personalizedLevel = (n.impact_summary as any)?.personalized_level as
     | string
     | undefined;
 
+  const sentAtRelative = formatRelative(n.sent_at ?? n.created_at, locale);
+  const readAtRelative = formatRelative(n.read_at, locale);
+
   return (
     <li
+      onClick={clickable ? onClick : undefined}
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onKeyDown={
+        clickable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
       className={cn(
         "group py-3 px-1 transition-colors",
-        isUnread && "bg-brand-500/[0.03]"
+        isUnread && "bg-brand-500/[0.04]",
+        fresh && "animate-row-pulse",
+        clickable &&
+          "cursor-pointer hover:bg-black/[0.02] dark:hover:bg-white/[0.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 rounded"
       )}
     >
       <div className="flex items-start gap-3">
@@ -360,10 +611,11 @@ function NotificationRow({
             {personalizedLevel && (
               <span className="text-[10px] text-zinc-500">
                 · {t("notifications.personalizedLevel")}
-                <span className="ml-1 text-zinc-300">
-                  {personalizedLevel}
-                </span>
+                <span className="ml-1 text-zinc-300">{personalizedLevel}</span>
               </span>
+            )}
+            {clickable && (
+              <ChevronRight className="h-3 w-3 text-zinc-500 opacity-0 group-hover:opacity-100 transition-opacity ml-auto" />
             )}
           </div>
 
@@ -372,11 +624,11 @@ function NotificationRow({
           </p>
 
           {impactEntries.length > 0 && (
-            <div className="mt-2 rounded-md bg-white/[0.02] border border-white/5 px-2.5 py-1.5 text-[11px] text-zinc-400 space-y-0.5">
+            <div className="mt-2 rounded-md bg-black/[0.02] dark:bg-white/[0.02] border border-black/5 dark:border-white/5 px-2.5 py-1.5 text-[11px] text-zinc-400 space-y-0.5">
               {impactEntries.slice(0, 4).map(([k, v]) => (
                 <div key={k} className="flex gap-2">
                   <span className="text-zinc-500 shrink-0">{k}:</span>
-                  <span className="text-zinc-300 break-words">
+                  <span className="text-zinc-300 dark:text-zinc-200 break-words">
                     {typeof v === "object" ? JSON.stringify(v) : String(v)}
                   </span>
                 </div>
@@ -389,19 +641,21 @@ function NotificationRow({
             </div>
           )}
 
-          <div className="mt-1.5 flex items-center gap-2 text-[10px] text-zinc-600">
-            <span>{t("notifications.sentAt", { date: formatDate(n.sent_at ?? n.created_at) })}</span>
+          <div className="mt-1.5 flex items-center gap-2 text-[10px] text-zinc-600 dark:text-zinc-500">
+            <span>{sentAtRelative}</span>
             {n.read_at && (
               <>
                 <span>·</span>
-                <span>{t("notifications.readAt", { date: formatDate(n.read_at) })}</span>
+                <span>
+                  {t("notifications.readAt", { date: readAtRelative })}
+                </span>
               </>
             )}
           </div>
         </div>
 
         {/* Mark-as-read action */}
-        <div className="shrink-0">
+        <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
           {isUnread ? (
             <Button
               variant="ghost"
@@ -414,7 +668,7 @@ function NotificationRow({
               {t("notifications.read")}
             </Button>
           ) : (
-            <span className="text-[10px] text-zinc-600 inline-flex items-center gap-1 pr-1">
+            <span className="text-[10px] text-zinc-600 dark:text-zinc-500 inline-flex items-center gap-1 pr-1">
               <CheckCheck className="h-3 w-3" />
               {t("notifications.read")}
             </span>
@@ -425,24 +679,24 @@ function NotificationRow({
   );
 }
 
-function EmptyState({ unreadCount }: { unreadCount: number }) {
+function EmptyState({ hasFilters }: { hasFilters: boolean }) {
   const t = useT();
   return (
-    <div className="py-10 text-center space-y-3">
-      <div className="mx-auto h-12 w-12 rounded-full bg-white/[0.03] border border-white/5 flex items-center justify-center">
-        {unreadCount === 0 ? (
-          <BellOff className="h-5 w-5 text-zinc-500" />
+    <div className="py-12 text-center space-y-3">
+      <div className="mx-auto h-14 w-14 rounded-full bg-brand-500/10 border border-brand-500/20 flex items-center justify-center">
+        {hasFilters ? (
+          <BellOff className="h-6 w-6 text-zinc-500 dark:text-zinc-400" />
         ) : (
-          <Bell className="h-5 w-5 text-zinc-500" />
+          <Inbox className="h-6 w-6 text-brand-600 dark:text-brand-400" />
         )}
       </div>
-      <div className="text-sm text-zinc-400">
-        {unreadCount === 0
-          ? t("notifications.empty.noUnread")
-          : t("notifications.empty.filtered")}
+      <div className="text-sm text-zinc-400 dark:text-zinc-300">
+        {hasFilters
+          ? t("notifications.empty.filtered")
+          : t("notifications.noNew")}
       </div>
-      <p className="text-xs text-zinc-600 max-w-sm mx-auto">
-        {t("notifications.empty.hint")}
+      <p className="text-xs text-zinc-600 dark:text-zinc-500 max-w-sm mx-auto">
+        {hasFilters ? t("notifications.empty.hint") : t("notifications.noNewHint")}
       </p>
     </div>
   );

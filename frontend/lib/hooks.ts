@@ -3,7 +3,15 @@
  */
 
 import useSWR from "swr";
-import { api, swrConfig, type UserProfileRead } from "./api";
+import {
+  api,
+  swrConfig,
+  type NotificationChannel,
+  type NotificationSeverity,
+  type NotificationStatus,
+  type NotificationRead,
+  type UserProfileRead,
+} from "./api";
 
 export function useGoals() {
   return useSWR("goals", () => api.listGoals(), swrConfig);
@@ -57,8 +65,42 @@ export function useGraph(goalId?: string, scenarioId?: string) {
   );
 }
 
-export function useNotifications() {
-  return useSWR("notifications", () => api.listNotifications(), swrConfig);
+export interface NotificationFilter {
+  severity?: NotificationSeverity | string;
+  status?: NotificationStatus | string;
+  channel?: NotificationChannel | string;
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * Notifications list with server-side filtering + pagination.
+ *
+ * SWR key is `["notifications", filter]` so the SSEProvider's function
+ * matcher (which matches any array whose first element is "notifications")
+ * revalidates this hook when a `risk_alert` or `notification` event arrives.
+ *
+ * `refreshInterval` (60s) acts as a fallback polling mechanism so the list
+ * stays fresh even if SSE silently drops.
+ */
+export function useNotifications(filter?: NotificationFilter) {
+  return useSWR<NotificationRead[]>(
+    ["notifications", filter ?? {}],
+    () => api.listNotifications(filter),
+    { ...swrConfig, refreshInterval: 60000 }
+  );
+}
+
+/**
+ * Efficient unread badge count — backed by `GET /notifications/unread-count`.
+ * Polled every 30s so the badge stays fresh even without an SSE push.
+ */
+export function useUnreadCount() {
+  return useSWR<{ count: number }>(
+    ["notifications", "unread-count"],
+    () => api.getUnreadCount(),
+    { ...swrConfig, refreshInterval: 30000 }
+  );
 }
 
 export function useSettings() {

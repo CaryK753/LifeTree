@@ -32,14 +32,14 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable
+from datetime import datetime, timezone
+from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.models.event import Event, InformationSource, SourceKind
+from app.models.event import Event, SourceKind
 
 log = get_logger(__name__)
 
@@ -284,14 +284,34 @@ class DecayService:
 
         Called by the daily `graph_health_check` Celery task. Returns the
         number of events archived in this sweep.
+
+        Also emits user-facing notifications:
+          - score < STALE_THRESHOLD  → warning "建议刷新"
+          - score < EXPIRED_THRESHOLD → info "已自动归档"
+        Each notification is rate-limited to once per day per event via
+        Redis SETNX (mirrors ``NotificationService._is_suppressed``).
         """
+        from app.core.tenant import get_default_user
+        from app.db.redis import get_redis
+        from app.services.notification import NotificationService
+
         now = datetime.now(timezone.utc)
         events = list(self.db.scalars(select(Event)))
         archived = 0
+        stale_notified = 0
+        archive_notified = 0
+
+        # Single-user mode: resolve once. (Multi-tenant would thread user
+        # through event ownership; this matches the rest of the codebase.)
+        user = get_default_user(self.db)
+        notif_service = NotificationService(self.db)
+        redis = get_redis()
+
         for ev in events:
             if ev.meta.get("archived"):
                 continue
             score, _, _ = self.compute_score(ev, now)
+            title = self._event_title(ev)
             if score < archive_below:
                 meta = dict(ev.meta or {})
                 meta["archived"] = True
@@ -299,10 +319,67 @@ class DecayService:
                 meta["auto_archived"] = True
                 ev.meta = meta
                 archived += 1
+                if self._mark_decay_notified(redis, user.id, ev.id, "archived"):
+                    notif_service.notify(
+                        user,
+                        title=f"信息已自动归档：{title}",
+                        body=f"信息「{title}」已自动归档",
+                        severity="info",
+                        event_id=ev.id,
+                        risk_factor_id=f"decay:archived:{ev.id}",
+                        force=True,  # we already SETNX-rated above
+                    )
+                    archive_notified += 1
+            elif score < STALE_SCORE_THRESHOLD:
+                if self._mark_decay_notified(redis, user.id, ev.id, "stale"):
+                    notif_service.notify(
+                        user,
+                        title=f"信息已过时：{title}",
+                        body=f"信息「{title}」已过时，建议刷新",
+                        severity="warning",
+                        event_id=ev.id,
+                        risk_factor_id=f"decay:stale:{ev.id}",
+                        force=True,
+                    )
+                    stale_notified += 1
         if archived:
             self.db.commit()
-        log.info("decay.sweep_expired", archived=archived, threshold=archive_below)
+        log.info(
+            "decay.sweep_expired",
+            archived=archived,
+            threshold=archive_below,
+            stale_notified=stale_notified,
+            archive_notified=archive_notified,
+        )
         return archived
+
+    # ---------------- Helpers (notifications) ----------------
+
+    @staticmethod
+    def _event_title(ev: Event) -> str:
+        """Best-effort human-readable title for an event."""
+        src = getattr(ev, "source", None)
+        if src is not None and getattr(src, "title", None):
+            return src.title
+        return ev.subject or ev.id
+
+    @staticmethod
+    def _mark_decay_notified(
+        redis, user_id: str, event_id: str, kind: str
+    ) -> bool:
+        """Once-per-day SETNX gate for decay notifications.
+
+        Mirrors the pattern in ``NotificationService._is_suppressed`` but
+        uses a 24h TTL so we never notify about the same event twice in
+        a single day. Returns True if this caller "won" the slot.
+        """
+        key = f"notif:decay:{kind}:{user_id}:{event_id}"
+        try:
+            acquired = redis.set(key, "1", ex=86400, nx=True)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("decay.redis_setnx_failed", error=str(exc))
+            return False
+        return bool(acquired)
 
 
 def is_active(ev: Event) -> bool:

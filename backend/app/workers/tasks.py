@@ -12,7 +12,6 @@ from app.db.postgres import get_session
 from app.models.event import Event
 from app.models.goal import Goal, GoalStatus
 from app.models.notification import NotificationLog, NotificationStatus
-from app.models.scenario import Scenario, ScenarioStatus
 from app.models.user import UserProfile
 from app.services.crawler import CrawlerService
 from app.services.notification import NotificationService
@@ -75,9 +74,23 @@ def crawl_all_goals() -> dict:
 
 @celery_app.task(name="app.workers.tasks.rerun_risk_propagation")
 def rerun_risk_propagation() -> dict:
-    """Re-run risk propagation for high-risk events from the last 24h."""
+    """Re-run risk propagation for high-risk events from the last 24h.
+
+    After re-propagation, notify the user whenever a (user, goal, scenario)
+    risk level INCREASES (e.g. low→medium, medium→high). Severity of the
+    notification matches the new level (medium=warning, high=critical).
+    """
+    from app.models.notification import RiskAssessment
+
     db = get_session()
     try:
+        # Snapshot existing overall_risk per (user, goal, scenario) so we
+        # can detect transitions after re-propagation.
+        existing = list(db.scalars(select(RiskAssessment)))
+        old_scores: dict[tuple[str, str, str | None], float] = {
+            (a.user_id, a.goal_id, a.scenario_id): a.overall_risk for a in existing
+        }
+
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         events = list(db.scalars(
             select(Event)
@@ -89,10 +102,75 @@ def rerun_risk_propagation() -> dict:
         for ev in events:
             assessments = engine.propagate_from_event(ev)
             n += len(assessments)
-        log.info("rerun_risk_propagation.done", events=len(events), assessments=n)
-        return {"status": "ok", "events": len(events), "assessments": n}
+
+        # Compare new vs old and emit transition notifications on increases.
+        notif_service = NotificationService(db)
+        notified = 0
+        new_assessments = list(db.scalars(select(RiskAssessment)))
+        for a in new_assessments:
+            key = (a.user_id, a.goal_id, a.scenario_id)
+            old_score = old_scores.get(key)
+            if old_score is None:
+                continue  # brand-new assessment, not a transition
+            old_level = _score_to_level(old_score)
+            new_level = _score_to_level(a.overall_risk)
+            if _LEVEL_ORDER[new_level] <= _LEVEL_ORDER[old_level]:
+                continue  # only notify on increase
+            user = db.get(UserProfile, a.user_id)
+            if user is None:
+                continue
+            goal = db.get(Goal, a.goal_id)
+            goal_title = goal.title if goal else a.goal_id
+            severity = "warning" if new_level == "medium" else "critical"
+            notif_service.notify(
+                user,
+                title=f"风险等级升级：{goal_title}",
+                body=f"目标「{goal_title}」的风险等级从 {old_level} 升至 {new_level}",
+                severity=severity,
+                risk_factor_id=f"risk_transition:{a.goal_id}",
+                impact_summary={
+                    "goal_id": a.goal_id,
+                    "scenario_id": a.scenario_id,
+                    "old_level": old_level,
+                    "new_level": new_level,
+                    "old_score": old_score,
+                    "new_score": a.overall_risk,
+                },
+            )
+            notified += 1
+
+        log.info(
+            "rerun_risk_propagation.done",
+            events=len(events),
+            assessments=n,
+            notified=notified,
+        )
+        return {
+            "status": "ok",
+            "events": len(events),
+            "assessments": n,
+            "notified": notified,
+        }
     finally:
         db.close()
+
+
+# Risk-level ordering used to detect transitions (low < medium < high).
+_LEVEL_ORDER: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
+
+
+def _score_to_level(score: float) -> str:
+    """Map a 0..1 risk score back to its level label.
+
+    Mirrors ``RiskPropagationEngine._level_to_score``: low=0.2, medium=0.5,
+    high=0.8. We use the midpoints (0.35, 0.65) as decision boundaries so
+    small float drift doesn't flip the level.
+    """
+    if score >= 0.65:
+        return "high"
+    if score >= 0.35:
+        return "medium"
+    return "low"
 
 
 @celery_app.task(name="app.workers.tasks.graph_health_check")

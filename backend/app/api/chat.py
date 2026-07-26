@@ -101,17 +101,19 @@ def _build_context_block(
         if scenario.success_probability:
             parts.append(f"- Computed probability: {scenario.success_probability}")
 
-    # Memories: surface the top ~15 by importance so the LLM has prior context
-    # without bloating the prompt. The full list is still queryable via the
-    # `list_memories` tool.
-    mems = list(
-        db.scalars(
-            select(UserMemory)
-            .where(UserMemory.user_id == user.id)
-            .order_by(UserMemory.importance.desc(), UserMemory.created_at.desc())
-            .limit(15)
-        )
-    )
+    # Memories: surface a diverse, recency-weighted set so the LLM has prior
+    # context without bloating the prompt. The full list is still queryable
+    # via the `list_memories` tool.
+    #
+    # Selection strategy (avoids the failure mode where 15 memories all come
+    # from the same category, which would starve the model of broader context):
+    #   1. Pull a candidate pool (top ~60 by importance, then recency).
+    #   2. Score each memory by a blended score:
+    #        0.6 * importance + 0.4 * recency_norm
+    #      where recency_norm is in [0, 1] (1 = newest in the pool).
+    #   3. Greedily pick memories, capping per-category diversity so no single
+    #      category dominates the final 15.
+    mems = _select_memories_for_context(db, user.id, limit=15)
     if mems:
         parts.append("\n# Memories (previously remembered facts about the user)")
         for m in mems:
@@ -120,6 +122,195 @@ def _build_context_block(
             )
 
     return "\n".join(parts)
+
+
+def _select_memories_for_context(
+    db: Session, user_id: str, *, limit: int = 15, pool_size: int = 60
+) -> list[UserMemory]:
+    """Select a diverse, recency-weighted set of memories for the system prompt.
+
+    Pulls a candidate pool ordered by importance then recency, scores each
+    memory as ``0.6 * importance + 0.4 * recency_norm`` (recency_norm in
+    [0, 1], 1 = newest in the pool), and greedily picks the highest-scoring
+    memories while enforcing a per-category cap so no single category
+    dominates. Falls back to plain importance ordering if the pool is small.
+    """
+    pool = list(
+        db.scalars(
+            select(UserMemory)
+            .where(UserMemory.user_id == user_id)
+            .order_by(UserMemory.importance.desc(), UserMemory.created_at.desc())
+            .limit(pool_size)
+        )
+    )
+    if not pool:
+        return []
+    if len(pool) <= limit:
+        return pool
+
+    # Compute recency_norm: newest memory → 1.0, oldest in pool → ~0.0.
+    timestamps = [m.created_at for m in pool if m.created_at is not None]
+    if not timestamps:
+        # No timestamps available — fall back to importance-only ordering.
+        return pool[:limit]
+    ts_min = min(timestamps)
+    ts_max = max(timestamps)
+    span = (ts_max - ts_min).total_seconds() or 1.0
+
+    def score(m: UserMemory) -> float:
+        recency_norm = (
+            (m.created_at - ts_min).total_seconds() / span
+            if m.created_at is not None
+            else 0.0
+        )
+        return 0.6 * float(m.importance) + 0.4 * recency_norm
+
+    # Sort the pool by blended score descending, then greedily pick while
+    # enforcing per-category diversity. The cap is ``ceil(limit / 4)`` so
+    # no single category can take more than ~25% of the slots — this keeps
+    # any one category (e.g. 'career') from crowding out family / health /
+    # finance context.
+    per_category_cap = max(2, (limit + 3) // 4)
+    category_counts: dict[str, int] = {}
+    selected: list[UserMemory] = []
+    for m in sorted(pool, key=score, reverse=True):
+        if len(selected) >= limit:
+            break
+        cnt = category_counts.get(m.category, 0)
+        if cnt >= per_category_cap:
+            continue
+        selected.append(m)
+        category_counts[m.category] = cnt + 1
+
+    # If we still have slots (because some categories were thin), fill from
+    # the remaining highest-scored memories ignoring the cap.
+    if len(selected) < limit:
+        chosen_ids = {m.id for m in selected}
+        for m in sorted(pool, key=score, reverse=True):
+            if len(selected) >= limit:
+                break
+            if m.id in chosen_ids:
+                continue
+            selected.append(m)
+            chosen_ids.add(m.id)
+
+    return selected
+
+
+# Token budget for conversation history. Leaves room for the system prompt
+# (with context block) + tools + the model's response. Most modern chat
+# models support 128k+ tokens; 100k is a safe upper bound that leaves
+# ~28k tokens of headroom.
+_CONVERSATION_TOKEN_BUDGET = 100_000
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough per-message token estimate.
+
+    Uses ``len(text) * 0.5`` as a blended estimate between English
+    (~``len/3`` tokens/char) and Chinese (~``len/1.5``). Conservative on
+    purpose — over-estimating slightly just truncates a bit earlier, which
+    is safer than under-estimating and blowing the context window.
+    """
+    if not text:
+        return 0
+    return int(len(text) * 0.5)
+
+
+def _truncate_to_token_budget(
+    history: list[dict[str, Any]],
+    *,
+    budget: int = _CONVERSATION_TOKEN_BUDGET,
+) -> list[dict[str, Any]]:
+    """Truncate conversation history to fit within a token budget.
+
+    If the total exceeds ``budget``, drops the oldest messages while:
+      - Always keeping the first user message (so the model retains the
+        original ask).
+      - Keeping each "assistant + immediately following tool messages"
+        group atomic — a tool result without its preceding assistant
+        tool_call would cause the model to error.
+
+    Inserts a system note ``[Earlier conversation history truncated]`` at
+    the truncation point so the model knows context was dropped.
+    """
+    if not history:
+        return []
+
+    # Group messages into atomic units: an assistant message followed by
+    # any number of tool messages forms one group; everything else is its
+    # own group. This keeps a tool result tied to its preceding assistant
+    # tool_call (dropping one without the other would corrupt the message
+    # stream the model sees).
+    groups: list[list[dict[str, Any]]] = []
+    for m in history:
+        role = m.get("role")
+        if (
+            role == "tool"
+            and groups
+            and groups[-1][-1].get("role") in ("assistant", "tool")
+        ):
+            groups[-1].append(m)
+        else:
+            groups.append([m])
+
+    def group_tokens(group: list[dict[str, Any]]) -> int:
+        total = 0
+        for m in group:
+            content = m.get("content") or ""
+            if isinstance(content, str):
+                total += _estimate_tokens(content)
+            # tool_calls add a small overhead; estimate from json length.
+            for tc in m.get("tool_calls") or []:
+                try:
+                    total += _estimate_tokens(json.dumps(tc, ensure_ascii=False))
+                except (TypeError, ValueError):
+                    pass
+        return total
+
+    total_tokens = sum(group_tokens(g) for g in groups)
+    if total_tokens <= budget:
+        return history
+
+    # Always keep the first user-message group (the original ask).
+    first_user_idx = next(
+        (i for i, g in enumerate(groups) if g[0].get("role") == "user"),
+        None,
+    )
+
+    # Walk from the most recent group backwards, accumulating tokens until
+    # the budget is exhausted.
+    kept_indices: set[int] = set()
+    running = 0
+    for i in range(len(groups) - 1, -1, -1):
+        g_tokens = group_tokens(groups[i])
+        if running + g_tokens > budget:
+            break
+        running += g_tokens
+        kept_indices.add(i)
+
+    # Force-include the first user group, even if it overshoots the budget
+    # — losing the original ask would leave the model without context.
+    if first_user_idx is not None:
+        kept_indices.add(first_user_idx)
+
+    # Build the final list, inserting a truncation marker at any gap so
+    # the model knows older turns were elided.
+    sorted_kept = sorted(kept_indices)
+    out: list[dict[str, Any]] = []
+    prev_idx = None
+    for idx in sorted_kept:
+        if prev_idx is not None and idx > prev_idx + 1:
+            out.append(
+                {
+                    "role": "system",
+                    "content": "[Earlier conversation history truncated]",
+                }
+            )
+        out.extend(groups[idx])
+        prev_idx = idx
+
+    return out
 
 
 @router.post("/stream")
@@ -157,6 +348,10 @@ async def chat_stream(
     # prompt is owned by the graph (via ``prompt=``), so we drop any system
     # messages from the client.
     history = [m.model_dump() for m in payload.messages if m.role != "system"]
+    # Cap conversation history to a token budget so long chats don't exceed
+    # the model's context window. The budget leaves room for the system
+    # prompt (with context block) + tools + the model's response.
+    history = _truncate_to_token_budget(history, budget=100_000)
     lc_messages = messages_to_langchain(history)
 
     async def event_generator():

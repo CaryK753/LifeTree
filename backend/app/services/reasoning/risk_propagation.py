@@ -7,6 +7,7 @@ per (goal, scenario) tuple and emitting personalized notifications.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -15,10 +16,10 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.db.neo4j import get_neo4j_driver
+from app.db.redis import get_redis
 from app.models.event import Event
-from app.models.goal import Goal, RiskFactor
+from app.models.goal import Goal
 from app.models.notification import RiskAssessment, RiskPropagationLog
-from app.models.scenario import Scenario
 from app.models.user import UserProfile
 from app.services.graph import GraphService
 from app.services.profiling import ProfilingService
@@ -101,7 +102,41 @@ class RiskPropagationEngine:
             assessments=len(assessments),
             ms=elapsed_ms,
         )
+        # Best-effort SSE push so connected clients refresh their risk view.
+        # A Redis hiccup must never break the propagation pipeline.
+        for a in assessments:
+            self._publish_sse(a)
         return assessments
+
+    # ---------------- SSE push ----------------
+
+    def _publish_sse(self, assessment: RiskAssessment) -> None:
+        """Publish a risk_alert event to the user's SSE channel."""
+        try:
+            payload = {
+                "type": "risk_alert",
+                "data": {
+                    "id": assessment.id,
+                    "user_id": assessment.user_id,
+                    "goal_id": assessment.goal_id,
+                    "scenario_id": assessment.scenario_id,
+                    "overall_risk": assessment.overall_risk,
+                    "factor_scores": assessment.factor_scores or [],
+                    "computed_at": assessment.computed_at.isoformat()
+                    if assessment.computed_at
+                    else None,
+                },
+            }
+            get_redis().publish(
+                f"lifetree:risk:{assessment.user_id}",
+                json.dumps(payload, ensure_ascii=False),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "risk_propagation.sse_publish_failed",
+                user_id=assessment.user_id,
+                error=str(exc),
+            )
 
     # ---------------- Helpers ----------------
 

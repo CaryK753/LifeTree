@@ -30,8 +30,34 @@ const SSE_ENDPOINT = STREAM_BASE_URL
   : `${API_PREFIX}/sse`;
 
 // Match the SWR keys used in lib/hooks.ts so we can revalidate them.
-const RISK_REVALIDATE_KEYS = ["notifications", "events", "dashboard"];
-const SCENARIO_REVALIDATE_KEYS = ["scenarios", "dashboard"];
+// `useNotifications` and `useUnreadCount` use array keys whose first
+// element is "notifications", so a function matcher is needed to cover
+// all filtered/paginated variants + the unread-count key.
+const RISK_REVALIDATE_MATCHER = (key: unknown): boolean => {
+  if (typeof key === "string") {
+    return key === "events" || key === "dashboard";
+  }
+  if (Array.isArray(key)) {
+    const head = key[0];
+    return (
+      head === "notifications" ||
+      head === "events" ||
+      head === "dashboard"
+    );
+  }
+  return false;
+};
+
+const SCENARIO_REVALIDATE_MATCHER = (key: unknown): boolean => {
+  if (typeof key === "string") {
+    return key === "scenarios" || key === "dashboard";
+  }
+  if (Array.isArray(key)) {
+    const head = key[0];
+    return head === "scenarios" || head === "dashboard";
+  }
+  return false;
+};
 
 export function SSEProvider({ children }: { children: React.ReactNode }) {
   const { mutate } = useSWRConfig();
@@ -92,9 +118,17 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
           });
 
           // Revalidate the data that depends on risk alerts.
-          for (const key of RISK_REVALIDATE_KEYS) {
-            mutate(key);
-          }
+          mutate(RISK_REVALIDATE_MATCHER);
+        });
+
+        // Generic notification event — backend pushes these when any
+        // notification is created/delivered (covers channels beyond risk_alert).
+        // We don't toast here (the risk_alert handler already covers
+        // user-facing alerts); we just trigger SWR revalidation so the
+        // notification list + unread badge refresh in real time.
+        es.addEventListener("notification", () => {
+          const { mutate } = handlersRef.current;
+          mutate(RISK_REVALIDATE_MATCHER);
         });
 
         es.addEventListener("scenario_run", (e) => {
@@ -119,9 +153,7 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
 
           toast({ title, description, variant: "success" });
 
-          for (const key of SCENARIO_REVALIDATE_KEYS) {
-            mutate(key);
-          }
+          mutate(SCENARIO_REVALIDATE_MATCHER);
         });
 
         es.onerror = () => {

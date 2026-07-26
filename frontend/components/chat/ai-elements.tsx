@@ -8,7 +8,6 @@ import {
   XCircle,
   Loader2,
   Wrench,
-  Brain,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Markdown } from "@/components/chat/markdown";
@@ -19,62 +18,12 @@ import type { ToolCall } from "@/lib/chat-store";
  * Vercel AI SDK-style elements, adapted to our existing design tokens.
  *
  * These components are intentionally framework-agnostic and reusable:
- *   - <Reasoning> — collapsible chain-of-thought panel
  *   - <ToolInvocation> — single tool call with args/result
  *   - <ToolInvocations> — vertical list of tool calls
  *
  * Each component is a controlled component — the parent owns the state.
  * Streaming-friendly: pass `isRunning={true}` while a tool is in flight.
  */
-
-// ---------- Reasoning ----------
-
-export function Reasoning({
-  content,
-  isStreaming = false,
-  defaultOpen = false,
-}: {
-  content: string;
-  isStreaming?: boolean;
-  defaultOpen?: boolean;
-}) {
-  const t = useT();
-  const [open, setOpen] = useState(defaultOpen ?? isStreaming);
-
-  if (!content && !isStreaming) return null;
-
-  return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.02] my-2 overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.02] transition-colors"
-      >
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5" />
-        )}
-        <Brain className={cn("h-3.5 w-3.5", isStreaming && "text-brand-300")} />
-        <span className="font-medium">{t("chat.reasoning")}</span>
-        {isStreaming && (
-          <span className="flex items-center gap-1 text-brand-300">
-            <span className="h-1 w-1 rounded-full bg-brand-400 animate-pulse" />
-            <span className="text-[10px]">{t("chat.streaming.thinking")}</span>
-          </span>
-        )}
-      </button>
-      {open && (
-        <div className="px-3 pb-3 pt-1 border-t border-white/5 text-xs text-zinc-400 leading-relaxed font-mono whitespace-pre-wrap">
-          {content || (isStreaming ? "…" : "")}
-          {isStreaming && (
-            <span className="inline-block w-1 h-3 ml-0.5 bg-brand-400 animate-pulse align-middle" />
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ---------- Tool invocation ----------
 
@@ -282,8 +231,8 @@ export function Thread({
  * Renders an avatar + content bubble; alignment flips for user vs. assistant.
  *
  * The `role` prop drives layout; the children are the bubble body so callers
- * can compose <ResponseContainer>, <ResponseMarkdown>, <ToolInvocations>,
- * <Reasoning> in any combination they need.
+ * can compose <ResponseContainer>, <ResponseMarkdown>, <ToolInvocations>
+ * in any combination they need.
  */
 export function Message({
   role,
