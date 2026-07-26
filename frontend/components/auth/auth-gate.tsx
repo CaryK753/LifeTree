@@ -10,12 +10,19 @@ import { Loader2 } from "lucide-react";
  * AuthGate: wraps the app, shows a login dialog when unauthenticated.
  *
  * Strategy:
- *   - Single-user mode (``use_mode === "single"``): the app runs without
- *     login. The backend serves data via the default-user fallback, so
- *     we never auto-open the login dialog. Users who want a personal
- *     scope can still sign in via the user menu.
- *   - Multi-user mode (``use_mode === "multi"``): the dialog auto-opens
- *     on first load and is NOT dismissible — the user must authenticate.
+ *   - **First-run setup** (``has_users === false``): no real users exist
+ *     yet, so the dialog auto-opens in "first admin" mode and is NOT
+ *     dismissible. The user must create the first admin account to
+ *     continue. This applies to BOTH single and multi mode — even in
+ *     single mode, at least one account must exist so the user can
+ *     access profile/settings/admin features.
+ *   - **Single-user mode** (``use_mode === "single"``, has users): the
+ *     app runs without login. The backend serves data via the
+ *     default-user fallback. Users who want a personal scope can still
+ *     sign in via the user menu.
+ *   - **Multi-user mode** (``use_mode === "multi"``, has users): the
+ *     dialog auto-opens on first load and is NOT dismissible — the user
+ *     must authenticate.
  */
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, isLoading, isAuthenticated } = useAuth();
@@ -34,17 +41,30 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   // ``multi_user_mode`` is kept as a legacy alias.
   const useMode = authConfig?.use_mode ?? (authConfig?.multi_user_mode ? "multi" : "single");
   const multiUserMode = useMode === "multi";
-  const dismissible = !multiUserMode;
 
-  // Auto-open login dialog on first load ONLY in multi-user mode.
-  // In single-user mode the app works without login (default-user
-  // fallback), so we never prompt — the user can still sign in
-  // voluntarily via the user menu.
+  // ``has_users``: False when no real users exist (excluding the default-user
+  // fallback). The frontend shows a non-dismissible "create admin" setup
+  // screen in that case, regardless of use_mode.
+  const hasUsers = authConfig?.has_users ?? true; // default true to avoid flashing setup on slow loads
+  const needsFirstAdmin = !hasUsers;
+
+  // The dialog is dismissible only when:
+  //   - real users already exist (not first-run setup), AND
+  //   - we're in single-user mode (anonymous access allowed)
+  const dismissible = !needsFirstAdmin && !multiUserMode;
+
+  // Auto-open login dialog when:
+  //   1. First-run setup (no users yet) — must create admin account, OR
+  //   2. Multi-user mode + not authenticated — must log in.
+  // In both cases the dialog is non-dismissible.
   useEffect(() => {
-    if (multiUserMode && !isLoading && !isAuthenticated && !dismissed) {
+    if (isLoading || isAuthenticated) return;
+    if (needsFirstAdmin && !dismissed) {
+      setShowLogin(true);
+    } else if (multiUserMode && !dismissed) {
       setShowLogin(true);
     }
-  }, [multiUserMode, isLoading, isAuthenticated, dismissed]);
+  }, [needsFirstAdmin, multiUserMode, isLoading, isAuthenticated, dismissed]);
 
   // Sync chat-store's user scope with the current user so conversations
   // are isolated per user in localStorage. When logged out, falls back
@@ -54,8 +74,8 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   }, [user?.id]);
 
   function handleOpenChange(open: boolean) {
-    // In multi-user mode, the dialog can never be closed (no fallback).
-    if (multiUserMode && !open) return;
+    // Non-dismissible modes: the dialog can never be closed (no fallback).
+    if (!open && (needsFirstAdmin || multiUserMode)) return;
     setShowLogin(open);
     if (!open) setDismissed(true);
   }
@@ -67,6 +87,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         open={showLogin}
         onOpenChange={handleOpenChange}
         dismissible={dismissible}
+        firstAdminSetup={needsFirstAdmin}
       />
 
       {/* Loading overlay while verifying token.

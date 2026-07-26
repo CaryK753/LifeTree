@@ -11,7 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, LogIn, Mail, UserPlus } from "lucide-react";
+import { Loader2, LogIn, Mail, ShieldCheck, UserPlus } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { useT } from "@/lib/i18n/provider";
 import { useAuth, useAuthConfig } from "@/lib/hooks";
@@ -37,10 +37,12 @@ export function LoginDialog({
   open,
   onOpenChange,
   dismissible = true,
+  firstAdminSetup = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   dismissible?: boolean;
+  firstAdminSetup?: boolean;
 }) {
   const t = useT();
   const toast = useToast();
@@ -55,6 +57,9 @@ export function LoginDialog({
     password: "",
     code: "",
   });
+
+  // In first-admin setup mode, force the register tab and hide the tabs.
+  const effectiveMode = firstAdminSetup ? "register" : mode;
 
   // Email-verification-code "send" button state.
   const [codeSending, setCodeSending] = useState(false);
@@ -79,6 +84,11 @@ export function LoginDialog({
       }
     }
   }, [open]);
+
+  // When firstAdminSetup is active, ensure we're always in register mode.
+  useEffect(() => {
+    if (firstAdminSetup) setMode("register");
+  }, [firstAdminSetup]);
 
   // Clean up cooldown timer on unmount.
   useEffect(() => {
@@ -145,7 +155,7 @@ export function LoginDialog({
     e.preventDefault();
     setLoading(true);
     try {
-      if (mode === "login") {
+      if (effectiveMode === "login") {
         await login(form.email.trim(), form.password);
         toast({ title: t("auth.loginSuccess"), variant: "success" });
       } else {
@@ -220,7 +230,7 @@ export function LoginDialog({
 
   // Whether the password field is required on the register tab.
   // When email verification is enabled, password is optional.
-  const passwordRequired = mode === "login" || !emailVerificationEnabled;
+  const passwordRequired = effectiveMode === "login" || !emailVerificationEnabled;
 
   return (
     <Dialog
@@ -248,17 +258,28 @@ export function LoginDialog({
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <LogIn className="h-5 w-5 text-brand-600 dark:text-brand-400" />
-            {mode === "login" ? t("auth.loginTitle") : t("auth.registerTitle")}
+            {firstAdminSetup ? (
+              <ShieldCheck className="h-5 w-5 text-amber-500" />
+            ) : (
+              <LogIn className="h-5 w-5 text-brand-600 dark:text-brand-400" />
+            )}
+            {firstAdminSetup
+              ? t("auth.firstAdminTitle")
+              : effectiveMode === "login"
+                ? t("auth.loginTitle")
+                : t("auth.registerTitle")}
           </DialogTitle>
           <DialogDescription>
-            {mode === "login"
-              ? t("auth.loginDesc")
-              : t("auth.registerDesc")}
+            {firstAdminSetup
+              ? t("auth.firstAdminDesc")
+              : effectiveMode === "login"
+                ? t("auth.loginDesc")
+                : t("auth.registerDesc")}
           </DialogDescription>
         </DialogHeader>
 
-        {/* Tabs */}
+        {/* Tabs — hidden in first-admin setup mode (register only). */}
+        {!firstAdminSetup && (
         <div className="flex gap-1 p-1 rounded-md bg-black/[0.04] dark:bg-white/[0.04]">
           <button
             type="button"
@@ -285,9 +306,10 @@ export function LoginDialog({
             {t("auth.tabRegister")}
           </button>
         </div>
+        )}
 
         <form onSubmit={submit} className="space-y-3">
-          {mode === "register" && (
+          {effectiveMode === "register" && (
             <Field label={t("auth.displayName")}>
               <Input
                 value={form.displayName}
@@ -309,7 +331,7 @@ export function LoginDialog({
               placeholder="you@example.com"
               className="h-9 text-sm"
               required
-              autoFocus={mode === "login"}
+              autoFocus={effectiveMode === "login"}
             />
           </Field>
           <Field label={t("auth.password")}>
@@ -324,7 +346,7 @@ export function LoginDialog({
               required={passwordRequired}
               minLength={passwordRequired ? 6 : undefined}
             />
-            {mode === "register" && emailVerificationEnabled && (
+            {effectiveMode === "register" && emailVerificationEnabled && (
               <p className="text-[10px] text-zinc-500 leading-snug">
                 {t("auth.passwordOptionalHint")}
               </p>
@@ -332,7 +354,7 @@ export function LoginDialog({
           </Field>
 
           {/* Email verification code field — only on register tab when admin enabled it. */}
-          {mode === "register" && emailVerificationEnabled && (
+          {effectiveMode === "register" && emailVerificationEnabled && (
             <Field label={t("auth.verifyCode.field")}>
               <div className="flex gap-2">
                 <Input
@@ -379,16 +401,20 @@ export function LoginDialog({
           >
             {loading ? (
               <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-            ) : mode === "login" ? (
+            ) : firstAdminSetup ? (
+              <ShieldCheck className="h-4 w-4 mr-1.5" />
+            ) : effectiveMode === "login" ? (
               <LogIn className="h-4 w-4 mr-1.5" />
             ) : (
               <UserPlus className="h-4 w-4 mr-1.5" />
             )}
-            {mode === "login"
-              ? t("auth.login")
-              : emailVerificationEnabled
-                ? t("auth.verifyCode.register")
-                : t("auth.register")}
+            {firstAdminSetup
+              ? t("auth.firstAdminButton")
+              : effectiveMode === "login"
+                ? t("auth.login")
+                : emailVerificationEnabled
+                  ? t("auth.verifyCode.register")
+                  : t("auth.register")}
           </Button>
         </form>
 

@@ -689,6 +689,8 @@ export interface PublicAuthConfig {
   email_verification_enabled: boolean;
   multi_user_mode: boolean;
   use_mode: "single" | "multi";
+  /** False when no real users exist → frontend shows first-admin setup. */
+  has_users: boolean;
 }
 
 export interface SendCodeResponse {

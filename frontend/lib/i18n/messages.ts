@@ -79,6 +79,9 @@ const zhCN: Dict = {
   "auth.verifyCode.invalid": "验证码错误或已过期",
   "auth.verifyCode.register": "验证并注册",
   "auth.emailVerificationDisabled": "管理员未启用邮箱验证",
+  "auth.firstAdminTitle": "创建管理员账户",
+  "auth.firstAdminDesc": "系统中尚无用户，请创建第一个管理员账户以开始使用。此账户将拥有完整的管理权限。",
+  "auth.firstAdminButton": "创建管理员账户",
 
   // Admin
   "admin.title": "管理后台",
@@ -1086,6 +1089,9 @@ const zhTW: Dict = {
   "auth.verifyCode.invalid": "驗證碼錯誤或已過期",
   "auth.verifyCode.register": "驗證並註冊",
   "auth.emailVerificationDisabled": "管理員未啟用郵箱驗證",
+  "auth.firstAdminTitle": "建立管理員帳戶",
+  "auth.firstAdminDesc": "系統中尚無使用者，請建立第一個管理員帳戶以開始使用。此帳戶將擁有完整的管理權限。",
+  "auth.firstAdminButton": "建立管理員帳戶",
 
   // Admin
   "admin.title": "管理後台",
@@ -2048,6 +2054,9 @@ const en: Dict = {
   "auth.verifyCode.invalid": "Invalid or expired code",
   "auth.verifyCode.register": "Verify & register",
   "auth.emailVerificationDisabled": "Email verification is not enabled by the admin",
+  "auth.firstAdminTitle": "Create Admin Account",
+  "auth.firstAdminDesc": "No users exist yet. Create the first admin account to get started. This account will have full admin privileges.",
+  "auth.firstAdminButton": "Create Admin Account",
 
   // Admin
   "admin.title": "Admin",
@@ -3007,6 +3016,9 @@ const es: Dict = {
   "auth.verifyCode.invalid": "Código inválido o expirado",
   "auth.verifyCode.register": "Verificar y registrarse",
   "auth.emailVerificationDisabled": "El administrador no ha habilitado la verificación por correo",
+  "auth.firstAdminTitle": "Crear cuenta de administrador",
+  "auth.firstAdminDesc": "Aún no hay usuarios. Crea la primera cuenta de administrador para empezar. Esta cuenta tendrá privilegios completos de administrador.",
+  "auth.firstAdminButton": "Crear cuenta de administrador",
 
   // Admin
   "admin.title": "Administración",
@@ -3969,6 +3981,9 @@ const de: Dict = {
   "auth.verifyCode.invalid": "Ungültiger oder abgelaufener Code",
   "auth.verifyCode.register": "Verifizieren & registrieren",
   "auth.emailVerificationDisabled": "E-Mail-Verifizierung vom Admin nicht aktiviert",
+  "auth.firstAdminTitle": "Administratorkonto erstellen",
+  "auth.firstAdminDesc": "Es existieren noch keine Benutzer. Erstellen Sie das erste Administratorkonto, um zu beginnen. Dieses Konto hat volle Administratorrechte.",
+  "auth.firstAdminButton": "Administratorkonto erstellen",
 
   // Admin
   "admin.title": "Verwaltung",
@@ -4931,6 +4946,9 @@ const fr: Dict = {
   "auth.verifyCode.invalid": "Code invalide ou expiré",
   "auth.verifyCode.register": "Vérifier et s'inscrire",
   "auth.emailVerificationDisabled": "Vérification par e-mail non activée par l'administrateur",
+  "auth.firstAdminTitle": "Créer un compte administrateur",
+  "auth.firstAdminDesc": "Aucun utilisateur n'existe encore. Créez le premier compte administrateur pour commencer. Ce compte aura des privilèges d'administrateur complets.",
+  "auth.firstAdminButton": "Créer un compte administrateur",
 
   // Admin
   "admin.title": "Administration",

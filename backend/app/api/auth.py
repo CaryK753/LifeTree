@@ -99,6 +99,10 @@ class PublicAuthConfig(BaseModel):
     email_verification_enabled: bool = False
     multi_user_mode: bool = True
     use_mode: Literal["single", "multi"] = "single"
+    # True when at least one user who can actually log in exists
+    # (password_hash or external_id set). Used by the frontend to decide
+    # whether to show the first-run "create admin" setup screen.
+    has_users: bool = False
 
 
 class OAuthStartResponse(BaseModel):
@@ -137,6 +141,31 @@ def _make_token_pair(user: UserProfile) -> dict:
         "token_type": "bearer",
         "user": user,
     }
+
+
+def _should_promote_first_admin(db: Session) -> bool:
+    """Return True if no real users exist yet (first-admin promotion needed).
+
+    The first user who registers — by password, verification code, or
+    OAuth — is auto-promoted to admin so the system is bootstrappable
+    without editing LIFETREE_ADMIN_USER_IDS in .env.
+
+    Excludes the passwordless default-user row (Alex Chen, id=
+    DEFAULT_USER_ID) which may exist due to the legacy single-user
+    fallback. We exclude by ID (not by password_hash/external_id) so
+    that code-only registrations (no password) are still counted as
+    real users.
+    """
+    from sqlalchemy import func
+
+    from app.core.tenant import DEFAULT_USER_ID
+
+    count = db.scalar(
+        select(func.count())
+        .select_from(UserProfile)
+        .where(UserProfile.id != DEFAULT_USER_ID)
+    )
+    return (count or 0) == 0
 
 
 def _redis_code_key(email: str) -> str:
@@ -209,17 +238,21 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> dict:
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
+    # The first real user (excluding the default-user fallback) is
+    # auto-promoted to admin so the system is bootstrappable.
+    is_first_admin = _should_promote_first_admin(db)
     user = UserProfile(
         display_name=payload.display_name.strip(),
         email=payload.email.lower().strip(),
         password_hash=hash_password(payload.password),
         risk_tolerance="medium",
+        role="admin" if is_first_admin else "user",
     )
     db.add(user)
     db.commit()
     db.refresh(user)
     user = _apply_admin_override(user)
-    log.info("auth.registered", user_id=user.id, email=user.email, role=user.role)
+    log.info("auth.registered", user_id=user.id, email=user.email, role=user.role, first_admin=is_first_admin)
     return _make_token_pair(user)
 
 
@@ -274,15 +307,18 @@ def me(user: CurrentUser) -> UserProfile:
 # ---------- Public auth config (for login dialog) ----------
 
 @router.get("/config", response_model=PublicAuthConfig)
-def get_auth_config() -> PublicAuthConfig:
+def get_auth_config(db: Session = Depends(get_db)) -> PublicAuthConfig:
     """Return public auth config for unauthenticated clients.
 
     The login dialog calls this to decide:
       - whether to show OAuth buttons (and which ones)
       - whether to show the email-verification-code field on registration
+      - whether to show the first-run "create admin" setup screen
+        (``has_users`` is False when no real users exist yet)
     """
     cfg = get_public_auth_config()
-    return PublicAuthConfig(**cfg)
+    has_users = not _should_promote_first_admin(db)
+    return PublicAuthConfig(**cfg, has_users=has_users)
 
 
 # ---------- OAuth ----------
@@ -448,17 +484,19 @@ def oauth_callback(
             # doesn't trip. The user can update it later.
             email = f"oauth_{provider_id}_{external_sub}@lifetree.local"
         external_id_val = f"{provider_id}:{external_sub}" if external_sub else None
+        is_first_admin = _should_promote_first_admin(db)
         user = UserProfile(
             display_name=str(display_name)[:128],
             email=email.lower().strip(),
             external_id=external_id_val,
             avatar_url=userinfo.get("avatar_url") or userinfo.get("picture"),
             risk_tolerance="medium",
+            role="admin" if is_first_admin else "user",
         )
         db.add(user)
         db.commit()
         db.refresh(user)
-        log.info("auth.oauth_user_created", user_id=user.id, provider=provider_id, email=user.email)
+        log.info("auth.oauth_user_created", user_id=user.id, provider=provider_id, email=user.email, first_admin=is_first_admin)
     else:
         # Update avatar + external_id on each login (keeps them fresh).
         if not user.external_id and external_sub:
@@ -593,17 +631,19 @@ def register_with_code(
     redis.delete(_redis_code_key(email))
 
     password_hash = hash_password(payload.password) if payload.password else None
+    is_first_admin = _should_promote_first_admin(db)
     user = UserProfile(
         display_name=payload.display_name.strip(),
         email=email,
         password_hash=password_hash,
         risk_tolerance="medium",
+        role="admin" if is_first_admin else "user",
     )
     db.add(user)
     db.commit()
     db.refresh(user)
     user = _apply_admin_override(user)
-    log.info("auth.registered_with_code", user_id=user.id, email=user.email, role=user.role)
+    log.info("auth.registered_with_code", user_id=user.id, email=user.email, role=user.role, first_admin=is_first_admin)
     return _make_token_pair(user)
 
 
