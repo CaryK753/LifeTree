@@ -21,6 +21,9 @@ wheels/
 *.egg
 MANIFEST
 
+# Frontend lib/ contains TypeScript source code, not Python build artifacts
+!frontend/lib/
+
 # Virtual envs
 .venv/
 venv/
