@@ -52,12 +52,13 @@ services:
   redis:
     image: redis:7-alpine
     container_name: lifetree-redis
+    command: ["redis-server", "--port", "16379"]
     ports:
-      - "${REDIS_PORT:-16379}:6379"
+      - "${REDIS_PORT:-16379}:16379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-p", "16379", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -103,7 +104,7 @@ services:
       - POSTGRES_PORT=5432
       - NEO4J_URI=bolt://neo4j:7687
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_PORT=16379
       - MINIO_ENDPOINT=minio:9000
     volumes:
       - backend_plugins:/app/plugins/user_uploaded
@@ -126,7 +127,7 @@ services:
       - POSTGRES_PORT=5432
       - NEO4J_URI=bolt://neo4j:7687
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_PORT=16379
       - MINIO_ENDPOINT=minio:9000
     volumes:
       - backend_plugins:/app/plugins/user_uploaded
@@ -151,7 +152,7 @@ services:
       - POSTGRES_PORT=5432
       - NEO4J_URI=bolt://neo4j:7687
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_PORT=16379
       - MINIO_ENDPOINT=minio:9000
     healthcheck:
       disable: true
@@ -165,7 +166,7 @@ services:
     depends_on:
       - redis
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:16379/0
       - FLOWER_PORT=15555
     restart: unless-stopped
 
