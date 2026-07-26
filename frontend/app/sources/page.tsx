@@ -7,12 +7,14 @@ import { LifecyclePanel } from "@/components/sources/lifecycle-panel";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { formatDate } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n/provider";
 import { useToast } from "@/components/ui/toast";
 import { Loader2, ThumbsUp, ThumbsDown, Upload, Trash2 } from "lucide-react";
 import Link from "next/link";
+import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 
 // Credibility enum values returned by the backend. Rendered via i18n
 // so users see localized labels instead of snake_case identifiers.
@@ -38,6 +40,7 @@ function credibilityLabel(t: (k: string) => string, value: string): string {
 export default function SourcesPage() {
   const t = useT();
   const toast = useToast();
+  const { confirm, ConfirmRoot } = useConfirm();
   const { data: sources, mutate, isLoading } = useSources();
   const { data: credibility, mutate: mutateCred } = useCredibility();
 
@@ -73,7 +76,14 @@ export default function SourcesPage() {
   }
 
   async function handleDelete(id: string, title: string) {
-    if (!confirm(t("sources.deleteConfirm", { title }))) return;
+    const ok = await confirm({
+      title: t("common.delete"),
+      description: t("sources.deleteConfirm", { title }),
+      confirmLabel: t("common.delete"),
+      cancelLabel: t("common.cancel"),
+      variant: "danger",
+    });
+    if (!ok) return;
     setDeletingId(id);
     try {
       await api.deleteSource(id);
@@ -97,7 +107,10 @@ export default function SourcesPage() {
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">{t("sources.title")}</h1>
+        <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+          <SidebarToggleButton />
+          {t("sources.title")}
+        </h1>
         <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">{t("sources.subtitle")}</p>
       </header>
 
@@ -196,6 +209,7 @@ export default function SourcesPage() {
           </div>
         </CardContent>
       </Card>
+      {ConfirmRoot}
     </div>
   );
 }

@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Network, Layers } from "lucide-react";
 import { useT } from "@/lib/i18n/provider";
+import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 
 export default function GraphPage() {
   const t = useT();
@@ -28,6 +29,7 @@ export default function GraphPage() {
       <header className="flex items-end justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold text-zinc-100 flex items-center gap-2">
+            <SidebarToggleButton />
             <Network className="h-6 w-6 text-brand-400" />
             {t("graph.title")}
           </h1>
@@ -83,6 +85,12 @@ export default function GraphPage() {
         <CardContent>
           <div className="h-[70vh] rounded-lg overflow-hidden border border-white/5 bg-surface-2/40">
             {isLoading && <div className="text-xs text-zinc-500 p-4">{t("common.loading")}</div>}
+            {!isLoading && !graph && (
+              <div className="h-full flex flex-col items-center justify-center gap-2 text-sm text-zinc-500">
+                <Network className="h-8 w-8 opacity-40" />
+                <p>{selectedGoal ? t("graph.noData") : t("graph.selectGoalHint")}</p>
+              </div>
+            )}
             {graph && (
               <KnowledgeGraph nodes={graph.nodes as any[]} edges={graph.edges as any[]} />
             )}

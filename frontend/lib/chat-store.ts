@@ -86,9 +86,53 @@ export interface Conversation {
 
 // ---------- Constants ----------
 
-const CONVERSATIONS_KEY = "lifetree.chat.conversations.v2";
-const ACTIVE_KEY = "lifetree.chat.activeId.v2";
+/**
+ * Conversation storage is namespaced by user id so that multiple users
+ * sharing the same browser don't see each other's chats.
+ *
+ *   lifetree.chat.conversations.v2.<userId>
+ *   lifetree.chat.activeId.v2.<userId>
+ *
+ * When no user is logged in (single-user mode / default-user fallback),
+ * the scope falls back to ``"default"``. The legacy unscoped keys
+ * (``lifetree.chat.conversations.v2``) are migrated to the ``default``
+ * scope on first load so existing single-user deployments keep their
+ * chat history.
+ */
+const LEGACY_CONVERSATIONS_KEY = "lifetree.chat.conversations.v2";
+const LEGACY_ACTIVE_KEY = "lifetree.chat.activeId.v2";
+const STORAGE_PREFIX = "lifetree.chat";
+const DEFAULT_SCOPE = "default";
 const TITLE_GEN_THRESHOLD = 1; // generate title after first user-assistant pair
+
+/** Current user scope. ``null`` → ``"default"`` (single-user / not logged in). */
+let currentScope: string = DEFAULT_SCOPE;
+
+function conversationsKey(scope: string = currentScope): string {
+  return `${STORAGE_PREFIX}.conversations.v2.${scope}`;
+}
+
+function activeKey(scope: string = currentScope): string {
+  return `${STORAGE_PREFIX}.activeId.v2.${scope}`;
+}
+
+/**
+ * Switch the active user scope. Saves the current state to the old
+ * scope's keys, loads from the new scope's keys, and emits so React
+ * components re-render with the new user's conversations.
+ *
+ * Safe to call with the same scope repeatedly (no-op).
+ */
+export function setChatUserScope(userId: string | null): void {
+  const next = userId || DEFAULT_SCOPE;
+  if (next === currentScope) return;
+  // Persist current state under the OLD scope before switching.
+  persist();
+  currentScope = next;
+  // Load from the NEW scope.
+  state = load();
+  emit();
+}
 
 // ---------- Utility ----------
 
@@ -173,17 +217,34 @@ function emit() {
 }
 
 function persist() {
-  safeWriteJSON(CONVERSATIONS_KEY, state.conversations);
+  safeWriteJSON(conversationsKey(), state.conversations);
   if (state.activeId) {
-    safeWriteJSON(ACTIVE_KEY, state.activeId);
+    safeWriteJSON(activeKey(), state.activeId);
   } else if (typeof window !== "undefined") {
-    window.localStorage.removeItem(ACTIVE_KEY);
+    window.localStorage.removeItem(activeKey());
   }
 }
 
 function load(): StoreState {
-  const conversations = safeReadJSON<Conversation[]>(CONVERSATIONS_KEY, []);
-  const activeId = safeReadJSON<string | null>(ACTIVE_KEY, null);
+  // One-time migration: if the scoped keys don't exist yet but the
+  // legacy unscoped keys do, copy them over so existing single-user
+  // deployments keep their chat history.
+  if (typeof window !== "undefined" && currentScope === DEFAULT_SCOPE) {
+    const scopedConv = window.localStorage.getItem(conversationsKey());
+    if (scopedConv === null) {
+      const legacyConv = window.localStorage.getItem(LEGACY_CONVERSATIONS_KEY);
+      const legacyActive = window.localStorage.getItem(LEGACY_ACTIVE_KEY);
+      if (legacyConv !== null) {
+        window.localStorage.setItem(conversationsKey(), legacyConv);
+        if (legacyActive !== null) {
+          window.localStorage.setItem(activeKey(), legacyActive);
+        }
+      }
+    }
+  }
+
+  const conversations = safeReadJSON<Conversation[]>(conversationsKey(), []);
+  const activeId = safeReadJSON<string | null>(activeKey(), null);
   // Drop any half-finished streaming messages from a previous session.
   for (const c of conversations) {
     for (const m of c.messages) {

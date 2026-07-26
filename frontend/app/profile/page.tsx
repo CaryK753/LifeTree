@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useUserProfile, useGoals, useMemories } from "@/lib/hooks";
+import { useUserProfile, useGoals, useMemories, useAuth } from "@/lib/hooks";
 import {
   api,
   type RiskTolerance,
@@ -24,6 +24,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogClose,
+} from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import {
   User as UserIcon,
@@ -40,9 +50,14 @@ import {
   Pencil,
   Check,
   X,
+  KeyRound,
+  Crown,
+  Bell,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
+import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 
 // Demographic keys we surface as typed fields (per project plan §4.4).
 const DEMO_FIELDS: { key: string; labelKey: string; placeholderKey: string }[] = [
@@ -93,7 +108,9 @@ export default function ProfilePage() {
   const t = useT();
   const { data: profile, mutate, isLoading } = useUserProfile();
   const { data: goals } = useGoals();
+  const { user: authUser } = useAuth();
   const toast = useToast();
+  const { confirm, ConfirmRoot } = useConfirm();
 
   const [form, setForm] = useState<{
     display_name: string;
@@ -103,6 +120,9 @@ export default function ProfilePage() {
     priority_factors: Record<string, boolean>;
     risk_tolerance: RiskTolerance;
     primary_goal_id: string;
+    notify_channels: Record<string, boolean>;
+    quiet_hours_start: string;
+    quiet_hours_end: string;
   }>({
     display_name: "",
     email: "",
@@ -111,6 +131,9 @@ export default function ProfilePage() {
     priority_factors: {},
     risk_tolerance: "medium",
     primary_goal_id: "",
+    notify_channels: { email: true, in_app: true },
+    quiet_hours_start: "",
+    quiet_hours_end: "",
   });
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
@@ -126,6 +149,8 @@ export default function ProfilePage() {
       demo[f.key] = v == null ? "" : String(v);
     }
     const pf = profile.priority_factors ?? {};
+    const nc = profile.notify_channels ?? {};
+    const qh = (profile.quiet_hours ?? {}) as { start?: string; end?: string };
     setForm({
       display_name: profile.display_name ?? "",
       email: profile.email ?? "",
@@ -139,6 +164,13 @@ export default function ProfilePage() {
           : {},
       risk_tolerance: profile.risk_tolerance ?? "medium",
       primary_goal_id: profile.primary_goal_id ?? "",
+      notify_channels: {
+        email: nc.email !== false,
+        in_app: nc.in_app !== false,
+        sms: !!nc.sms,
+      },
+      quiet_hours_start: qh.start ?? "",
+      quiet_hours_end: qh.end ?? "",
     });
     setDirty(false);
   }, [profile]);
@@ -162,6 +194,17 @@ export default function ProfilePage() {
       priority_factors: {
         ...prev.priority_factors,
         [value]: !prev.priority_factors[value],
+      },
+    }));
+    setDirty(true);
+  }
+
+  function toggleChannel(key: "email" | "in_app" | "sms") {
+    setForm((prev) => ({
+      ...prev,
+      notify_channels: {
+        ...prev.notify_channels,
+        [key]: !prev.notify_channels[key],
       },
     }));
     setDirty(true);
@@ -241,6 +284,12 @@ export default function ProfilePage() {
       for (const [k, v] of Object.entries(form.priority_factors)) {
         if (v) priority_factors[k] = true;
       }
+      // Build quiet_hours payload: only set if both endpoints are filled.
+      const quiet_hours: Record<string, string> = {};
+      if (form.quiet_hours_start && form.quiet_hours_end) {
+        quiet_hours.start = form.quiet_hours_start;
+        quiet_hours.end = form.quiet_hours_end;
+      }
       const next = await api.updateUser(profile.id, {
         display_name: form.display_name.trim() || profile.display_name,
         email: form.email.trim() || null,
@@ -248,6 +297,8 @@ export default function ProfilePage() {
         priority_factors,
         risk_tolerance: form.risk_tolerance,
         primary_goal_id: form.primary_goal_id || null,
+        notify_channels: form.notify_channels,
+        quiet_hours,
       });
       mutate(next, { revalidate: false });
       toast({ title: t("profile.toast.saved"), variant: "success" });
@@ -260,6 +311,41 @@ export default function ProfilePage() {
       });
     } finally {
       setSaving(false);
+    }
+  }
+
+  /**
+   * One-click data destruction — calls DELETE /users/me/destroy which
+   * cascades to all user-scoped rows (goals, scenarios, memories, uploads,
+   * notifications, risk assessments). Requires a typed confirmation
+   * matching the locale-specific confirmText, then logs out and reloads.
+   *
+   * Blocked by the backend for the default user (single-user mode) and
+   * for the last remaining admin — both surface as 400 errors.
+   */
+  const [destroyOpen, setDestroyOpen] = useState(false);
+  const [destroyTyped, setDestroyTyped] = useState("");
+  const [destroying, setDestroying] = useState(false);
+
+  async function handleDestroy() {
+    if (!profile) return;
+    setDestroying(true);
+    try {
+      await api.destroyMyAccount();
+      toast({ title: t("profile.destroy.success"), variant: "success" });
+      // Clear tokens + force reload → AuthGate shows login dialog.
+      const { clearTokens } = await import("@/lib/api");
+      clearTokens();
+      window.location.href = "/";
+    } catch (e: any) {
+      const detail = (e as { details?: { detail?: string } })?.details?.detail;
+      toast({
+        title: t("profile.destroy.failed"),
+        description: detail ?? e?.message,
+        variant: "error",
+      });
+    } finally {
+      setDestroying(false);
     }
   }
 
@@ -279,6 +365,7 @@ export default function ProfilePage() {
       <header className="flex items-end justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold text-zinc-100 flex items-center gap-2">
+            <SidebarToggleButton />
             <UserIcon className="h-6 w-6 text-brand-600 dark:text-brand-400" />
             {t("profile.title")}
           </h1>
@@ -289,6 +376,74 @@ export default function ProfilePage() {
           {t("profile.save")}
         </Button>
       </header>
+
+      {/* ---------- 账户信息（用户 ID + 角色）----------
+          用户 ID 用于在 .env 中配置管理员提权；角色展示当前用户的权限。
+          仅在已登录（authUser 存在）时显示。 */}
+      {authUser && (
+        <Card>
+          <CardHeader>
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <KeyRound className="h-4 w-4 text-brand-600 dark:text-brand-400" />
+                {t("profile.section.account")}
+              </CardTitle>
+              <CardDescription className="mt-1">
+                {t("profile.section.accountHint")}
+              </CardDescription>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Field label={t("profile.field.userId")}>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 px-3 py-2 rounded-md bg-black/[0.04] dark:bg-white/[0.04] border border-black/10 dark:border-white/10 text-xs font-mono text-zinc-700 dark:text-zinc-300 break-all select-all">
+                    {authUser.id}
+                  </code>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-9 shrink-0"
+                    onClick={() => {
+                      navigator.clipboard.writeText(authUser.id);
+                      toast({
+                        title: t("profile.userIdCopied"),
+                        variant: "success",
+                      });
+                    }}
+                  >
+                    {t("common.copy")}
+                  </Button>
+                </div>
+              </Field>
+              <Field label={t("profile.field.role")}>
+                <div className="flex items-center gap-2">
+                  {authUser.role === "admin" ? (
+                    <Badge className="border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+                      <Crown className="h-3 w-3 mr-1" />
+                      {t("profile.roleAdmin")}
+                    </Badge>
+                  ) : (
+                    <Badge className="border-brand-500/30 bg-brand-500/10 text-brand-700 dark:text-brand-300">
+                      <UserIcon className="h-3 w-3 mr-1" />
+                      {t("profile.roleUser")}
+                    </Badge>
+                  )}
+                  {!authUser.is_enabled && (
+                    <Badge className="border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300">
+                      {t("profile.accountDisabled")}
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-[10px] text-zinc-500 leading-snug mt-1.5">
+                  {t("profile.field.roleHint")}
+                </p>
+              </Field>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* ---------- 基础属性 ---------- */}
       <Card>
@@ -546,12 +701,187 @@ export default function ProfilePage() {
         </CardContent>
       </Card>
 
+      {/* ---------- 通知偏好 ---------- */}
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Bell className="h-4 w-4 text-brand-600 dark:text-brand-400" />
+              {t("profile.section.notifications")}
+            </CardTitle>
+            <CardDescription className="mt-1">
+              {t("profile.section.notificationsHint")}
+            </CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Field
+            label={t("profile.field.channels")}
+            hint={t("profile.field.channelsHint")}
+          >
+            <div className="flex items-center gap-2 flex-wrap">
+              {(["email", "in_app", "sms"] as const).map((ch) => {
+                const active = !!form.notify_channels[ch];
+                return (
+                  <button
+                    key={ch}
+                    type="button"
+                    onClick={() => toggleChannel(ch)}
+                    className={cn(
+                      "text-xs px-2.5 py-1 rounded-full border transition-colors",
+                      active
+                        ? "border-brand-500/40 bg-brand-500/15 text-brand-700 dark:text-brand-200"
+                        : "border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:border-black/20 dark:hover:border-white/20"
+                    )}
+                  >
+                    {active && <CheckCircle2 className="inline h-3 w-3 mr-1" />}
+                    {t(`profile.channel.${ch}`)}
+                  </button>
+                );
+              })}
+            </div>
+            {form.notify_channels.sms && (
+              <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1.5">
+                {t("profile.channel.smsHint")}
+              </p>
+            )}
+          </Field>
+
+          <Field
+            label={t("profile.field.quietHours")}
+            hint={t("profile.field.quietHoursHint")}
+          >
+            <div className="grid grid-cols-2 gap-3 max-w-xs">
+              <div>
+                <Label className="text-[10px] text-zinc-500 mb-1 block">
+                  {t("profile.field.quietHoursStart")}
+                </Label>
+                <Input
+                  type="time"
+                  value={form.quiet_hours_start}
+                  onChange={(e) => {
+                    setForm((prev) => ({ ...prev, quiet_hours_start: e.target.value }));
+                    setDirty(true);
+                  }}
+                  className="h-9 text-sm"
+                />
+              </div>
+              <div>
+                <Label className="text-[10px] text-zinc-500 mb-1 block">
+                  {t("profile.field.quietHoursEnd")}
+                </Label>
+                <Input
+                  type="time"
+                  value={form.quiet_hours_end}
+                  onChange={(e) => {
+                    setForm((prev) => ({ ...prev, quiet_hours_end: e.target.value }));
+                    setDirty(true);
+                  }}
+                  className="h-9 text-sm"
+                />
+              </div>
+            </div>
+          </Field>
+        </CardContent>
+      </Card>
+
       {/* ---------- 记忆 ---------- */}
       <MemoryBoard />
+
+      {/* ---------- 危险操作 ---------- */}
+      <Card className="border-red-500/30">
+        <CardHeader>
+          <div>
+            <CardTitle className="flex items-center gap-2 text-red-600 dark:text-red-400">
+              <AlertTriangle className="h-4 w-4" />
+              {t("profile.section.danger")}
+            </CardTitle>
+            <CardDescription className="mt-1">
+              {t("profile.section.dangerHint")}
+            </CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                {t("profile.destroy.title")}
+              </div>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
+                {t("profile.destroy.desc")}
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-red-500/40 text-red-600 hover:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/10"
+              onClick={() => {
+                setDestroyTyped("");
+                setDestroyOpen(true);
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5 mr-1" />
+              {t("profile.destroy.button")}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Destroy confirmation dialog — requires typing the locale-specific
+          confirmText to enable the destructive button. */}
+      <Dialog open={destroyOpen} onOpenChange={(o) => !destroying && setDestroyOpen(o)}>
+        <DialogContent className="max-w-md" hideClose>
+          <DialogHeader>
+            <DialogTitle className="text-red-600 dark:text-red-400">
+              {t("profile.destroy.confirmTitle")}
+            </DialogTitle>
+            <DialogDescription className="whitespace-pre-line">
+              {t("profile.destroy.confirmDesc", {
+                confirmText: t("profile.destroy.confirmText"),
+              })}
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            value={destroyTyped}
+            onChange={(e) => setDestroyTyped(e.target.value)}
+            placeholder={t("profile.destroy.confirmPlaceholder")}
+            className="h-9 text-sm"
+            autoFocus
+          />
+          <DialogFooter className="mt-2">
+            <DialogClose
+              className="inline-flex h-8 items-center justify-center rounded-md px-3 text-xs font-medium transition-colors border border-black/10 dark:border-white/10 text-zinc-600 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/5"
+            >
+              {t("common.cancel")}
+            </DialogClose>
+            <button
+              type="button"
+              disabled={
+                destroying ||
+                destroyTyped !== t("profile.destroy.confirmText")
+              }
+              onClick={handleDestroy}
+              className={cn(
+                "inline-flex h-8 items-center justify-center rounded-md px-3 text-xs font-medium transition-colors text-white",
+                "bg-red-600 hover:bg-red-500",
+                "disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-red-600"
+              )}
+            >
+              {destroying ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5 mr-1" />
+              )}
+              {t("profile.destroy.button")}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <p className="text-xs text-zinc-600 pt-2">
         {t("profile.footer")}
       </p>
+      {ConfirmRoot}
     </div>
   );
 }
@@ -566,6 +896,7 @@ function MemoryBoard() {
   const t = useT();
   const { data: memories, mutate, isLoading } = useMemories();
   const toast = useToast();
+  const { confirm, ConfirmRoot } = useConfirm();
 
   const [newContent, setNewContent] = useState("");
   const [newCategory, setNewCategory] = useState<string>("other");
@@ -641,7 +972,14 @@ function MemoryBoard() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm(t("memory.deleteConfirm"))) return;
+    const ok = await confirm({
+      title: t("common.delete"),
+      description: t("memory.deleteConfirm"),
+      confirmLabel: t("common.delete"),
+      cancelLabel: t("common.cancel"),
+      variant: "danger",
+    });
+    if (!ok) return;
     try {
       await api.deleteMemory(id);
       mutate(
@@ -655,6 +993,7 @@ function MemoryBoard() {
   }
 
   return (
+    <>
     <Card>
       <CardHeader>
         <div>
@@ -862,6 +1201,8 @@ function MemoryBoard() {
         )}
       </CardContent>
     </Card>
+    {ConfirmRoot}
+    </>
   );
 }
 

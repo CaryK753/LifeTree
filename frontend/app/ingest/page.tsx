@@ -38,6 +38,7 @@ import {
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
+import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 
 const KIND_VALUES = ["public", "official", "news", "advisor", "user_upload", "other"] as const;
 
@@ -74,6 +75,7 @@ export default function IngestPage() {
   // file mode state
   const [file, setFile] = useState<File | null>(null);
   const [fileTitle, setFileTitle] = useState("");
+  const [legalAck, setLegalAck] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -112,6 +114,14 @@ export default function IngestPage() {
 
   async function handleFileIngest() {
     if (!file) return;
+    if (!legalAck) {
+      toast({
+        title: t("ingest.toast.failed"),
+        description: t("ingest.file.legalAckRequired"),
+        variant: "warning",
+      });
+      return;
+    }
     setBusy(true);
     setResult(null);
     try {
@@ -138,6 +148,7 @@ export default function IngestPage() {
       }
       setFile(null);
       setFileTitle("");
+      setLegalAck(false);
     } catch (e: any) {
       toast({
         title: t("ingest.toast.uploadFailed"),
@@ -165,6 +176,7 @@ export default function IngestPage() {
     <div className="p-4 sm:p-6 lg:p-8 space-y-6 w-full max-w-[1400px] mx-auto animate-fade-in">
       <header>
         <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+          <SidebarToggleButton />
           <Upload className="h-6 w-6 text-brand-600 dark:text-brand-400" />
           {t("ingest.title")}
         </h1>
@@ -370,10 +382,27 @@ export default function IngestPage() {
               />
             </div>
 
+            {/* Legal disclaimer — required for private uploads. Per project
+                plan §4.7: "上传流程强制确认" the user must acknowledge that
+                uploaded private info is unverified and they bear the risk
+                of acting on it. The submit button stays disabled until
+                this is checked. */}
+            <label className="flex items-start gap-2 text-xs text-zinc-600 dark:text-zinc-300 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 cursor-pointer hover:bg-amber-500/10 transition-colors">
+              <input
+                type="checkbox"
+                checked={legalAck}
+                onChange={(e) => setLegalAck(e.target.checked)}
+                className="mt-0.5 accent-amber-500 shrink-0"
+              />
+              <span className="leading-relaxed">
+                {t("ingest.file.legalDisclaimer")}
+              </span>
+            </label>
+
             <div className="flex justify-end">
               <Button
                 onClick={handleFileIngest}
-                disabled={busy || !file}
+                disabled={busy || !file || !legalAck}
               >
                 {busy ? (
                   <>

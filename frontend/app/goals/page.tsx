@@ -30,6 +30,7 @@ import { Badge } from "@/components/ui/badge";
 import { Compass, Plus, ArrowRight, Calendar, Tag, Search, FilterX, Loader2 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
+import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 
 const SCENARIO_VALUES = ["fsw", "uk-study", "job-switch", "house", "generic"] as const;
 
@@ -111,6 +112,7 @@ export default function GoalsPage() {
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+            <SidebarToggleButton />
             <Compass className="h-6 w-6 text-brand-600 dark:text-brand-400" />
             {t("goals.title")}
           </h1>

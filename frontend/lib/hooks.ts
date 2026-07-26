@@ -6,10 +6,17 @@ import useSWR from "swr";
 import {
   api,
   swrConfig,
+  clearTokens,
+  getAccessToken,
+  setTokens,
+  type AdminStats,
+  type AdminUserRead,
   type NotificationChannel,
   type NotificationSeverity,
   type NotificationStatus,
   type NotificationRead,
+  type PublicAuthConfig,
+  type RegisterWithCodeRequest,
   type UserProfileRead,
 } from "./api";
 
@@ -22,7 +29,11 @@ export function useGoal(goalId?: string) {
 }
 
 export function useDashboard(goalId?: string) {
-  return useSWR(goalId ? ["dashboard", goalId] : null, () => api.getDashboard(goalId!), swrConfig);
+  return useSWR(
+    goalId ? ["dashboard", goalId] : null,
+    () => (goalId ? api.getDashboard(goalId) : null),
+    swrConfig
+  );
 }
 
 export function usePathways(goalId?: string) {
@@ -60,7 +71,7 @@ export function useScenarios(goalId?: string) {
 export function useGraph(goalId?: string, scenarioId?: string) {
   return useSWR(
     goalId ? ["graph", goalId, scenarioId] : null,
-    () => api.getGraph(goalId!, scenarioId),
+    () => (goalId ? api.getGraph(goalId, scenarioId) : null),
     swrConfig
   );
 }
@@ -116,17 +127,131 @@ export function usePlugins() {
 }
 
 export function useUserProfile(id?: string) {
-  // Use the first user (single-user app). When id is provided, fetch that one.
+  // In multi-user mode, non-admins get only their own profile from
+  // ``GET /users`` (the backend restricts the list). We prefer
+  // ``GET /auth/me`` for the current user's profile — it's cheaper
+  // and doesn't require admin privileges. The ``id`` param (used by
+  // the profile page to view a specific user) falls back to ``listUsers``
+  // so admins can still view other users.
   return useSWR<UserProfileRead>(
-    "user-profile",
+    id ? ["user-profile", id] : "user-profile",
     async () => {
-      const list = await api.listUsers();
-      const users = list as UserProfileRead[];
-      if (users.length === 0) throw new Error("No user created yet");
-      return id ? users.find((u) => u.id === id) ?? users[0] : users[0];
+      if (id) {
+        const list = await api.listUsers();
+        const users = list as UserProfileRead[];
+        return users.find((u) => u.id === id) ?? users[0];
+      }
+      return api.getMe();
     },
     swrConfig
   );
+}
+
+// ---------- Auth ----------
+
+/**
+ * useAuth: current user state + login/register/logout actions.
+ *
+ * The hook reads the current access token from localStorage and fetches
+ * ``GET /auth/me`` via SWR. When no token is present, ``user`` is null
+ * and the consumer should show the LoginDialog.
+ *
+ * The token is refreshed automatically by the ``request()`` helper in
+ * lib/api.ts when an API call returns 401.
+ */
+export function useAuth() {
+  const hasToken = typeof window !== "undefined" && !!getAccessToken();
+  const {
+    data: user,
+    error,
+    isLoading,
+    mutate,
+  } = useSWR<UserProfileRead>(
+    hasToken ? "auth-me" : null,
+    () => api.getMe(),
+    { ...swrConfig, shouldRetryOnError: false }
+  );
+
+  async function login(email: string, password: string) {
+    const res = await api.login({ email, password });
+    setTokens(res.access_token, res.refresh_token);
+    await mutate(res.user, { revalidate: false });
+    return res.user;
+  }
+
+  async function register(displayName: string, email: string, password: string) {
+    const res = await api.register({
+      display_name: displayName,
+      email,
+      password,
+    });
+    setTokens(res.access_token, res.refresh_token);
+    await mutate(res.user, { revalidate: false });
+    return res.user;
+  }
+
+  async function registerWithCode(body: RegisterWithCodeRequest) {
+    const res = await api.registerWithCode(body);
+    setTokens(res.access_token, res.refresh_token);
+    await mutate(res.user, { revalidate: false });
+    return res.user;
+  }
+
+  /** Complete OAuth login by exchanging the provider's code for our JWT pair. */
+  async function loginWithOAuth(
+    providerId: string,
+    code: string,
+    state?: string
+  ) {
+    const res = await api.oauthCallback(providerId, code, state);
+    setTokens(res.access_token, res.refresh_token);
+    await mutate(res.user, { revalidate: false });
+    return res.user;
+  }
+
+  async function logout() {
+    clearTokens();
+    await mutate(null, { revalidate: false });
+  }
+
+  return {
+    user,
+    error,
+    isLoading: hasToken && isLoading,
+    isAuthenticated: !!user,
+    isAdmin: user?.role === "admin",
+    login,
+    register,
+    registerWithCode,
+    loginWithOAuth,
+    logout,
+    refresh: () => mutate(),
+  };
+}
+
+/**
+ * useAuthConfig: public auth config for the login dialog.
+ *
+ * Returns OAuth provider list (id + name only) and the email-verification
+ * flag. Safe to call unauthenticated — the underlying ``GET /auth/config``
+ * endpoint returns no secrets.
+ */
+export function useAuthConfig() {
+  return useSWR<PublicAuthConfig>(
+    "auth-config",
+    () => api.getAuthConfig(),
+    { ...swrConfig, shouldRetryOnError: false }
+  );
+}
+
+// ---------- Admin ----------
+
+export function useAdminStats() {
+  return useSWR<AdminStats>("admin-stats", () => api.adminStats(), swrConfig);
+}
+
+export function useAdminUsers() {
+  return useSWR<AdminUserRead[]>("admin-users", () => api.adminListUsers(), swrConfig);
 }
 
 export function useMemories(category?: string) {

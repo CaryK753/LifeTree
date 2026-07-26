@@ -207,12 +207,34 @@ input[type="range"]:focus {
 .safe-left   { padding-left:   env(safe-area-inset-left); }
 .safe-right  { padding-right:  env(safe-area-inset-right); }
 
-/* When running as a standalone PWA, allow content to extend under the
-   status bar / home indicator but keep interactive elements clear. */
-@media (display-mode: standalone) {
+/* When running as an installed PWA (any non-browser display mode),
+   allow content to extend under the status bar / home indicator but
+   keep interactive elements clear. Also hide the persistent sidebar
+   rail — in PWA mode the sidebar is a slide-in drawer toggled by the
+   per-page ``SidebarToggleButton``. */
+@media (display-mode: standalone), (display-mode: minimal-ui), (display-mode: window-controls-overlay), (display-mode: fullscreen) {
   .safe-top    { padding-top:    max(env(safe-area-inset-top), 0.5rem); }
   .safe-bottom { padding-bottom: max(env(safe-area-inset-bottom), 0.5rem); }
+  .sidebar-rail { display: none !important; }
 }
+
+/* Narrow viewport (below Tailwind ``lg`` = 1024px): also use drawer mode.
+   Same effect as PWA — hide the rail, show a toggle button in each
+   page heading. The JS hook ``useSidebarDrawerMode`` handles the React
+   side; this CSS rule is a pre-hydration fallback so the rail doesn't
+   flash before React switches to the drawer branch. */
+@media (max-width: 1023px) {
+  .sidebar-rail { display: none !important; }
+}
+
+/* JS-set ``.pwa`` / ``.drawer-mode`` classes on <html>: covers iOS PWA
+   (``navigator.standalone``) and the narrow-viewport case before React
+   hydrates. Set by the inline script in ``layout.tsx`` and by
+   ``useIsPwa`` / ``useSidebarDrawerMode`` hooks. */
+html.pwa .safe-top   { padding-top: max(env(safe-area-inset-top), 0.5rem); }
+html.pwa .safe-bottom { padding-bottom: max(env(safe-area-inset-bottom), 0.5rem); }
+html.pwa .sidebar-rail { display: none !important; }
+html.drawer-mode .sidebar-rail { display: none !important; }
 
 /* Fade-in animation used by page roots for a soft PWA-like transition. */
 @keyframes lifetree-fade-in {

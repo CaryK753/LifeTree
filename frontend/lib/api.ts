@@ -24,6 +24,45 @@ export const API_PREFIX = "/api/v1";
 export const STREAM_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "";
 
+// ---------- Auth token storage ----------
+//
+// Tokens are persisted to localStorage and attached to every API request
+// as a Bearer header. The auth module (lib/auth.ts) owns these accessors
+// and refreshes the access token automatically when it expires.
+//
+// Why localStorage (not cookies):
+//   - LifeTree is a SPA-style Next.js app; localStorage integrates cleanly
+//     with fetch + SWR without CSRF concerns.
+//   - Cross-tab sync is handled via a custom event (see lib/auth.ts).
+
+export const ACCESS_TOKEN_KEY = "lifetree.access_token";
+export const REFRESH_TOKEN_KEY = "lifetree.refresh_token";
+
+export function getAccessToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(ACCESS_TOKEN_KEY);
+}
+
+export function getRefreshToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(REFRESH_TOKEN_KEY);
+}
+
+export function setTokens(access: string, refresh: string) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(ACCESS_TOKEN_KEY, access);
+  window.localStorage.setItem(REFRESH_TOKEN_KEY, refresh);
+  // Notify other tabs/tabs that auth changed.
+  window.dispatchEvent(new Event("lifetree:auth-changed"));
+}
+
+export function clearTokens() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(ACCESS_TOKEN_KEY);
+  window.localStorage.removeItem(REFRESH_TOKEN_KEY);
+  window.dispatchEvent(new Event("lifetree:auth-changed"));
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string, public details?: unknown) {
     super(message);
@@ -35,13 +74,41 @@ async function request<T>(
   path: string,
   init?: RequestInit & { skipJson?: boolean }
 ): Promise<T> {
+  // Attach Bearer token to every request when available.
+  const token = getAccessToken();
+  const authHeaders: Record<string, string> = token
+    ? { Authorization: `Bearer ${token}` }
+    : {};
+
+  // FormData: the browser must set Content-Type itself (with the
+  // multipart boundary). Forcing ``application/json`` here would make
+  // the backend try to parse the body as JSON and fail. Detect FormData
+  // and skip the default Content-Type so uploads work correctly.
+  const isFormData = init?.body instanceof FormData;
+
   const res = await fetch(`${API_PREFIX}${path}`, {
     ...init,
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
+      ...authHeaders,
       ...(init?.headers || {}),
     },
   });
+
+  // 401 → attempt a single token refresh, then retry once.
+  if (res.status === 401 && token && !init?.headers?.["X-Retry"]) {
+    const refreshed = await tryRefreshAccessToken();
+    if (refreshed) {
+      return request<T>(path, {
+        ...init,
+        headers: {
+          ...(init?.headers || {}),
+          "X-Retry": "1",
+        },
+      });
+    }
+  }
+
   if (!res.ok) {
     let details: unknown;
     try {
@@ -55,9 +122,93 @@ async function request<T>(
   return res.json() as Promise<T>;
 }
 
+// ---------- Token refresh (singleton, deduped) ----------
+//
+// When multiple in-flight requests get 401 simultaneously, we only want
+// to hit /auth/refresh once. The pending-promise pattern below dedupes.
+
+let refreshPromise: Promise<boolean> | null = null;
+
+async function tryRefreshAccessToken(): Promise<boolean> {
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    const refresh = getRefreshToken();
+    if (!refresh) return false;
+    try {
+      const res = await fetch(`${API_PREFIX}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refresh }),
+      });
+      if (!res.ok) {
+        clearTokens();
+        return false;
+      }
+      const data = await res.json();
+      setTokens(data.access_token, data.refresh_token);
+      return true;
+    } catch {
+      clearTokens();
+      return false;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+  return refreshPromise;
+}
+
 // ---------- Domain fetchers ----------
 
 export const api = {
+  // Auth
+  login: (body: { email: string; password: string }) =>
+    request<AuthTokenResponse>(`/auth/login`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  register: (body: { display_name: string; email: string; password: string }) =>
+    request<AuthTokenResponse>(`/auth/register`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getMe: () => request<UserProfileRead>(`/auth/me`),
+  logout: () => clearTokens(),
+
+  // Auth config + OAuth + email verification
+  getAuthConfig: () => request<PublicAuthConfig>(`/auth/config`),
+  sendCode: (email: string) =>
+    request<SendCodeResponse>(`/auth/send-code`, {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+  registerWithCode: (body: RegisterWithCodeRequest) =>
+    request<AuthTokenResponse>(`/auth/register-with-code`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  oauthStart: (providerId: string) =>
+    request<OAuthStartResponse>(
+      `/auth/oauth/${encodeURIComponent(providerId)}/start`
+    ),
+  oauthCallback: (providerId: string, code: string, state?: string) => {
+    const qs = new URLSearchParams({ code });
+    if (state) qs.set("state", state);
+    return request<AuthTokenResponse>(
+      `/auth/oauth/${encodeURIComponent(providerId)}/callback?${qs.toString()}`
+    );
+  },
+
+  // Admin
+  adminListUsers: () => request<AdminUserRead[]>(`/admin/users`),
+  adminUpdateUser: (id: string, body: AdminUserUpdate) =>
+    request<AdminUserRead>(`/admin/users/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  adminDeleteUser: (id: string) =>
+    request<void>(`/admin/users/${id}`, { method: "DELETE", skipJson: true }),
+  adminStats: () => request<AdminStats>(`/admin/stats`),
+
   // Users
   listUsers: () => request<unknown[]>(`/users`),
   getUser: (id: string) => request<unknown>(`/users/${id}`),
@@ -67,6 +218,11 @@ export const api = {
     request<UserProfileRead>(`/users/${id}`, {
       method: "PATCH",
       body: JSON.stringify(body),
+    }),
+  destroyMyAccount: () =>
+    request<void>(`/users/me/destroy`, {
+      method: "DELETE",
+      skipJson: true,
     }),
 
   // Memories (unbounded "remember this" channel)
@@ -145,6 +301,8 @@ export const api = {
         body: JSON.stringify(assumptions),
       }
     ),
+  mergeScenario: (id: string) =>
+    request<unknown>(`/scenarios/${id}/merge`, { method: "POST" }),
   runScenario: (id: string) =>
     request<unknown>(`/scenarios/${id}/run`, { method: "POST" }),
 
@@ -198,16 +356,14 @@ export const api = {
     for (const [k, v] of Object.entries(fields)) {
       if (v !== undefined && v !== null) fd.append(k, v);
     }
-    return fetch(`${API_PREFIX}/ingest/upload`, { method: "POST", body: fd }).then(
-      async (r) => {
-        if (!r.ok) {
-          let details: unknown;
-          try { details = await r.json(); } catch { details = undefined; }
-          throw new ApiError(r.status, `Upload failed (${r.status})`, details);
-        }
-        return r.json();
-      }
-    );
+    // Use ``request`` (not raw fetch) so the Authorization header is
+    // attached and 401 token-refresh retry kicks in. Previously this
+    // used a bare ``fetch`` with no auth, causing the backend to reject
+    // uploads with 500 (auth failure surfaced as a server error).
+    return request<IngestUploadResponse>(`/ingest/upload`, {
+      method: "POST",
+      body: fd,
+    });
   },
 
   // Plugins
@@ -218,6 +374,34 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  uploadPlugin: (file: File, overwrite?: boolean) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    if (overwrite) fd.append("overwrite", "true");
+    return fetch(`${API_PREFIX}/plugins/upload`, {
+      method: "POST",
+      body: fd,
+    }).then(async (r) => {
+      if (!r.ok) {
+        let details: unknown;
+        try { details = await r.json(); } catch { details = undefined; }
+        throw new ApiError(r.status, `Upload failed (${r.status})`, details);
+      }
+      return r.json() as Promise<PluginUploadResponse>;
+    });
+  },
+  deletePlugin: (id: string) =>
+    request<{ ok: boolean; plugin_id: string }>(`/plugins/${id}`, {
+      method: "DELETE",
+    }),
+  togglePlugin: (id: string, enabled: boolean) =>
+    request<{ ok: boolean; plugin_id: string; enabled: boolean }>(
+      `/plugins/${id}/enabled`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ enabled }),
+      }
+    ),
 
   // Crawler (Tavily search / extract / crawl)
   crawlerSearch: (q: string, opts?: { max_results?: number; topic?: string; region?: string; days?: number }) =>
@@ -302,6 +486,12 @@ export const api = {
     request<LLMConfigView>(`/settings/smtp`, {
       method: "PUT",
       body: JSON.stringify(body),
+    }),
+
+  setUseMode: (mode: "single" | "multi") =>
+    request<{ mode: "single" | "multi" }>(`/settings/use-mode`, {
+      method: "PUT",
+      body: JSON.stringify({ mode }),
     }),
 
   testRole: (role: Role) =>
@@ -393,7 +583,7 @@ export interface LifecycleEvent {
 
 // ---------- Settings types ----------
 
-export type Protocol = "openai_compatible" | "anthropic" | "bailian";
+export type Protocol = "openai_compatible" | "anthropic" | "bailian" | "bailian_rerank";
 export type Role = "chat" | "vision" | "embedding" | "rerank";
 export const ALL_ROLES: Role[] = ["chat", "vision", "embedding", "rerank"];
 
@@ -441,6 +631,8 @@ export interface UserProfileRead {
   preferred_pathway_id: string | null;
   progress: Record<string, unknown>;
   implicit_tags: Record<string, unknown>;
+  role: "admin" | "user";
+  is_enabled: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -456,6 +648,65 @@ export interface UserProfileUpdate {
   quiet_hours?: Record<string, unknown> | null;
   primary_goal_id?: string | null;
   preferred_pathway_id?: string | null;
+}
+
+// ---------- Auth / admin types ----------
+
+export interface AuthTokenResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: "bearer";
+  user: UserProfileRead;
+}
+
+export interface AdminUserRead extends UserProfileRead {
+  has_password: boolean;
+}
+
+export interface AdminUserUpdate {
+  display_name?: string;
+  role?: "admin" | "user";
+  is_enabled?: boolean;
+  new_password?: string;
+}
+
+export interface AdminStats {
+  total_users: number;
+  enabled_users: number;
+  admin_users: number;
+  disabled_users: number;
+}
+
+// ---------- Public auth config (login dialog) ----------
+
+export interface OAuthProviderPublic {
+  id: string;
+  name: string;
+}
+
+export interface PublicAuthConfig {
+  oauth_providers: OAuthProviderPublic[];
+  email_verification_enabled: boolean;
+  multi_user_mode: boolean;
+  use_mode: "single" | "multi";
+}
+
+export interface SendCodeResponse {
+  ok: boolean;
+  error?: string | null;
+  expires_in: number;
+}
+
+export interface RegisterWithCodeRequest {
+  display_name: string;
+  email: string;
+  code: string;
+  password?: string;
+}
+
+export interface OAuthStartResponse {
+  authorize_url: string;
+  state: string;
 }
 
 // ---------- User memory types ----------
@@ -743,6 +994,11 @@ export interface PluginManifest {
   author: string;
   params: PluginParam[];
   tags: string[];
+  // Plugin upload extension (optional — builtins don't set these)
+  source?: "builtin" | "user";
+  enabled?: boolean;
+  can_delete?: boolean;
+  uploaded_at?: string;
 }
 
 export interface PluginRunResult {
@@ -756,6 +1012,27 @@ export interface PluginRunResult {
   notifications_triggered: number;
   error: string | null;
   warning: string | null;
+}
+
+export interface IngestUploadResponse {
+  source_id: string;
+  events_created: number;
+  metrics_created: number;
+  assertions_created: number;
+  relationships_created: number;
+  extraction_confidence: number | null;
+  notifications_triggered: number;
+  // Backends may include extra fields (e.g. parser warnings); allow them.
+  [key: string]: unknown;
+}
+
+export interface PluginUploadResponse {
+  ok: boolean;
+  plugin_id: string | null;
+  manifest: Omit<PluginManifest, "source" | "enabled" | "can_delete" | "uploaded_at"> | null;
+  source: "user";
+  warnings: string[];
+  error: string | null;
 }
 
 // ---------- System components (docker services) ----------

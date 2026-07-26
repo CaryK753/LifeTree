@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import LLMNotConfiguredError
 from app.core.logging import get_logger
-from app.core.tenant import get_default_user
+from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
 from app.llm.client import get_chat_model
 from app.models.goal import Goal, Pathway, Requirement, RiskFactor
@@ -315,7 +315,7 @@ def _truncate_to_token_budget(
 
 @router.post("/stream")
 async def chat_stream(
-    payload: ChatRequest, db: Session = Depends(get_db)
+    payload: ChatRequest, current_user: CurrentUser, db: Session = Depends(get_db)
 ) -> StreamingResponse:
     """SSE stream of ChatResponseChunk JSON objects.
 
@@ -327,12 +327,25 @@ async def chat_stream(
     # LLMNotConfiguredError (-> 503) if no chat model is assigned.
     get_chat_model()
 
-    user = get_default_user(db) if not payload.user_id else db.get(UserProfile, payload.user_id)
-    if user is None:
-        raise HTTPException(404, "User not found")
+    # Use the authenticated user, ignoring any client-supplied user_id to
+    # prevent cross-user memory/profile exfiltration. In single-user mode
+    # CurrentUser falls back to the default user, so behavior is unchanged.
+    user = current_user
 
     goal = db.get(Goal, payload.goal_id) if payload.goal_id else None
+    # Verify goal ownership (admin can read any goal).
+    if goal is not None and goal.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "You do not have access to this goal")
+
     scenario = db.get(Scenario, payload.scenario_id) if payload.scenario_id else None
+    # Verify scenario ownership via its parent goal.
+    if scenario is not None:
+        scenario_goal = db.get(Goal, scenario.goal_id)
+        if scenario_goal is None or (
+            scenario_goal.user_id != user.id and user.role != "admin"
+        ):
+            raise HTTPException(403, "You do not have access to this scenario")
+
     context_block = _build_context_block(db, user, goal, scenario)
 
     # Build per-request tools + graph. The tools close over `db` so the agent

@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
@@ -197,10 +197,23 @@ class DecayService:
         self,
         status: str | None = None,
         limit: int = 200,
+        user_id: str | None = None,
+        include_global: bool = True,
     ) -> list[tuple[Event, DecayScore]]:
-        """Return events with their decay scores, optionally filtered by status."""
+        """Return events with their decay scores, optionally filtered by status.
+
+        When ``user_id`` is set, only events owned by that user (and legacy
+        NULL-user events when ``include_global`` is True) are returned.
+        """
         now = datetime.now(timezone.utc)
         stmt = select(Event).order_by(Event.created_at.desc()).limit(limit)
+        if user_id is not None:
+            if include_global:
+                stmt = stmt.where(
+                    or_(Event.user_id == user_id, Event.user_id.is_(None))
+                )
+            else:
+                stmt = stmt.where(Event.user_id == user_id)
         events = list(self.db.scalars(stmt))
         out: list[tuple[Event, DecayScore]] = []
         for ev in events:
@@ -209,9 +222,19 @@ class DecayService:
                 out.append((ev, sc))
         return out
 
-    def distribution(self) -> DecayDistribution:
+    def distribution(
+        self, user_id: str | None = None, include_global: bool = True
+    ) -> DecayDistribution:
         now = datetime.now(timezone.utc)
-        events = list(self.db.scalars(select(Event)))
+        stmt = select(Event)
+        if user_id is not None:
+            if include_global:
+                stmt = stmt.where(
+                    or_(Event.user_id == user_id, Event.user_id.is_(None))
+                )
+            else:
+                stmt = stmt.where(Event.user_id == user_id)
+        events = list(self.db.scalars(stmt))
         fresh = stale = expired = archived = 0
         total_score = 0.0
         for ev in events:

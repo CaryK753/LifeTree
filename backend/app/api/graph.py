@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
 from app.models.event import Event, Relationship
 from app.models.goal import Goal, Pathway, Requirement, RiskFactor
@@ -18,6 +19,7 @@ router = APIRouter(prefix="/graph", tags=["graph"])
 @router.get("/{goal_id}", response_model=GraphSnapshot)
 def get_graph(
     goal_id: str,
+    user: CurrentUser,
     scenario_id: str | None = None,
     limit: int = 200,
     db: Session = Depends(get_db),
@@ -30,10 +32,12 @@ def get_graph(
     nodes: list[GraphNode] = []
     edges: list[GraphEdge] = []
 
-    # Goal
+    # Goal — verify ownership before returning any data.
     goal = db.get(Goal, goal_id)
     if goal is None:
         return GraphSnapshot(nodes=[], edges=[], scenario_id=scenario_id)
+    if goal.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "You do not have access to this goal")
     nodes.append(GraphNode(id=goal.id, type="Goal", label=goal.title, properties={
         "scenario": goal.scenario, "status": goal.status,
         "target_date": str(goal.target_date) if goal.target_date else None,

@@ -1,7 +1,9 @@
 """Plugin runner: discovery + execution.
 
-Discovery scans ``backend/plugins/*.py`` (excluding private ``_*`` files)
-and imports each module to read its ``Plugin.manifest()``. Execution loads
+Discovery scans ``backend/plugins/*.py`` (excluding private ``_*`` files
+and the ``user_uploaded`` subpackage) for builtin plugins, then scans
+``backend/plugins/user_uploaded/*.py`` for user-uploaded plugins. Each
+module is imported to read its ``Plugin.manifest()``. Execution loads
 the plugin, calls ``fetch(params)`` and (optionally) ``transform(raw, llm)``,
 then feeds the resulting text into ``StructuringService`` so the rest of
 the pipeline (LLM extraction → atoms → graph mirror → notifications) is
@@ -12,7 +14,7 @@ Run flows:
     POST /api/v1/plugins/{id}/run
         params: { ... plugin-specific ... , "title": "...", "skip_llm": false }
         →
-        1. load plugin module by id
+        1. load plugin module by id (builtin first, then user_uploaded)
         2. plugin.fetch(params) → raw text/bytes
         3. (optional) plugin.transform(raw, llm) → refined text
         4. StructuringService.ingest_text(text=..., title=...) → source + atoms
@@ -40,32 +42,39 @@ log = get_logger(__name__)
 # ---------- Discovery ----------
 
 _PLUGINS_PACKAGE = "plugins"
+_USER_PLUGINS_PACKAGE = "plugins.user_uploaded"
 
 
-def list_plugins() -> list[PluginManifest]:
-    """Return manifests for every plugin module under ``backend/plugins/``.
+def _scan_package(package_name: str, *, skip: set[str] | None = None) -> list[PluginManifest]:
+    """Import every non-private module under ``package_name`` and collect manifests.
 
     Errors in individual plugins are swallowed (logged) so one broken
     plugin doesn't take down the whole listing.
     """
+    skip = skip or set()
     out: list[PluginManifest] = []
     try:
-        pkg = importlib.import_module(_PLUGINS_PACKAGE)
+        pkg = importlib.import_module(package_name)
     except ImportError:
         return out
 
-    for mod_info in pkgutil.iter_modules(pkg.__path__):
+    pkg_path = getattr(pkg, "__path__", None)
+    if not pkg_path:
+        return out
+
+    for mod_info in pkgutil.iter_modules(pkg_path):
         name = mod_info.name
-        if name.startswith("_"):
+        if name.startswith("_") or name in skip:
             continue
+        full = f"{package_name}.{name}"
         try:
-            module = importlib.import_module(f"{_PLUGINS_PACKAGE}.{name}")
+            module = importlib.import_module(full)
         except Exception as exc:  # noqa: BLE001
-            log.warning("plugins.load_failed", plugin=name, error=str(exc))
+            log.warning("plugins.load_failed", plugin=full, error=str(exc))
             continue
         plugin_cls = getattr(module, "Plugin", None)
         if plugin_cls is None or not hasattr(plugin_cls, "manifest"):
-            log.warning("plugins.missing_contract", plugin=name)
+            log.warning("plugins.missing_contract", plugin=full)
             continue
         try:
             manifest = plugin_cls.manifest()
@@ -74,16 +83,61 @@ def list_plugins() -> list[PluginManifest]:
             manifest.id = name
             out.append(manifest)
         except Exception as exc:  # noqa: BLE001
-            log.warning("plugins.manifest_failed", plugin=name, error=str(exc))
+            log.warning("plugins.manifest_failed", plugin=full, error=str(exc))
+    return out
+
+
+def list_plugins() -> list[PluginManifest]:
+    """Return manifests for every plugin module under ``backend/plugins/``
+    (builtin) and ``backend/plugins/user_uploaded/`` (user-uploaded).
+
+    The user_uploaded subpackage is optional — if it doesn't exist (e.g.
+    first run before any plugin has been uploaded), it's silently skipped.
+
+    Errors in individual plugins are swallowed (logged) so one broken
+    plugin doesn't take down the whole listing.
+    """
+    # Builtin plugins — skip the user_uploaded subpackage explicitly so
+    # we don't double-scan it.
+    out = _scan_package(_PLUGINS_PACKAGE, skip={"user_uploaded"})
+    # User-uploaded plugins
+    out.extend(_scan_package(_USER_PLUGINS_PACKAGE))
     return out
 
 
 def get_plugin(plugin_id: str) -> Any | None:
-    """Import and return the plugin module, or None if missing/broken."""
+    """Import and return the plugin module, or None if missing/broken.
+
+    Tries the builtin package first; on ImportError falls back to the
+    user_uploaded subpackage.
+    """
     try:
         return importlib.import_module(f"{_PLUGINS_PACKAGE}.{plugin_id}")
     except ImportError:
+        try:
+            return importlib.import_module(f"{_USER_PLUGINS_PACKAGE}.{plugin_id}")
+        except ImportError:
+            return None
+    except Exception as exc:  # noqa: BLE001
+        # Module exists but raised during import (e.g. syntax error at runtime).
+        # Log and treat as missing so callers see a 404 instead of a 500.
+        log.warning("plugins.import_failed", plugin=plugin_id, error=str(exc))
         return None
+
+
+def is_user_plugin(plugin_id: str) -> bool:
+    """Return True if ``plugin_id`` resolves to a module under user_uploaded."""
+    try:
+        importlib.import_module(f"{_PLUGINS_PACKAGE}.{plugin_id}")
+        return False
+    except ImportError:
+        try:
+            importlib.import_module(f"{_USER_PLUGINS_PACKAGE}.{plugin_id}")
+            return True
+        except ImportError:
+            return False
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # ---------- Execution ----------
@@ -127,6 +181,22 @@ def run_plugin(
         return out
 
     plugin: Plugin = module.Plugin
+
+    # If this is a user-uploaded plugin, enforce the DB enabled flag.
+    if is_user_plugin(plugin_id):
+        if db is None:
+            from app.db.postgres import SessionLocal
+            check_db = SessionLocal()
+            try:
+                enabled = _user_plugin_enabled(plugin_id, check_db)
+            finally:
+                check_db.close()
+        else:
+            enabled = _user_plugin_enabled(plugin_id, db)
+        if enabled is False:
+            out["error"] = f"插件已禁用: {plugin_id}"
+            return out
+
     try:
         manifest = plugin.manifest()
     except Exception as exc:  # noqa: BLE001
@@ -188,13 +258,31 @@ def run_plugin(
     return _ingest_and_pack(db, text, final_title, skip_llm, out)
 
 
+def _user_plugin_enabled(plugin_id: str, db) -> bool | None:
+    """Look up the enabled flag for a user plugin. Returns None if row missing."""
+    from sqlalchemy import select
+
+    from app.models.user_plugin import UserPlugin
+
+    row = db.scalar(
+        select(UserPlugin).where(
+            UserPlugin.plugin_id == plugin_id,
+            UserPlugin.deleted_at.is_(None),
+        )
+    )
+    if row is None:
+        return None
+    return bool(row.enabled)
+
+
 def _ingest_and_pack(db, text: str, title: str, skip_llm: bool, out: dict) -> dict:
+    from sqlalchemy import select
+
+    from app.models.event import Event
+    from app.models.user import UserProfile
     from app.services.notification import NotificationService
     from app.services.reasoning.risk_propagation import RiskPropagationEngine
     from app.services.structuring import StructuringService
-    from app.models.event import Event
-    from app.models.user import UserProfile
-    from sqlalchemy import select
 
     try:
         service = StructuringService(db)

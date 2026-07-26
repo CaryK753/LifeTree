@@ -20,6 +20,8 @@ import {
   getActiveConversation,
   renameConversation,
 } from "@/lib/chat-store";
+import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
+import { useSidebarDrawerMode } from "@/lib/use-sidebar-drawer-mode";
 
 const SIDEBAR_KEY = "lifetree.chat.sidebarCollapsed";
 
@@ -46,6 +48,11 @@ export default function ChatPage() {
 
   // Sidebar collapse — persisted across reloads. Completely collapses (not minibar).
   const [collapsed, setCollapsed] = useState(false);
+  const drawerMode = useSidebarDrawerMode();
+  // In drawer mode (PWA or narrow viewport) the conversation history
+  // sidebar is a drawer (hidden by default, opened via the History
+  // button). Otherwise it's a persistent column that collapses to w-0.
+  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const v = window.localStorage.getItem(SIDEBAR_KEY);
@@ -58,23 +65,48 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full relative">
-      {/* Conversation history sidebar — completely collapses to w-0.
-          The toggle button lives in the top title bar so it remains
-          accessible whether the sidebar is open or collapsed. */}
-      <aside
-        className={cn(
-          "shrink-0 transition-[width] duration-300 ease-out overflow-hidden border-r border-white/5",
-          collapsed ? "w-0" : "w-64 sm:w-72"
-        )}
-        aria-hidden={collapsed}
-      >
-        {!collapsed && (
-          <ConversationList
-            goalId={goalId}
-            scenarioId={scenarioId}
+      {/* Conversation history sidebar.
+          - Drawer mode (PWA / narrow viewport): hidden by default;
+            opens as a slide-in drawer via the History button.
+          - Otherwise: persistent column that collapses to w-0. */}
+      {drawerMode ? (
+        <>
+          {/* Drawer backdrop */}
+          <div
+            className={cn(
+              "fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity duration-200",
+              historyDrawerOpen
+                ? "opacity-100 pointer-events-auto"
+                : "opacity-0 pointer-events-none"
+            )}
+            onClick={() => setHistoryDrawerOpen(false)}
+            aria-hidden="true"
           />
-        )}
-      </aside>
+          {/* Drawer */}
+          <aside
+            className={cn(
+              "fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw]",
+              "bg-[#0d1015] border-r border-white/5 shadow-2xl",
+              "transition-transform duration-300 ease-out",
+              historyDrawerOpen ? "translate-x-0" : "-translate-x-full"
+            )}
+          >
+            <ConversationList goalId={goalId} scenarioId={scenarioId} />
+          </aside>
+        </>
+      ) : (
+        <aside
+          className={cn(
+            "sidebar-rail shrink-0 transition-[width] duration-300 ease-out overflow-hidden border-r border-white/5",
+            collapsed ? "w-0" : "w-64 sm:w-72"
+          )}
+          aria-hidden={collapsed}
+        >
+          {!collapsed && (
+            <ConversationList goalId={goalId} scenarioId={scenarioId} />
+          )}
+        </aside>
+      )}
 
       {/* Main chat column */}
       <div className="flex-1 flex flex-col min-w-0">
@@ -83,13 +115,20 @@ export default function ChatPage() {
             the right. Migrated here from ChatPanel's internal toolbar. */}
         <div className="flex items-center justify-between gap-3 px-4 py-2 border-b border-white/5 bg-surface/30 backdrop-blur-sm shrink-0">
           <div className="flex items-center gap-2 min-w-0 flex-1">
+            <SidebarToggleButton />
             <Button
               variant="ghost"
               size="icon"
               className="h-7 w-7 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 shrink-0"
-              onClick={() => setCollapsed((v) => !v)}
+              onClick={() =>
+                drawerMode
+                  ? setHistoryDrawerOpen((v) => !v)
+                  : setCollapsed((v) => !v)
+              }
               title={
-                collapsed
+                drawerMode
+                  ? t("chat.history.expand")
+                  : collapsed
                   ? t("chat.history.expand")
                   : t("chat.history.collapse")
               }

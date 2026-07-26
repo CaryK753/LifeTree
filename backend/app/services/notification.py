@@ -229,14 +229,17 @@ class NotificationService:
 
         try:
             if use_ssl:
-                with smtplib.SMTP_SSL(host, port, timeout=10) as server:
+                with smtplib.SMTP_SSL(host, port, timeout=30) as server:
+                    server.ehlo()
                     if smtp_user:
                         server.login(smtp_user, smtp_password)
                     server.sendmail(from_addr, [user.email], msg.as_string())
             else:
-                with smtplib.SMTP(host, port, timeout=10) as server:
+                with smtplib.SMTP(host, port, timeout=30) as server:
+                    server.ehlo()
                     if use_tls:
                         server.starttls()
+                        server.ehlo()
                     if smtp_user:
                         server.login(smtp_user, smtp_password)
                     server.sendmail(from_addr, [user.email], msg.as_string())

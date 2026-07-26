@@ -75,7 +75,7 @@ log = get_logger(__name__)
 
 # ---------- Types ----------
 
-Protocol = Literal["openai_compatible", "anthropic", "bailian"]
+Protocol = Literal["openai_compatible", "anthropic", "bailian", "bailian_rerank"]
 Role = Literal["chat", "vision", "embedding", "rerank"]
 ALL_ROLES: tuple[Role, ...] = ("chat", "vision", "embedding", "rerank")
 
@@ -829,6 +829,279 @@ def get_smtp_config() -> dict[str, Any]:
     }
 
 
+# ---------- OAuth providers (multi-user mode) ----------
+#
+# Stored as a single JSON list in app_config under ``oauth_providers``.
+# Each entry is a generic OAuth2 Authorization-Code-Flow provider:
+#
+#   {
+#     "id": "o_xxx",
+#     "name": "GitHub",
+#     "client_id": "...",
+#     "client_secret": "...",
+#     "authorize_url": "https://github.com/login/oauth/authorize",
+#     "token_url":    "https://github.com/login/oauth/access_token",
+#     "userinfo_url": "https://api.github.com/user",
+#     "scopes": ["read:user", "user:email"],
+#     "redirect_uri": "http://localhost:3000/auth/callback/github",
+#     "enabled": true
+#   }
+#
+# The same shape supports Google, GitLab, Microsoft, etc. — the admin
+# fills in the endpoints and scopes for whichever provider they want.
+#
+# ``email_verification_enabled`` is a separate bool key controlling
+# whether the /auth/send-code + /auth/register-with-code endpoints are
+# active. When False, /auth/register works without a code.
+
+_KEY_OAUTH_PROVIDERS = "oauth_providers"
+_KEY_EMAIL_VERIFICATION_ENABLED = "email_verification_enabled"
+_KEY_USE_MODE = "use_mode"
+
+
+class OAuthProvider(BaseModel):
+    """A generic OAuth2 provider configured by the admin (Authorization Code flow)."""
+
+    id: str
+    name: str
+    client_id: str = ""
+    client_secret: str = ""
+    authorize_url: str = ""
+    token_url: str = ""
+    userinfo_url: str = ""
+    scopes: list[str] = Field(default_factory=list)
+    redirect_uri: str = ""
+    enabled: bool = True
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+
+class OAuthProviderView(BaseModel):
+    """Masked view for API responses — client_secret is hidden."""
+
+    id: str
+    name: str
+    client_id: str
+    client_id_configured: bool
+    client_secret_configured: bool
+    authorize_url: str
+    token_url: str
+    userinfo_url: str
+    scopes: list[str]
+    redirect_uri: str
+    enabled: bool
+    created_at: str
+
+
+class OAuthProviderPublic(BaseModel):
+    """Public info exposed to unauthenticated clients (login dialog).
+
+    Only what the login UI needs to render the button — no URLs beyond
+    what's required, no secrets, no client_id.
+    """
+
+    id: str
+    name: str
+
+
+def _oauth_provider_to_view(p: OAuthProvider) -> OAuthProviderView:
+    return OAuthProviderView(
+        id=p.id,
+        name=p.name,
+        client_id=p.client_id,
+        client_id_configured=bool(p.client_id),
+        client_secret_configured=bool(p.client_secret),
+        authorize_url=p.authorize_url,
+        token_url=p.token_url,
+        userinfo_url=p.userinfo_url,
+        scopes=list(p.scopes),
+        redirect_uri=p.redirect_uri,
+        enabled=p.enabled,
+        created_at=p.created_at,
+    )
+
+
+def get_oauth_providers() -> list[OAuthProvider]:
+    """Return all configured OAuth providers (with secrets — internal use only)."""
+    with _db_session() as session:
+        row = session.get(AppConfig, _KEY_OAUTH_PROVIDERS)
+        if row is None:
+            return []
+        try:
+            data = json.loads(row.value)
+        except (json.JSONDecodeError, TypeError):
+            return []
+        if not isinstance(data, list):
+            return []
+        return [OAuthProvider.model_validate(item) for item in data]
+
+
+def get_oauth_provider_by_id(provider_id: str) -> OAuthProvider | None:
+    """Return a single OAuth provider by id, or None."""
+    for p in get_oauth_providers():
+        if p.id == provider_id:
+            return p
+    return None
+
+
+def set_oauth_providers(providers: list[OAuthProvider]) -> None:
+    """Replace the full OAuth provider list (admin write)."""
+    with _db_session() as session:
+        _set_app_config(session, _KEY_OAUTH_PROVIDERS, [p.model_dump() for p in providers])
+
+
+def add_oauth_provider(
+    *,
+    name: str,
+    client_id: str,
+    client_secret: str,
+    authorize_url: str,
+    token_url: str,
+    userinfo_url: str,
+    scopes: list[str] | None = None,
+    redirect_uri: str = "",
+    enabled: bool = True,
+) -> OAuthProvider:
+    """Add a new OAuth provider and persist it. Returns the new provider."""
+    providers = get_oauth_providers()
+    p = OAuthProvider(
+        id=_new_id("o"),
+        name=name.strip(),
+        client_id=client_id.strip(),
+        client_secret=client_secret,
+        authorize_url=authorize_url.strip(),
+        token_url=token_url.strip(),
+        userinfo_url=userinfo_url.strip(),
+        scopes=list(scopes) if scopes else [],
+        redirect_uri=redirect_uri.strip(),
+        enabled=enabled,
+    )
+    providers.append(p)
+    set_oauth_providers(providers)
+    return p
+
+
+def update_oauth_provider(
+    provider_id: str,
+    *,
+    name: str | None = None,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+    authorize_url: str | None = None,
+    token_url: str | None = None,
+    userinfo_url: str | None = None,
+    scopes: list[str] | None = None,
+    redirect_uri: str | None = None,
+    enabled: bool | None = None,
+) -> OAuthProvider | None:
+    """Update an OAuth provider. None leaves a field unchanged; empty string
+    clears client_secret/client_id. Returns the updated provider or None."""
+    providers = get_oauth_providers()
+    target = next((p for p in providers if p.id == provider_id), None)
+    if target is None:
+        return None
+    if name is not None:
+        target.name = name.strip()
+    if client_id is not None:
+        target.client_id = client_id.strip()
+    if client_secret is not None:
+        target.client_secret = client_secret  # "" clears, real value updates
+    if authorize_url is not None:
+        target.authorize_url = authorize_url.strip()
+    if token_url is not None:
+        target.token_url = token_url.strip()
+    if userinfo_url is not None:
+        target.userinfo_url = userinfo_url.strip()
+    if scopes is not None:
+        target.scopes = list(scopes)
+    if redirect_uri is not None:
+        target.redirect_uri = redirect_uri.strip()
+    if enabled is not None:
+        target.enabled = bool(enabled)
+    set_oauth_providers(providers)
+    return target
+
+
+def delete_oauth_provider(provider_id: str) -> bool:
+    """Delete an OAuth provider by id. Returns True if deleted."""
+    providers = get_oauth_providers()
+    new_list = [p for p in providers if p.id != provider_id]
+    if len(new_list) == len(providers):
+        return False
+    set_oauth_providers(new_list)
+    return True
+
+
+def get_email_verification_enabled() -> bool:
+    """Return whether email verification is required for registration."""
+    with _db_session() as session:
+        row = session.get(AppConfig, _KEY_EMAIL_VERIFICATION_ENABLED)
+        if row is None:
+            return False
+        val = _decode_value(row.value, False)
+        return bool(val) if isinstance(val, bool) else False
+
+
+def set_email_verification_enabled(enabled: bool) -> None:
+    """Enable or disable email verification for registration."""
+    with _db_session() as session:
+        _set_app_config(session, _KEY_EMAIL_VERIFICATION_ENABLED, bool(enabled))
+
+
+def get_use_mode() -> str:
+    """Return the current usage mode: ``"single"`` or ``"multi"``.
+
+    Reads from DB (``app_config.use_mode``). On first boot (no row yet),
+    seeds from the ``LIFETREE_USE_MODE`` env var and persists it so the
+    admin can later switch modes from the settings UI without editing
+    .env.
+    """
+    with _db_session() as session:
+        row = session.get(AppConfig, _KEY_USE_MODE)
+        if row is None:
+            # First boot — seed from env.
+            from app.core.config import get_settings
+
+            mode = get_settings().lifetree_use_mode
+            _set_app_config(session, _KEY_USE_MODE, mode)
+            return mode
+        val = _decode_value(row.value, "single")
+        if isinstance(val, str) and val in ("single", "multi"):
+            return val
+        return "single"
+
+
+def set_use_mode(mode: str) -> None:
+    """Switch the usage mode at runtime (admin only).
+
+    ``"single"``: no login required, default-user fallback enabled.
+    ``"multi"``: login required, multi-user with admin promotion via env.
+    """
+    if mode not in ("single", "multi"):
+        raise ValueError(f"use_mode must be 'single' or 'multi', got {mode!r}")
+    with _db_session() as session:
+        _set_app_config(session, _KEY_USE_MODE, mode)
+
+
+def get_public_auth_config() -> dict[str, Any]:
+    """Return auth config safe for unauthenticated clients (login dialog).
+
+    Exposes:
+      - ``oauth_providers``: list of {id, name} for enabled providers only
+      - ``email_verification_enabled``: bool
+      - ``multi_user_mode``: True when ``use_mode == "multi"``. The login
+        dialog is then not dismissible — the user must authenticate.
+
+    No secrets, no URLs, no client_ids.
+    """
+    providers = [p for p in get_oauth_providers() if p.enabled]
+    return {
+        "oauth_providers": [OAuthProviderPublic(id=p.id, name=p.name).model_dump() for p in providers],
+        "email_verification_enabled": get_email_verification_enabled(),
+        "multi_user_mode": get_use_mode() == "multi",
+        "use_mode": get_use_mode(),
+    }
+
+
 # ---------- Resolution ----------
 
 def _resolve(cfg: LLMConfig, role: Role) -> ResolvedModel | None:
@@ -861,26 +1134,40 @@ __all__ = [
     "LLMConfigView",
     "Model",
     "ModelView",
+    "OAuthProvider",
+    "OAuthProviderPublic",
+    "OAuthProviderView",
     "Provider",
     "ProviderView",
     "Protocol",
     "ResolvedModel",
     "Role",
     "add_model",
+    "add_oauth_provider",
     "add_provider",
     "delete_model",
+    "delete_oauth_provider",
     "delete_provider",
+    "get_email_verification_enabled",
     "get_mineru_config",
+    "get_oauth_provider_by_id",
+    "get_oauth_providers",
+    "get_public_auth_config",
     "get_smtp_config",
     "get_tavily_key",
+    "get_use_mode",
     "load_config",
     "resolve_role",
     "save_config",
+    "set_email_verification_enabled",
     "set_mineru_key",
+    "set_use_mode",
+    "set_oauth_providers",
     "set_role_assignment",
     "set_smtp_config",
     "set_tavily_key",
     "to_view",
     "update_model",
+    "update_oauth_provider",
     "update_provider",
 ]

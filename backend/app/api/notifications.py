@@ -1,8 +1,11 @@
 """Notification list / mark-read endpoints.
 
-Single-user mode: endpoints default to the default user when ``user_id`` is
-not supplied. The ``GET /notifications/{user_id}`` path form is kept for
-backward compatibility; new clients should call ``GET /notifications``.
+Multi-user isolation: all endpoints resolve the authenticated user via
+``CurrentUser`` and filter notifications by ``user.id``. In single-user
+mode ``CurrentUser`` falls back to the default user, so behavior is
+unchanged. The legacy ``GET /notifications/{user_id}`` path form is kept
+for backward compatibility but ignores the path user_id — the
+authenticated user's notifications are always returned.
 """
 
 from __future__ import annotations
@@ -11,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.tenant import get_default_user
+from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
 from app.models.notification import NotificationLog
 from app.schemas.api import NotificationRead
@@ -39,18 +42,17 @@ class UnreadCountResponse(BaseModel):
 
 @router.get("/unread-count", response_model=UnreadCountResponse)
 def get_unread_count(
-    user_id: str | None = Query(None),
+    user: CurrentUser,
     db: Session = Depends(get_db),
 ) -> UnreadCountResponse:
     """Efficient single COUNT of unread notifications for the user."""
-    target = user_id or get_default_user(db).id
-    return UnreadCountResponse(count=NotificationService(db).count_unread(target))
+    return UnreadCountResponse(count=NotificationService(db).count_unread(user.id))
 
 
 @router.post("/bulk-read", response_model=BulkReadResponse)
 def bulk_mark_read(
     payload: BulkReadRequest,
-    user_id: str | None = Query(None),
+    user: CurrentUser,
     db: Session = Depends(get_db),
 ) -> BulkReadResponse:
     """Mark multiple notifications as read in a single UPDATE.
@@ -58,8 +60,7 @@ def bulk_mark_read(
     Returns ``{"updated": N}`` where N is the number of rows actually
     changed (already-read rows are not counted).
     """
-    target = user_id or get_default_user(db).id
-    updated = NotificationService(db).bulk_mark_read(target, payload.notification_ids)
+    updated = NotificationService(db).bulk_mark_read(user.id, payload.notification_ids)
     return BulkReadResponse(updated=updated)
 
 
@@ -82,6 +83,7 @@ def _normalize_severity(value: str | None) -> str | None:
 
 @router.get("", response_model=list[NotificationRead])
 def list_notifications(
+    user: CurrentUser,
     severity: str | None = Query(
         None,
         description="Filter by severity: urgent | warning | info",
@@ -98,14 +100,14 @@ def list_notifications(
     offset: int = Query(0, ge=0, description="Skip this many results"),
     db: Session = Depends(get_db),
 ) -> list[NotificationLog]:
-    """List recent notifications for the default user.
+    """List recent notifications for the authenticated user.
 
     Supports server-side filtering by ``severity``, ``status``, ``channel``
     plus ``limit`` / ``offset`` pagination. The ``status`` query param
     accepts the special value ``unread`` which excludes READ and SUPPRESSED
     rows (SUPPRESSED rows are invisible to the user and shouldn't appear).
     """
-    target = get_default_user(db).id
+    target = user.id
     service = NotificationService(db)
     severity = _normalize_severity(severity)
 
@@ -142,6 +144,7 @@ def list_notifications(
     include_in_schema=False,
 )
 def list_notifications_for_user(
+    user: CurrentUser,
     user_id: str,
     severity: str | None = Query(None),
     status: str | None = Query(None),
@@ -152,14 +155,16 @@ def list_notifications_for_user(
 ) -> list[NotificationLog]:
     """Backward-compat: ``GET /notifications/{user_id}`` form.
 
-    New clients should call ``GET /notifications`` and let the default-user
-    resolution handle it. This path form is kept so older builds keep working.
+    The path ``user_id`` is ignored — the authenticated user's
+    notifications are always returned. This path form is kept so older
+    builds keep working.
     """
+    target = user.id
     service = NotificationService(db)
     severity = _normalize_severity(severity)
     if status == "unread":
         rows = service.list_filtered(
-            user_id,
+            target,
             severity=severity,
             status=None,
             channel=channel,
@@ -168,7 +173,7 @@ def list_notifications_for_user(
         )
         return [r for r in rows if r.status not in {"read", "suppressed"}]
     return service.list_filtered(
-        user_id,
+        target,
         severity=severity,
         status="read" if status == "read" else None,
         channel=channel,
@@ -183,11 +188,10 @@ def list_notifications_for_user(
 @router.post("/{notification_id}/read", response_model=NotificationRead)
 def mark_read(
     notification_id: str,
-    user_id: str | None = Query(None),
+    user: CurrentUser,
     db: Session = Depends(get_db),
 ) -> NotificationLog:
-    target = user_id or get_default_user(db).id
-    record = NotificationService(db).mark_read(notification_id, target)
+    record = NotificationService(db).mark_read(notification_id, user.id)
     if record is None:
         raise HTTPException(404, "Notification not found")
     return record

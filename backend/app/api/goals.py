@@ -1,4 +1,11 @@
-"""Goal / Pathway / Requirement CRUD endpoints."""
+"""Goal / Pathway / Requirement CRUD endpoints.
+
+Multi-user isolation: every endpoint resolves the authenticated user via
+``CurrentUser`` and filters data by ``user.id``. In single-user mode the
+``CurrentUser`` dependency falls back to the default user, so behavior is
+unchanged. Admins can read (but not mutate) other users' goals for the
+admin user-management view.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.tenant import get_default_user
+from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
 from app.models.goal import Goal, Pathway, Requirement
 from app.schemas.entities import (
@@ -26,15 +33,59 @@ router = APIRouter(prefix="/goals", tags=["goals"])
 graph = GraphService()
 
 
+# ---------- Ownership helpers ----------
+
+
+def _get_owned_goal(goal_id: str, user: CurrentUser, db: Session) -> Goal:
+    """Fetch a goal and verify the caller owns it.
+
+    Admins can read any goal (for the admin user-management view) but
+    cannot mutate goals they don't own — mutations require ownership.
+    """
+    goal = db.get(Goal, goal_id)
+    if goal is None:
+        raise HTTPException(404, "Goal not found")
+    if goal.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "You do not have access to this goal")
+    return goal
+
+
+def _get_owned_pathway(pathway_id: str, user: CurrentUser, db: Session) -> Pathway:
+    """Fetch a pathway and verify ownership via its parent goal."""
+    pathway = db.get(Pathway, pathway_id)
+    if pathway is None:
+        raise HTTPException(404, "Pathway not found")
+    goal = db.get(Goal, pathway.goal_id)
+    if goal is None or (goal.user_id != user.id and user.role != "admin"):
+        raise HTTPException(403, "You do not have access to this pathway")
+    return pathway
+
+
+def _get_owned_requirement(requirement_id: str, user: CurrentUser, db: Session) -> Requirement:
+    """Fetch a requirement and verify ownership via its parent pathway→goal."""
+    req = db.get(Requirement, requirement_id)
+    if req is None:
+        raise HTTPException(404, "Requirement not found")
+    pathway = db.get(Pathway, req.pathway_id)
+    if pathway is None:
+        raise HTTPException(404, "Pathway not found")
+    goal = db.get(Goal, pathway.goal_id)
+    if goal is None or (goal.user_id != user.id and user.role != "admin"):
+        raise HTTPException(403, "You do not have access to this requirement")
+    return req
+
+
 # ---------- Goals ----------
 
 @router.post("", response_model=GoalRead, status_code=201)
-def create_goal(payload: GoalCreate, db: Session = Depends(get_db)) -> Goal:
+def create_goal(
+    payload: GoalCreate, user: CurrentUser, db: Session = Depends(get_db)
+) -> Goal:
     data = payload.model_dump()
     pathways_data = data.pop("pathways", [])
-    # Single-user mode: resolve user_id server-side if the client didn't send one.
-    if not data.get("user_id"):
-        data["user_id"] = get_default_user(db).id
+    # Always associate the new goal with the authenticated user, ignoring
+    # any client-supplied user_id to prevent cross-user pollution.
+    data["user_id"] = user.id
     goal = Goal(**data)
     db.add(goal)
     db.flush()
@@ -53,29 +104,40 @@ def create_goal(payload: GoalCreate, db: Session = Depends(get_db)) -> Goal:
 
 @router.get("", response_model=list[GoalRead])
 def list_goals(
-    user_id: str | None = None, limit: int = 50, db: Session = Depends(get_db)
+    user: CurrentUser,
+    user_id: str | None = None,
+    limit: int = 50,
+    db: Session = Depends(get_db),
 ) -> list[Goal]:
-    # Single-user mode: user_id filter is accepted for backward compat but ignored.
-    stmt = select(Goal).order_by(Goal.created_at.desc()).limit(limit)
+    # Admins can optionally filter by a specific user_id (admin user-management
+    # view). Non-admins always see only their own goals; a client-supplied
+    # user_id is ignored to prevent cross-user enumeration.
+    target_id = user.id
+    if user_id and user.role == "admin":
+        target_id = user_id
+    stmt = (
+        select(Goal)
+        .where(Goal.user_id == target_id)
+        .order_by(Goal.created_at.desc())
+        .limit(limit)
+    )
     return list(db.scalars(stmt))
 
 
 @router.get("/{goal_id}", response_model=GoalRead)
-def get_goal(goal_id: str, db: Session = Depends(get_db)) -> Goal:
-    goal = db.get(Goal, goal_id)
-    if goal is None:
-        raise HTTPException(404, "Goal not found")
-    return goal
+def get_goal(goal_id: str, user: CurrentUser, db: Session = Depends(get_db)) -> Goal:
+    return _get_owned_goal(goal_id, user, db)
 
 
 @router.patch("/{goal_id}", response_model=GoalRead)
 def update_goal(
-    goal_id: str, payload: GoalUpdate, db: Session = Depends(get_db)
+    goal_id: str, payload: GoalUpdate, user: CurrentUser, db: Session = Depends(get_db)
 ) -> Goal:
-    goal = db.get(Goal, goal_id)
-    if goal is None:
-        raise HTTPException(404, "Goal not found")
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    goal = _get_owned_goal(goal_id, user, db)
+    # Prevent user_id reassignment (would transfer ownership to another user).
+    updates = payload.model_dump(exclude_unset=True)
+    updates.pop("user_id", None)
+    for k, v in updates.items():
         setattr(goal, k, v)
     db.commit()
     db.refresh(goal)
@@ -84,10 +146,8 @@ def update_goal(
 
 
 @router.delete("/{goal_id}", status_code=204)
-def delete_goal(goal_id: str, db: Session = Depends(get_db)) -> None:
-    goal = db.get(Goal, goal_id)
-    if goal is None:
-        raise HTTPException(404, "Goal not found")
+def delete_goal(goal_id: str, user: CurrentUser, db: Session = Depends(get_db)) -> None:
+    goal = _get_owned_goal(goal_id, user, db)
     db.delete(goal)
     db.commit()
 
@@ -96,11 +156,9 @@ def delete_goal(goal_id: str, db: Session = Depends(get_db)) -> None:
 
 @router.post("/{goal_id}/pathways", response_model=PathwayRead, status_code=201)
 def add_pathway(
-    goal_id: str, payload: PathwayCreate, db: Session = Depends(get_db)
+    goal_id: str, payload: PathwayCreate, user: CurrentUser, db: Session = Depends(get_db)
 ) -> Pathway:
-    goal = db.get(Goal, goal_id)
-    if goal is None:
-        raise HTTPException(404, "Goal not found")
+    _get_owned_goal(goal_id, user, db)
     data = payload.model_dump()
     reqs = data.pop("requirements", [])
     pathway = Pathway(goal_id=goal_id, **data)
@@ -115,7 +173,10 @@ def add_pathway(
 
 
 @router.get("/{goal_id}/pathways", response_model=list[PathwayRead])
-def list_pathways(goal_id: str, db: Session = Depends(get_db)) -> list[Pathway]:
+def list_pathways(
+    goal_id: str, user: CurrentUser, db: Session = Depends(get_db)
+) -> list[Pathway]:
+    _get_owned_goal(goal_id, user, db)
     return list(
         db.scalars(
             select(Pathway)
@@ -127,11 +188,9 @@ def list_pathways(goal_id: str, db: Session = Depends(get_db)) -> list[Pathway]:
 
 @router.patch("/pathways/{pathway_id}", response_model=PathwayRead)
 def update_pathway(
-    pathway_id: str, payload: PathwayUpdate, db: Session = Depends(get_db)
+    pathway_id: str, payload: PathwayUpdate, user: CurrentUser, db: Session = Depends(get_db)
 ) -> Pathway:
-    pathway = db.get(Pathway, pathway_id)
-    if pathway is None:
-        raise HTTPException(404, "Pathway not found")
+    pathway = _get_owned_pathway(pathway_id, user, db)
     for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(pathway, k, v)
     db.commit()
@@ -141,10 +200,8 @@ def update_pathway(
 
 
 @router.delete("/pathways/{pathway_id}", status_code=204)
-def delete_pathway(pathway_id: str, db: Session = Depends(get_db)) -> None:
-    pathway = db.get(Pathway, pathway_id)
-    if pathway is None:
-        raise HTTPException(404, "Pathway not found")
+def delete_pathway(pathway_id: str, user: CurrentUser, db: Session = Depends(get_db)) -> None:
+    pathway = _get_owned_pathway(pathway_id, user, db)
     db.delete(pathway)
     db.commit()
 
@@ -153,11 +210,9 @@ def delete_pathway(pathway_id: str, db: Session = Depends(get_db)) -> None:
 
 @router.post("/pathways/{pathway_id}/requirements", response_model=RequirementRead, status_code=201)
 def add_requirement(
-    pathway_id: str, payload: RequirementCreate, db: Session = Depends(get_db)
+    pathway_id: str, payload: RequirementCreate, user: CurrentUser, db: Session = Depends(get_db)
 ) -> Requirement:
-    pathway = db.get(Pathway, pathway_id)
-    if pathway is None:
-        raise HTTPException(404, "Pathway not found")
+    _get_owned_pathway(pathway_id, user, db)
     req = Requirement(pathway_id=pathway_id, **payload.model_dump())
     db.add(req)
     db.commit()
@@ -167,7 +222,10 @@ def add_requirement(
 
 
 @router.get("/pathways/{pathway_id}/requirements", response_model=list[RequirementRead])
-def list_requirements(pathway_id: str, db: Session = Depends(get_db)) -> list[Requirement]:
+def list_requirements(
+    pathway_id: str, user: CurrentUser, db: Session = Depends(get_db)
+) -> list[Requirement]:
+    _get_owned_pathway(pathway_id, user, db)
     return list(
         db.scalars(
             select(Requirement)
@@ -179,11 +237,9 @@ def list_requirements(pathway_id: str, db: Session = Depends(get_db)) -> list[Re
 
 @router.patch("/requirements/{requirement_id}", response_model=RequirementRead)
 def update_requirement(
-    requirement_id: str, payload: RequirementUpdate, db: Session = Depends(get_db)
+    requirement_id: str, payload: RequirementUpdate, user: CurrentUser, db: Session = Depends(get_db)
 ) -> Requirement:
-    req = db.get(Requirement, requirement_id)
-    if req is None:
-        raise HTTPException(404, "Requirement not found")
+    req = _get_owned_requirement(requirement_id, user, db)
     for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(req, k, v)
     db.commit()
@@ -193,9 +249,7 @@ def update_requirement(
 
 
 @router.delete("/requirements/{requirement_id}", status_code=204)
-def delete_requirement(requirement_id: str, db: Session = Depends(get_db)) -> None:
-    req = db.get(Requirement, requirement_id)
-    if req is None:
-        raise HTTPException(404, "Requirement not found")
+def delete_requirement(requirement_id: str, user: CurrentUser, db: Session = Depends(get_db)) -> None:
+    req = _get_owned_requirement(requirement_id, user, db)
     db.delete(req)
     db.commit()

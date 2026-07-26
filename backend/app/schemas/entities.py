@@ -37,6 +37,8 @@ class UserProfileRead(UserProfileBase, ORMModel):
     preferred_pathway_id: str | None = None
     progress: dict[str, Any] = {}
     implicit_tags: dict[str, Any] = {}
+    role: str = "user"
+    is_enabled: bool = True
     created_at: datetime
     updated_at: datetime
 

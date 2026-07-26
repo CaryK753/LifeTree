@@ -1,11 +1,19 @@
-"""Event & InformationSource listing + source credibility endpoints."""
+"""Event & InformationSource listing + source credibility endpoints.
+
+Multi-user isolation: all endpoints resolve the authenticated user via
+``CurrentUser`` and filter data by ``user.id``. Legacy rows with NULL
+``user_id`` (created before this migration) remain visible to all users
+via ``user_id IS NULL OR user_id = :uid`` filters. In single-user mode
+``CurrentUser`` falls back to the default user, so behavior is unchanged.
+"""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
 from app.models.event import Event, InformationSource
 from app.schemas.api import (
@@ -17,15 +25,33 @@ from app.schemas.api import (
 router = APIRouter(tags=["events", "sources"])
 
 
+def _user_scope(user: CurrentUser):
+    """Return a filter clause matching rows owned by ``user`` or legacy
+    NULL-user rows. Admins see all rows."""
+    if user.role == "admin":
+        return None  # no filter
+    return or_(Event.user_id == user.id, Event.user_id.is_(None))
+
+
+def _source_scope(user: CurrentUser):
+    if user.role == "admin":
+        return None
+    return or_(InformationSource.user_id == user.id, InformationSource.user_id.is_(None))
+
+
 # ---------- Events ----------
 
 @router.get("/events", response_model=list[EventRead])
 def list_events(
+    user: CurrentUser,
     limit: int = 100,
     risk_level: str | None = None,
     db: Session = Depends(get_db),
 ) -> list[Event]:
     stmt = select(Event)
+    scope = _user_scope(user)
+    if scope is not None:
+        stmt = stmt.where(scope)
     if risk_level:
         stmt = stmt.where(Event.risk_flag_level == risk_level)
     return list(
@@ -34,10 +60,16 @@ def list_events(
 
 
 @router.get("/events/{event_id}", response_model=EventRead)
-def get_event(event_id: str, db: Session = Depends(get_db)) -> Event:
+def get_event(
+    event_id: str, user: CurrentUser, db: Session = Depends(get_db)
+) -> Event:
     ev = db.get(Event, event_id)
     if ev is None:
         raise HTTPException(404, "Event not found")
+    # Enforce ownership: only the owner (or admin) can read. Legacy NULL
+    # rows are visible to everyone.
+    if ev.user_id is not None and ev.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "You do not have access to this event")
     return ev
 
 
@@ -45,11 +77,15 @@ def get_event(event_id: str, db: Session = Depends(get_db)) -> Event:
 
 @router.get("/sources", response_model=list[InformationSourceRead])
 def list_sources(
+    user: CurrentUser,
     limit: int = 100,
     kind: str | None = None,
     db: Session = Depends(get_db),
 ) -> list[InformationSource]:
     stmt = select(InformationSource)
+    scope = _source_scope(user)
+    if scope is not None:
+        stmt = stmt.where(scope)
     if kind:
         stmt = stmt.where(InformationSource.kind == kind)
     return list(
@@ -58,22 +94,27 @@ def list_sources(
 
 
 @router.get("/sources/credibility", response_model=CredibilityDistribution)
-def credibility_distribution(db: Session = Depends(get_db)) -> CredibilityDistribution:
-    """Aggregate credibility distribution across all sources."""
-    rows = db.execute(
-        select(InformationSource.credibility, func.count()).group_by(
-            InformationSource.credibility
-        )
-    ).all()
+def credibility_distribution(
+    user: CurrentUser, db: Session = Depends(get_db)
+) -> CredibilityDistribution:
+    """Aggregate credibility distribution for the user's sources."""
+    scope = _source_scope(user)
+    base = select(InformationSource.credibility, func.count())
+    if scope is not None:
+        base = base.where(scope)
+    rows = db.execute(base.group_by(InformationSource.credibility)).all()
 
     counts = {row[0]: row[1] for row in rows}
     total = sum(counts.values())
 
-    private_count = db.scalar(
+    private_stmt = (
         select(func.count())
         .select_from(InformationSource)
         .where(InformationSource.kind == "user_upload")
-    ) or 0
+    )
+    if scope is not None:
+        private_stmt = private_stmt.where(scope)
+    private_count = db.scalar(private_stmt) or 0
 
     return CredibilityDistribution(
         high=counts.get("high", 0),
@@ -90,6 +131,7 @@ def credibility_distribution(db: Session = Depends(get_db)) -> CredibilityDistri
 @router.patch("/sources/{source_id}/credibility", response_model=InformationSourceRead)
 def mark_source_credibility(
     source_id: str,
+    user: CurrentUser,
     credibility: str,
     db: Session = Depends(get_db),
 ) -> InformationSource:
@@ -97,6 +139,8 @@ def mark_source_credibility(
     src = db.get(InformationSource, source_id)
     if src is None:
         raise HTTPException(404, "Source not found")
+    if src.user_id is not None and src.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "You do not have access to this source")
     src.credibility = credibility
     if credibility == "user_marked_reliable":
         src.credibility_score = 0.9
@@ -108,7 +152,9 @@ def mark_source_credibility(
 
 
 @router.delete("/sources/{source_id}", status_code=204)
-def delete_source(source_id: str, db: Session = Depends(get_db)) -> None:
+def delete_source(
+    source_id: str, user: CurrentUser, db: Session = Depends(get_db)
+) -> None:
     """Delete a source row.
 
     Events that reference this source via foreign-key columns are set to NULL
@@ -118,5 +164,7 @@ def delete_source(source_id: str, db: Session = Depends(get_db)) -> None:
     src = db.get(InformationSource, source_id)
     if src is None:
         raise HTTPException(404, "Source not found")
+    if src.user_id is not None and src.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "You do not have access to this source")
     db.delete(src)
     db.commit()

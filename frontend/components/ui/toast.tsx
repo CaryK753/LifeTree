@@ -17,7 +17,7 @@ const ToastProviderContext = ToastPrimitive.Provider;
  * etc. was near-invisible on the pale light-mode tinted backgrounds.
  */
 export const toastVariants = cva(
-  "group pointer-events-auto relative flex w-full items-start justify-between gap-3 overflow-hidden rounded-lg border p-4 pr-8 shadow-lg backdrop-blur-md transition-all " +
+  "group pointer-events-auto relative flex w-full items-start justify-between gap-3 rounded-lg border p-4 pr-8 shadow-lg backdrop-blur-md transition-all " +
     // Open: slide down from top + fade in (the toast "drops in" from the
     // top edge of the viewport, where the Viewport is anchored).
     "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-4 " +
@@ -77,12 +77,12 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             key={t.id}
             className={cn(toastVariants({ variant: t.variant }))}
           >
-            <div className="flex-1">
-              <ToastPrimitive.Title className="text-sm font-semibold">
+            <div className="flex-1 select-text">
+              <ToastPrimitive.Title className="text-sm font-semibold select-text">
                 {t.title}
               </ToastPrimitive.Title>
               {t.description && (
-                <ToastPrimitive.Description className="mt-1 text-xs opacity-90">
+                <ToastPrimitive.Description className="mt-1 text-xs opacity-90 select-text whitespace-pre-wrap break-words">
                   {t.description}
                 </ToastPrimitive.Description>
               )}

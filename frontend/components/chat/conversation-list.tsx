@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   useChatStore,
   listConversations,
@@ -48,6 +49,7 @@ interface Props {
 export function ConversationList({ goalId, scenarioId, onPick }: Props) {
   const t = useT();
   const state = useChatStore();
+  const { confirm, ConfirmRoot } = useConfirm();
   const [query, setQuery] = useState("");
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [renameId, setRenameId] = useState<string | null>(null);
@@ -99,16 +101,30 @@ export function ConversationList({ goalId, scenarioId, onPick }: Props) {
     setRenameValue("");
   };
 
-  const handleDelete = (c: Conversation) => {
+  const handleDelete = async (c: Conversation) => {
     setMenuOpenFor(null);
-    if (confirm(t("chat.history.confirmDelete"))) {
+    const ok = await confirm({
+      title: t("common.delete"),
+      description: t("chat.history.confirmDelete"),
+      confirmLabel: t("common.delete"),
+      cancelLabel: t("common.cancel"),
+      variant: "danger",
+    });
+    if (ok) {
       deleteConversation(c.id);
     }
   };
 
-  const handleClearAll = () => {
+  const handleClearAll = async () => {
     if (all.length === 0) return;
-    if (confirm(t("chat.history.clearAllConfirm"))) {
+    const ok = await confirm({
+      title: t("chat.history.clearAll"),
+      description: t("chat.history.clearAllConfirm"),
+      confirmLabel: t("common.confirm"),
+      cancelLabel: t("common.cancel"),
+      variant: "danger",
+    });
+    if (ok) {
       clearAllConversations();
     }
   };
@@ -197,6 +213,7 @@ export function ConversationList({ goalId, scenarioId, onPick }: Props) {
           </button>
         </div>
       )}
+      {ConfirmRoot}
     </div>
   );
 }

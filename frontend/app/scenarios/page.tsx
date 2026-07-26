@@ -24,6 +24,7 @@ import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { useT } from "@/lib/i18n/provider";
 import { cn } from "@/lib/utils";
+import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 
 type ViewMode = "tree" | "grid";
 
@@ -103,7 +104,8 @@ export default function ScenariosPage() {
       {/* Header */}
       <header className="flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
+          <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+            <SidebarToggleButton />
             {t("scenarios.title")}
           </h1>
           <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">

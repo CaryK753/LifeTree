@@ -21,28 +21,40 @@ kept as thin shims that map to the new schema so old clients don't break.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core.logging import get_logger
+from app.core.tenant import AdminUser, CurrentUser
 from app.llm.registry import (
     ALL_ROLES,
+    LLMConfig,
     LLMConfigView,
+    OAuthProviderView,
     Protocol,
     Role,
     add_model,
+    add_oauth_provider,
     add_provider,
     delete_model,
+    delete_oauth_provider,
     delete_provider,
+    get_email_verification_enabled,
+    get_oauth_provider_by_id,
+    get_oauth_providers,
+    get_use_mode,
     load_config,
     resolve_role,
     save_config,
+    set_email_verification_enabled,
     set_mineru_key,
     set_role_assignment,
     set_smtp_config,
     set_tavily_key,
+    set_use_mode,
     to_view,
     update_model,
+    update_oauth_provider,
     update_provider,
 )
 
@@ -138,6 +150,51 @@ class TestResult(BaseModel):
     available_count: int | None = None
 
 
+class UseModeUpdate(BaseModel):
+    """Switch usage mode (admin only).
+
+    ``single``: self-use, no login required (default-user fallback on).
+    ``multi``: multi-user, login required, admin promotes users via env.
+    """
+
+    mode: str = Field(..., description='"single" or "multi"')
+
+
+# ---------- Helpers ----------
+
+
+def _is_multi_user_mode() -> bool:
+    """True when the platform is running in multi-user mode."""
+    return get_use_mode() == "multi"
+
+
+def _restricted_view(cfg: LLMConfig) -> LLMConfigView:
+    """Build a restricted view for non-admin users in multi-user mode.
+
+    Hides all admin-configured secrets:
+      - All provider ``api_key_configured`` → False, ``api_key_preview`` → ""
+      - Tavily / Mineru / SMTP ``*_configured`` → False, ``*_preview`` → ""
+      - Provider ``base_url`` retained (so the user knows the endpoint)
+      - Models, role_assignments, roles_configured retained (so the user
+        knows which model is used for each role)
+
+    The non-admin user can therefore *see* the platform configuration
+    shape (which providers/models exist, which roles are assigned) but
+    cannot see any of the actual keys configured by the admin.
+    """
+    view = to_view(cfg)
+    for p in view.providers:
+        p.api_key_configured = False
+        p.api_key_preview = ""
+    view.tavily_api_key_configured = False
+    view.tavily_api_key_preview = ""
+    view.mineru_api_key_configured = False
+    view.mineru_api_key_preview = ""
+    view.smtp_password_configured = False
+    view.smtp_password_preview = ""
+    return view
+
+
 class SecretReveal(BaseModel):
     """Full (unmasked) secret value returned by the reveal endpoints.
 
@@ -174,15 +231,60 @@ def _load_and_save(fn) -> LLMConfigView:
 # ---------- Read ----------
 
 @router.get("", response_model=LLMConfigView)
-async def get_settings() -> LLMConfigView:
-    """Return the full LLM configuration with masked secrets."""
-    return to_view(load_config())
+async def get_settings(user: CurrentUser) -> LLMConfigView:
+    """Return the full LLM configuration.
+
+    In multi-user mode, non-admin users get a restricted view with all
+    admin-configured API keys / SMTP password / Tavily / Mineru secrets
+    hidden (``*_configured`` returns False, ``*_preview`` returns "").
+    Admin users always see the full masked view. In single-user mode
+    everyone sees the full masked view (there's only one user anyway).
+    """
+    cfg = load_config()
+    if _is_multi_user_mode() and user.role != "admin":
+        return _restricted_view(cfg)
+    return to_view(cfg)
+
+
+# ---------- Use mode ----------
+
+@router.put("/use-mode", response_model=UseModeUpdate)
+def put_use_mode(user: CurrentUser, payload: UseModeUpdate) -> UseModeUpdate:
+    """Switch the platform usage mode.
+
+    ``single``: self-use, no login required (default-user fallback on).
+    ``multi``: multi-user, login required, admin promotes users via env.
+
+    Access rules:
+      - In **single-user mode**, anyone (including the default-user fallback)
+        can switch — there's only one user, so they're effectively the admin.
+      - In **multi-user mode**, only admins can switch.
+
+    The change is persisted to DB (``app_config.use_mode``) and takes
+    effect immediately — no process restart required. The next unauthenticated
+    request will be treated according to the new mode (single → default-user
+    fallback; multi → 401).
+    """
+    if payload.mode not in ("single", "multi"):
+        raise HTTPException(400, f"use_mode must be 'single' or 'multi', got {payload.mode!r}")
+
+    current_mode = get_use_mode()
+    if current_mode == "multi" and user.role != "admin":
+        raise HTTPException(
+            403,
+            "Admin access required to switch usage mode in multi-user mode",
+        )
+
+    set_use_mode(payload.mode)
+    log.info("use_mode switched from %s to %s by user %s", current_mode, payload.mode, user.id)
+    return UseModeUpdate(mode=payload.mode)
 
 
 # ---------- Providers ----------
 
 @router.post("/providers", response_model=LLMConfigView)
-async def create_provider(payload: ProviderCreate) -> LLMConfigView:
+async def create_provider(payload: ProviderCreate, user: CurrentUser) -> LLMConfigView:
+    _require_admin_in_multi_user(user)
     return _load_and_save(
         lambda cfg: add_provider(
             cfg,
@@ -195,7 +297,8 @@ async def create_provider(payload: ProviderCreate) -> LLMConfigView:
 
 
 @router.patch("/providers/{provider_id}", response_model=LLMConfigView)
-async def patch_provider(provider_id: str, payload: ProviderUpdate) -> LLMConfigView:
+async def patch_provider(provider_id: str, payload: ProviderUpdate, user: CurrentUser) -> LLMConfigView:
+    _require_admin_in_multi_user(user)
     def _mut(cfg):
         updated = update_provider(
             cfg,
@@ -212,7 +315,8 @@ async def patch_provider(provider_id: str, payload: ProviderUpdate) -> LLMConfig
 
 
 @router.delete("/providers/{provider_id}", response_model=LLMConfigView)
-async def remove_provider(provider_id: str) -> LLMConfigView:
+async def remove_provider(provider_id: str, user: CurrentUser) -> LLMConfigView:
+    _require_admin_in_multi_user(user)
     def _mut(cfg):
         n = delete_provider(cfg, provider_id)
         if n == 0 and not any(p.id == provider_id for p in cfg.providers):
@@ -224,7 +328,8 @@ async def remove_provider(provider_id: str) -> LLMConfigView:
 # ---------- Models ----------
 
 @router.post("/models", response_model=LLMConfigView)
-async def create_model(payload: ModelCreate) -> LLMConfigView:
+async def create_model(payload: ModelCreate, user: CurrentUser) -> LLMConfigView:
+    _require_admin_in_multi_user(user)
     def _mut(cfg):
         m = add_model(
             cfg,
@@ -240,7 +345,8 @@ async def create_model(payload: ModelCreate) -> LLMConfigView:
 
 
 @router.patch("/models/{model_id}", response_model=LLMConfigView)
-async def patch_model(model_id: str, payload: ModelUpdate) -> LLMConfigView:
+async def patch_model(model_id: str, payload: ModelUpdate, user: CurrentUser) -> LLMConfigView:
+    _require_admin_in_multi_user(user)
     def _mut(cfg):
         updated = update_model(
             cfg,
@@ -256,7 +362,8 @@ async def patch_model(model_id: str, payload: ModelUpdate) -> LLMConfigView:
 
 
 @router.delete("/models/{model_id}", response_model=LLMConfigView)
-async def remove_model(model_id: str) -> LLMConfigView:
+async def remove_model(model_id: str, user: CurrentUser) -> LLMConfigView:
+    _require_admin_in_multi_user(user)
     def _mut(cfg):
         if not delete_model(cfg, model_id):
             raise HTTPException(404, f"Model {model_id} not found")
@@ -267,8 +374,9 @@ async def remove_model(model_id: str) -> LLMConfigView:
 # ---------- Role assignments ----------
 
 @router.put("/roles", response_model=LLMConfigView)
-async def put_roles(payload: RoleAssignments) -> LLMConfigView:
+async def put_roles(payload: RoleAssignments, user: CurrentUser) -> LLMConfigView:
     """Set which model serves each role. Only the supplied roles are touched."""
+    _require_admin_in_multi_user(user)
     def _mut(cfg):
         for role, model_id in payload.assignments.items():
             if role not in ALL_ROLES:
@@ -286,24 +394,27 @@ async def put_roles(payload: RoleAssignments) -> LLMConfigView:
 # ---------- Tavily ----------
 
 @router.put("/tavily", response_model=LLMConfigView)
-async def put_tavily(payload: TavilyUpdate) -> LLMConfigView:
+async def put_tavily(payload: TavilyUpdate, user: CurrentUser) -> LLMConfigView:
+    _require_admin_in_multi_user(user)
     return _load_and_save(lambda cfg: set_tavily_key(cfg, payload.api_key))
 
 
 @router.put("/mineru", response_model=LLMConfigView)
-async def put_mineru(payload: MineruUpdate) -> LLMConfigView:
+async def put_mineru(payload: MineruUpdate, user: CurrentUser) -> LLMConfigView:
+    _require_admin_in_multi_user(user)
     return _load_and_save(
         lambda cfg: set_mineru_key(cfg, payload.api_key, payload.base_url)
     )
 
 
 @router.put("/smtp", response_model=LLMConfigView)
-async def put_smtp(payload: SmtpUpdate) -> LLMConfigView:
+async def put_smtp(payload: SmtpUpdate, user: CurrentUser) -> LLMConfigView:
     """Update SMTP settings for risk-warning email notifications (§4.5).
 
     All fields are optional — pass null to leave a field unchanged, empty
     string to clear it (for password/host/user/from_addr).
     """
+    _require_admin_in_multi_user(user)
     return _load_and_save(
         lambda cfg: set_smtp_config(
             cfg,
@@ -325,10 +436,21 @@ async def put_smtp(payload: SmtpUpdate) -> LLMConfigView:
 # can populate the API-key input field when the user clicks the eye button.
 # The masked preview is fine for "is it configured?" status display, but
 # users need the actual value to verify, copy, or migrate keys.
+#
+# In multi-user mode, only admins may call these endpoints — non-admin
+# users get 403 (their GET /settings already returns ``*_configured=False``
+# so the eye-toggle UI is hidden anyway).
+
+def _require_admin_in_multi_user(user: CurrentUser) -> None:
+    """Block non-admin users from secret-reveal endpoints in multi-user mode."""
+    if _is_multi_user_mode() and user.role != "admin":
+        raise HTTPException(403, "Admin access required to view secrets in multi-user mode")
+
 
 @router.get("/providers/{provider_id}/key", response_model=SecretReveal)
-def get_provider_key(provider_id: str) -> SecretReveal:
+def get_provider_key(provider_id: str, user: CurrentUser) -> SecretReveal:
     """Return the full API key for a provider (for the eye-toggle in the UI)."""
+    _require_admin_in_multi_user(user)
     cfg = load_config()
     for p in cfg.providers:
         if p.id == provider_id:
@@ -337,22 +459,25 @@ def get_provider_key(provider_id: str) -> SecretReveal:
 
 
 @router.get("/tavily/key", response_model=SecretReveal)
-def get_tavily_key() -> SecretReveal:
+def get_tavily_key(user: CurrentUser) -> SecretReveal:
     """Return the full Tavily API key."""
+    _require_admin_in_multi_user(user)
     cfg = load_config()
     return SecretReveal(value=cfg.tavily_api_key or None, configured=bool(cfg.tavily_api_key))
 
 
 @router.get("/mineru/key", response_model=SecretReveal)
-def get_mineru_key() -> SecretReveal:
+def get_mineru_key(user: CurrentUser) -> SecretReveal:
     """Return the full Mineru API key."""
+    _require_admin_in_multi_user(user)
     cfg = load_config()
     return SecretReveal(value=cfg.mineru_api_key or None, configured=bool(cfg.mineru_api_key))
 
 
 @router.get("/smtp/key", response_model=SecretReveal)
-def get_smtp_key() -> SecretReveal:
+def get_smtp_key(user: CurrentUser) -> SecretReveal:
     """Return the full SMTP password."""
+    _require_admin_in_multi_user(user)
     cfg = load_config()
     return SecretReveal(value=cfg.smtp_password or None, configured=bool(cfg.smtp_password))
 
@@ -360,13 +485,28 @@ def get_smtp_key() -> SecretReveal:
 # ---------- SMTP test ----------
 
 @router.post("/smtp/test", response_model=SmtpTestResult)
-def test_smtp(payload: SmtpTestRequest) -> SmtpTestResult:
+def test_smtp(payload: SmtpTestRequest, user: CurrentUser) -> SmtpTestResult:
     """Send a test email using the currently-configured SMTP settings.
 
     This lets the user verify their SMTP config (host/port/user/password/from)
     without waiting for a real risk event to trigger a notification.
+
+    Implementation notes
+    --------------------
+    * Uses an explicit ``ssl.create_default_context()`` with TLS 1.2+ —
+      Resend / Gmail / Outlook 365 all reject handshakes below TLS 1.2,
+      which manifests as ``SMTPServerDisconnected: Connection unexpectedly
+      closed`` when relying on ``smtplib``'s default context on some
+      systems (notably macOS with older Python builds).
+    * Each stage (connect / auth / send) is wrapped in its own try/except so
+      the user sees *which* step failed instead of a generic error.
+    * Resend-specific hint: the From address must use a verified domain —
+      the default ``notify@lifetree.local`` is always rejected.
     """
+    _require_admin_in_multi_user(user)
+
     import smtplib
+    import ssl
     from email.mime.text import MIMEText
     from email.utils import formataddr
 
@@ -386,6 +526,27 @@ def test_smtp(payload: SmtpTestRequest) -> SmtpTestResult:
     use_tls = smtp["use_tls"] if smtp["use_tls"] is not None else True
     use_ssl = smtp["use_ssl"] if smtp["use_ssl"] is not None else False
 
+    # Build a strict TLS context — required by Resend / Gmail / O365.
+    # ``create_default_context`` enables cert verification + hostname check
+    # by default; we additionally pin the minimum version to TLS 1.2 so
+    # legacy servers can't downgrade the handshake.
+    tls_ctx = ssl.create_default_context()
+    tls_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+
+    # Resend-specific hint: From address must be from a verified domain.
+    # ``onboarding@resend.dev`` is the only allowed test address for
+    # unverified accounts. We surface this proactively because Resend
+    # closes the connection on bad senders rather than returning a 550.
+    is_resend = "resend" in host.lower()
+    from_domain = from_addr.rsplit("@", 1)[-1].lower() if "@" in from_addr else ""
+    resend_from_hint = ""
+    if is_resend and from_domain in {"lifetree.local", "localhost", ""}:
+        resend_from_hint = (
+            " — Resend 要求 From 地址来自已验证的域名；"
+            "请在 SMTP 配置中将 from_addr 改为 onboarding@resend.dev "
+            "（测试用）或你已验证的域名邮箱（如 noreply@yourdomain.com）。"
+        )
+
     body = (
         "This is a test email from LifeTree.\n\n"
         "If you received this message, your SMTP configuration is working correctly.\n\n"
@@ -399,33 +560,289 @@ def test_smtp(payload: SmtpTestRequest) -> SmtpTestResult:
     msg["From"] = formataddr((sender_name, from_addr))
     msg["To"] = payload.to_addr
 
+    def _port_mismatch_hint(stage: str, exc: Exception) -> str:
+        """Best-effort hint for ``Connection unexpectedly closed``."""
+        s = str(exc).lower()
+        if "connection unexpectedly closed" not in s:
+            return ""
+        hint = ""
+        if use_ssl and port in (587, 25, 2587):
+            hint = (
+                " — 提示：SSL 通常使用端口 465，而非 587/25/2587。"
+                "请尝试切换为 TLS(STARTTLS) 或将端口改为 465。"
+            )
+        elif not use_ssl and port == 465:
+            hint = (
+                " — 提示：端口 465 通常需要 SSL，而非 STARTTLS。"
+                "请尝试启用 SSL 并关闭 TLS。"
+            )
+        elif not use_tls and not use_ssl:
+            hint = " — 提示：大多数 SMTP 服务器需要加密。请尝试启用 TLS 或 SSL。"
+        elif is_resend and stage == "connect":
+            hint = (
+                " — 提示：Resend 在 TLS 握手失败时会直接关闭连接。"
+                "请确认端口与 SSL/TLS 选项匹配（465+SSL 或 587+TLS），"
+                "并确保本机 Python/OpenSSL 支持 TLS 1.2+。"
+            )
+        return hint
+
+    # ---------- Connect ----------
     try:
         if use_ssl:
-            with smtplib.SMTP_SSL(host, port, timeout=10) as server:
-                if smtp_user:
-                    server.login(smtp_user, smtp_password)
-                server.sendmail(from_addr, [payload.to_addr], msg.as_string())
+            server = smtplib.SMTP_SSL(host, port, timeout=30, context=tls_ctx)
         else:
-            with smtplib.SMTP(host, port, timeout=10) as server:
-                if use_tls:
-                    server.starttls()
-                if smtp_user:
-                    server.login(smtp_user, smtp_password)
-                server.sendmail(from_addr, [payload.to_addr], msg.as_string())
-    except (smtplib.SMTPException, OSError) as exc:
-        return SmtpTestResult(ok=False, error=str(exc))
+            server = smtplib.SMTP(host, port, timeout=30)
+    except smtplib.SMTPServerDisconnected as exc:
+        return SmtpTestResult(
+            ok=False,
+            error=f"[connect] {exc}{_port_mismatch_hint('connect', exc)}{resend_from_hint}",
+        )
+    except (smtplib.SMTPException, OSError, ssl.SSLError) as exc:
+        return SmtpTestResult(ok=False, error=f"[connect] {exc}{resend_from_hint}")
+
+    # ---------- EHLO / STARTTLS / LOGIN / SEND ----------
+    try:
+        server.ehlo()
+        if not use_ssl and use_tls:
+            server.starttls(context=tls_ctx)
+            server.ehlo()
+        if smtp_user:
+            try:
+                server.login(smtp_user, smtp_password)
+            except smtplib.SMTPAuthenticationError as exc:
+                return SmtpTestResult(
+                    ok=False,
+                    error=(
+                        f"[auth] {exc}"
+                        + (
+                            " — 提示：Resend 的密码字段填 API key（re_ 开头），用户名填 'resend'。"
+                            if is_resend
+                            else ""
+                        )
+                    ),
+                )
+        try:
+            server.sendmail(from_addr, [payload.to_addr], msg.as_string())
+        except smtplib.SMTPRecipientsRefused as exc:
+            return SmtpTestResult(
+                ok=False,
+                error=(
+                    f"[send] 收件人被拒绝: {exc}"
+                    + (
+                        " — 提示：Resend 测试收件人也必须在已验证域名下，或使用 onboarding@resend.dev。"
+                        if is_resend
+                        else ""
+                    )
+                ),
+            )
+        except smtplib.SMTPSenderRefused as exc:
+            return SmtpTestResult(
+                ok=False,
+                error=(
+                    f"[send] 发件人被拒绝: {exc}"
+                    + (
+                        " — 提示：Resend 要求 From 地址来自已验证域名；"
+                        "onboarding@resend.dev 可用于未验证账户的测试。"
+                        if is_resend
+                        else ""
+                    )
+                ),
+            )
+    except smtplib.SMTPServerDisconnected as exc:
+        return SmtpTestResult(
+            ok=False,
+            error=f"[send] {exc}{_port_mismatch_hint('send', exc)}{resend_from_hint}",
+        )
+    except (smtplib.SMTPException, OSError, ssl.SSLError) as exc:
+        return SmtpTestResult(ok=False, error=f"[send] {exc}{resend_from_hint}")
+    finally:
+        try:
+            server.quit()
+        except Exception:
+            pass
+
     return SmtpTestResult(ok=True)
+
+
+# ---------- OAuth providers (admin-only) ----------
+#
+# Multi-user mode: admins configure generic OAuth2 providers (GitHub, Google,
+# GitLab, …) so users can sign in without a password. All endpoints here
+# require the ``admin`` role via the ``AdminUser`` dependency.
+
+class OAuthProviderCreate(BaseModel):
+    """Payload for POST /settings/oauth — add a new OAuth provider."""
+
+    name: str = Field(..., min_length=1, max_length=128)
+    client_id: str = Field("", description="OAuth client_id. Empty string = set later.")
+    client_secret: str = Field("", description="OAuth client_secret. Empty string = set later.")
+    authorize_url: str = Field("", description="Authorization endpoint URL.")
+    token_url: str = Field("", description="Token exchange endpoint URL.")
+    userinfo_url: str = Field("", description="User info endpoint URL.")
+    scopes: list[str] = Field(default_factory=list, description="OAuth scopes to request.")
+    redirect_uri: str = Field("", description="Callback URL configured at the provider.")
+    enabled: bool = True
+
+
+class OAuthProviderUpdate(BaseModel):
+    """Payload for PATCH /settings/oauth/{id}. All fields optional."""
+
+    name: str | None = None
+    client_id: str | None = Field(None, description="Empty string clears; null unchanged.")
+    client_secret: str | None = Field(
+        None, description="Empty string clears; null unchanged."
+    )
+    authorize_url: str | None = None
+    token_url: str | None = None
+    userinfo_url: str | None = None
+    scopes: list[str] | None = None
+    redirect_uri: str | None = None
+    enabled: bool | None = None
+
+
+class EmailVerificationUpdate(BaseModel):
+    """Payload for PUT /settings/email-verification."""
+
+    enabled: bool
+
+
+@router.get("/oauth", response_model=list[OAuthProviderView])
+def list_oauth_providers(admin: AdminUser) -> list[OAuthProviderView]:
+    """List all configured OAuth providers (masked — no client_secret)."""
+    return [
+        OAuthProviderView(
+            id=p.id,
+            name=p.name,
+            client_id=p.client_id,
+            client_id_configured=bool(p.client_id),
+            client_secret_configured=bool(p.client_secret),
+            authorize_url=p.authorize_url,
+            token_url=p.token_url,
+            userinfo_url=p.userinfo_url,
+            scopes=list(p.scopes),
+            redirect_uri=p.redirect_uri,
+            enabled=p.enabled,
+            created_at=p.created_at,
+        )
+        for p in get_oauth_providers()
+    ]
+
+
+@router.post("/oauth", response_model=OAuthProviderView, status_code=201)
+def create_oauth_provider(
+    admin: AdminUser, payload: OAuthProviderCreate
+) -> OAuthProviderView:
+    """Add a new OAuth provider."""
+    p = add_oauth_provider(
+        name=payload.name,
+        client_id=payload.client_id,
+        client_secret=payload.client_secret,
+        authorize_url=payload.authorize_url,
+        token_url=payload.token_url,
+        userinfo_url=payload.userinfo_url,
+        scopes=payload.scopes,
+        redirect_uri=payload.redirect_uri,
+        enabled=payload.enabled,
+    )
+    return OAuthProviderView(
+        id=p.id,
+        name=p.name,
+        client_id=p.client_id,
+        client_id_configured=bool(p.client_id),
+        client_secret_configured=bool(p.client_secret),
+        authorize_url=p.authorize_url,
+        token_url=p.token_url,
+        userinfo_url=p.userinfo_url,
+        scopes=list(p.scopes),
+        redirect_uri=p.redirect_uri,
+        enabled=p.enabled,
+        created_at=p.created_at,
+    )
+
+
+@router.patch("/oauth/{provider_id}", response_model=OAuthProviderView)
+def patch_oauth_provider(
+    admin: AdminUser, provider_id: str, payload: OAuthProviderUpdate
+) -> OAuthProviderView:
+    """Update an OAuth provider. Returns 404 if not found."""
+    p = update_oauth_provider(
+        provider_id,
+        name=payload.name,
+        client_id=payload.client_id,
+        client_secret=payload.client_secret,
+        authorize_url=payload.authorize_url,
+        token_url=payload.token_url,
+        userinfo_url=payload.userinfo_url,
+        scopes=payload.scopes,
+        redirect_uri=payload.redirect_uri,
+        enabled=payload.enabled,
+    )
+    if p is None:
+        raise HTTPException(404, f"OAuth provider {provider_id} not found")
+    return OAuthProviderView(
+        id=p.id,
+        name=p.name,
+        client_id=p.client_id,
+        client_id_configured=bool(p.client_id),
+        client_secret_configured=bool(p.client_secret),
+        authorize_url=p.authorize_url,
+        token_url=p.token_url,
+        userinfo_url=p.userinfo_url,
+        scopes=list(p.scopes),
+        redirect_uri=p.redirect_uri,
+        enabled=p.enabled,
+        created_at=p.created_at,
+    )
+
+
+@router.delete("/oauth/{provider_id}")
+def remove_oauth_provider(admin: AdminUser, provider_id: str) -> dict:
+    """Delete an OAuth provider. Returns 404 if not found."""
+    if not delete_oauth_provider(provider_id):
+        raise HTTPException(404, f"OAuth provider {provider_id} not found")
+    return {"ok": True}
+
+
+@router.get("/oauth/{provider_id}/secret", response_model=SecretReveal)
+def get_oauth_provider_secret(admin: AdminUser, provider_id: str) -> SecretReveal:
+    """Return the full client_secret for an OAuth provider (eye-toggle in UI)."""
+    p = get_oauth_provider_by_id(provider_id)
+    if p is None:
+        raise HTTPException(404, f"OAuth provider {provider_id} not found")
+    return SecretReveal(value=p.client_secret or None, configured=bool(p.client_secret))
+
+
+# ---------- Email verification toggle (admin-only) ----------
+
+@router.get("/email-verification", response_model=EmailVerificationUpdate)
+def get_email_verification_setting(admin: AdminUser) -> EmailVerificationUpdate:
+    """Return whether email verification is required for registration."""
+    return EmailVerificationUpdate(enabled=get_email_verification_enabled())
+
+
+@router.put("/email-verification", response_model=EmailVerificationUpdate)
+def put_email_verification_setting(
+    admin: AdminUser, payload: EmailVerificationUpdate
+) -> EmailVerificationUpdate:
+    """Enable or disable email verification for registration."""
+    set_email_verification_enabled(payload.enabled)
+    return EmailVerificationUpdate(enabled=payload.enabled)
 
 
 # ---------- Smoke tests ----------
 
 @router.post("/test/{role}", response_model=TestResult)
-async def test_role(role: Role) -> TestResult:
+async def test_role(role: Role, user: CurrentUser) -> TestResult:
     """Smoke-test the model configured for ``role``.
 
-    For chat / vision / embedding we call ``models.list`` on the OpenAI-compat
-    endpoint. For rerank we issue a 1-document rerank call.
+    Protected: the probe calls the upstream provider with the stored API
+    key, which would leak connectivity / quota status to non-admins in
+    multi-user mode.
     """
+    _require_admin_in_multi_user(user)
+
+    # For chat / vision / embedding we call ``models.list`` on the OpenAI-compat
+    # endpoint. For rerank we issue a 1-document rerank call.
     resolved = resolve_role(role)
     if resolved is None:
         return TestResult(ok=False, role=role, error=f"No model configured for role '{role}'")

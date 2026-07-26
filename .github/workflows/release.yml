@@ -1,0 +1,66 @@
+name: Create GitHub Release
+
+# Creates a GitHub Release (with notes from CHANGELOG.md) whenever a
+# ``v*`` tag is pushed. The Docker image build lives in
+# ``build-and-push.yml`` (also triggered by ``v*`` tags) — this workflow
+# only handles the Release object on GitHub's Releases page.
+#
+# Tag naming convention: ``vMAJOR.MINOR.PATCH`` (e.g. ``v0.1.0``).
+# The leading ``v`` is stripped when computing the version number used
+# to look up the CHANGELOG section.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write  # required by softprops/action-gh-release to create the release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so CHANGELOG is always available
+
+      - name: Extract version and changelog notes
+        id: notes
+        run: |
+          # Tag looks like "v0.1.0" — strip the leading "v".
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+
+          # Extract the section for this version from CHANGELOG.md.
+          # The section header looks like "## [0.1.0] - 2026-07-26".
+          # We capture everything from that header up to the next
+          # "## [" header (or end of file).
+          #
+          # awk flags:
+          #   -v tag="[$TAG]"  → match "## [0.1.0]"
+          #   When we see the matching header, start printing.
+          #   Stop at the next "## [" line that isn't ours.
+          NOTES=$(awk -v tag="[$TAG]" '
+            $0 ~ "^## " tag "\\]" { in_sec=1; print; next }
+            in_sec && /^## \[/ { in_sec=0; next }
+            in_sec { print }
+          ' CHANGELOG.md)
+
+          # If we didn't find a section, fall back to a generic message.
+          if [ -z "$NOTES" ]; then
+            NOTES="Release $TAG. See CHANGELOG.md for details."
+          fi
+
+          # Write to a file so multiline content survives the env var
+          # trip to the next step.
+          printf '%s' "$NOTES" > /tmp/release_notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: /tmp/release_notes.md
+          draft: false
+          prerelease: false
+          generate_release_notes: false

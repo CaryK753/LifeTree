@@ -90,6 +90,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - MINIO_ENDPOINT=minio:9000
+    volumes:
+      - backend_plugins:/app/plugins/user_uploaded
     restart: unless-stopped
 
   worker:
@@ -110,6 +112,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - MINIO_ENDPOINT=minio:9000
+    volumes:
+      - backend_plugins:/app/plugins/user_uploaded
     # No HTTP server — disable the image's curl-based healthcheck.
     healthcheck:
       disable: true
@@ -167,3 +171,4 @@ volumes:
   neo4j_data:
   redis_data:
   minio_data:
+  backend_plugins:

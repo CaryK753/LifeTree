@@ -21,9 +21,13 @@ from app.api.settings import router as settings_router
 from app.api.sse import router as sse_router
 from app.api.system import router as system_router
 from app.api.users import router as users_router
+from app.api.auth import router as auth_router
+from app.api.admin import router as admin_router
 
 api_router = APIRouter()
 
+api_router.include_router(auth_router)
+api_router.include_router(admin_router)
 api_router.include_router(users_router)
 api_router.include_router(goals_router)
 api_router.include_router(risk_factors_router)

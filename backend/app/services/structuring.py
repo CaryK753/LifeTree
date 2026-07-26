@@ -68,6 +68,7 @@ class StructuringService:
         publisher: str | None = None,
         published_at: datetime | None = None,
         user_upload_id: str | None = None,
+        user_id: str | None = None,
         skip_llm: bool = False,
     ) -> tuple[InformationSource, StructuredExtraction | None]:
         """Persist the source, then run LLM extraction.
@@ -86,6 +87,7 @@ class StructuringService:
             credibility=credibility,
             raw_text=text,
             user_upload_id=user_upload_id,
+            user_id=user_id,
         )
         self.db.add(source)
         self.db.flush()
@@ -167,6 +169,7 @@ class StructuringService:
 
             event = Event(
                 source_id=source.id,
+                user_id=user_id,
                 subject=atom.subject,
                 action=atom.action,
                 object=atom.object,

@@ -3,6 +3,10 @@
 Memories are the unbounded "remember this" channel — free-form facts the
 advisor LLM can write to during chat (via the `remember` tool) and the user
 can edit on the profile page.
+
+Multi-user isolation: all endpoints resolve the authenticated user via
+``CurrentUser`` and filter memories by ``user.id``. In single-user mode
+``CurrentUser`` falls back to the default user, so behavior is unchanged.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.tenant import get_default_user
+from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
 from app.models.memory import UserMemory
 from app.schemas.entities import (
@@ -23,18 +27,13 @@ from app.schemas.entities import (
 router = APIRouter(prefix="/memories", tags=["memories"])
 
 
-def _resolve_user(db: Session, user_id: str | None) -> str:
-    if user_id:
-        return user_id
-    return get_default_user(db).id
-
-
 @router.post("", response_model=UserMemoryRead, status_code=201)
 def create_memory(
-    payload: UserMemoryCreate, db: Session = Depends(get_db)
+    payload: UserMemoryCreate, user: CurrentUser, db: Session = Depends(get_db)
 ) -> UserMemory:
-    user_id = _resolve_user(db, payload.user_id)
-    mem = UserMemory(**payload.model_dump(exclude={"user_id"}), user_id=user_id)
+    # Always associate the memory with the authenticated user, ignoring
+    # any client-supplied user_id to prevent cross-user pollution.
+    mem = UserMemory(**payload.model_dump(exclude={"user_id"}), user_id=user.id)
     db.add(mem)
     db.commit()
     db.refresh(mem)
@@ -43,17 +42,17 @@ def create_memory(
 
 @router.get("", response_model=list[UserMemoryRead])
 def list_memories(
+    user: CurrentUser,
     category: str | None = None,
     limit: int = Query(200, ge=1, le=1000),
     db: Session = Depends(get_db),
 ) -> list[UserMemory]:
-    """List memories for the default user, newest first.
+    """List memories for the authenticated user, newest first.
 
     Optional ``category`` filter. Limited to 1000 rows — this is a profile
     page view, not a bulk export.
     """
-    user_id = _resolve_user(db, None)
-    stmt = select(UserMemory).where(UserMemory.user_id == user_id)
+    stmt = select(UserMemory).where(UserMemory.user_id == user.id)
     if category:
         stmt = stmt.where(UserMemory.category == category)
     stmt = stmt.order_by(UserMemory.importance.desc(), UserMemory.created_at.desc()).limit(limit)
@@ -62,12 +61,20 @@ def list_memories(
 
 @router.patch("/{memory_id}", response_model=UserMemoryRead)
 def update_memory(
-    memory_id: str, payload: UserMemoryUpdate, db: Session = Depends(get_db)
+    memory_id: str,
+    payload: UserMemoryUpdate,
+    user: CurrentUser,
+    db: Session = Depends(get_db),
 ) -> UserMemory:
     mem = db.get(UserMemory, memory_id)
     if mem is None:
         raise HTTPException(404, "Memory not found")
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    if mem.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "You do not have access to this memory")
+    # Prevent user_id reassignment.
+    updates = payload.model_dump(exclude_unset=True)
+    updates.pop("user_id", None)
+    for k, v in updates.items():
         setattr(mem, k, v)
     db.commit()
     db.refresh(mem)
@@ -75,9 +82,13 @@ def update_memory(
 
 
 @router.delete("/{memory_id}", status_code=204)
-def delete_memory(memory_id: str, db: Session = Depends(get_db)) -> None:
+def delete_memory(
+    memory_id: str, user: CurrentUser, db: Session = Depends(get_db)
+) -> None:
     mem = db.get(UserMemory, memory_id)
     if mem is None:
         raise HTTPException(404, "Memory not found")
+    if mem.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "You do not have access to this memory")
     db.delete(mem)
     db.commit()

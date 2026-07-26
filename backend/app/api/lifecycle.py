@@ -9,6 +9,10 @@ Exposes the decay service so the frontend can:
   - POST /lifecycle/sweep        → manually trigger auto-archive sweep
 
 Implements §4.8 of the project plan: knowledge half-life management.
+
+Multi-user isolation: all endpoints resolve the authenticated user via
+``CurrentUser`` and filter events by ``user.id``. In single-user mode
+``CurrentUser`` falls back to the default user, so behavior is unchanged.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
 from app.models.event import Event
 from app.schemas.api import EventRead
@@ -63,15 +68,25 @@ class HalfLifeUpdate(BaseModel):
     )
 
 
+def _check_event_owner(ev: Event, user: CurrentUser) -> None:
+    """Raise 403 if the event is not owned by the user (legacy NULL rows OK)."""
+    if ev.user_id is not None and ev.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "You do not have access to this event")
+
+
 @router.get("/distribution", response_model=DecayDistributionRead)
-def get_distribution(db: Session = Depends(get_db)) -> DecayDistributionRead:
-    """Aggregate decay distribution across all events."""
-    dist = DecayService(db).distribution()
+def get_distribution(
+    user: CurrentUser, db: Session = Depends(get_db)
+) -> DecayDistributionRead:
+    """Aggregate decay distribution for the user's events."""
+    uid = None if user.role == "admin" else user.id
+    dist = DecayService(db).distribution(user_id=uid)
     return DecayDistributionRead(**dist.to_dict())
 
 
 @router.get("/events", response_model=list[LifecycleEventRead])
 def list_lifecycle_events(
+    user: CurrentUser,
     status: StatusFilter | None = Query(
         None,
         description="Filter by decay status. Omit to list all.",
@@ -80,7 +95,8 @@ def list_lifecycle_events(
     db: Session = Depends(get_db),
 ) -> list[LifecycleEventRead]:
     """List events with their computed decay scores."""
-    rows = DecayService(db).list_events(status=status, limit=limit)
+    uid = None if user.role == "admin" else user.id
+    rows = DecayService(db).list_events(status=status, limit=limit, user_id=uid)
     out: list[LifecycleEventRead] = []
     for ev, score in rows:
         out.append(
@@ -94,13 +110,14 @@ def list_lifecycle_events(
 
 @router.post("/events/{event_id}/refresh", response_model=LifecycleEventRead)
 def refresh_event(
-    event_id: str, db: Session = Depends(get_db)
+    event_id: str, user: CurrentUser, db: Session = Depends(get_db)
 ) -> LifecycleEventRead:
     """Mark an event as freshly reviewed — resets its decay clock."""
     svc = DecayService(db)
     ev = svc.refresh(event_id)
     if ev is None:
         raise HTTPException(404, "Event not found")
+    _check_event_owner(ev, user)
     score = svc.score_event(ev)
     return LifecycleEventRead(
         event=EventRead.model_validate(ev, from_attributes=True),
@@ -110,13 +127,14 @@ def refresh_event(
 
 @router.post("/events/{event_id}/archive", response_model=LifecycleEventRead)
 def archive_event(
-    event_id: str, db: Session = Depends(get_db)
+    event_id: str, user: CurrentUser, db: Session = Depends(get_db)
 ) -> LifecycleEventRead:
     """Archive an event — excludes it from active reasoning/dashboard."""
     svc = DecayService(db)
     ev = svc.archive(event_id)
     if ev is None:
         raise HTTPException(404, "Event not found")
+    _check_event_owner(ev, user)
     score = svc.score_event(ev)
     return LifecycleEventRead(
         event=EventRead.model_validate(ev, from_attributes=True),
@@ -128,6 +146,7 @@ def archive_event(
 def update_half_life(
     event_id: str,
     body: HalfLifeUpdate,
+    user: CurrentUser,
     db: Session = Depends(get_db),
 ) -> LifecycleEventRead:
     """Override the half-life (days) for a specific event."""
@@ -135,6 +154,7 @@ def update_half_life(
     ev = svc.set_half_life(event_id, body.half_life_days)
     if ev is None:
         raise HTTPException(404, "Event not found")
+    _check_event_owner(ev, user)
     score = svc.score_event(ev)
     return LifecycleEventRead(
         event=EventRead.model_validate(ev, from_attributes=True),
@@ -143,7 +163,7 @@ def update_half_life(
 
 
 @router.post("/sweep")
-def sweep_expired(db: Session = Depends(get_db)) -> dict:
+def sweep_expired(user: CurrentUser, db: Session = Depends(get_db)) -> dict:
     """Manually trigger the auto-archive sweep.
 
     Normally invoked by the daily Celery beat task; exposed here so the

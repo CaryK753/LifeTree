@@ -7,6 +7,7 @@ import { ToastProvider } from "@/components/ui/toast";
 import { RegisterSW } from "@/components/pwa/register-sw";
 import { SSEProvider } from "@/components/sse/sse-provider";
 import { ThemeProvider } from "@/components/theme/theme-provider";
+import { AuthGate } from "@/components/auth/auth-gate";
 import { I18nProvider } from "@/lib/i18n/provider";
 import {
   DEFAULT_LOCALE,
@@ -86,17 +87,35 @@ export default async function RootLayout({
     // class on <html> before React hydrates, so the server-rendered HTML
     // won't match. This is the documented next-themes setup.
     <html lang={locale} suppressHydrationWarning>
+      <head>
+        {/* Inline PWA-detection script — runs synchronously BEFORE first
+            paint so the ``html.pwa`` class is set before any CSS applies.
+            This prevents a flash of the persistent sidebar rail on PWA
+            launch: ``html.pwa .sidebar-rail { display: none !important }``
+            kicks in immediately, hiding the rail that the SSR-rendered
+            ``<Sidebar>`` would otherwise show. Without this, the rail
+            would be visible until React hydrates and ``useIsPwa`` flips
+            to the drawer branch. Covers both ``display-mode`` (Android/
+            desktop PWA) and ``navigator.standalone`` (iOS PWA). */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var d=false;try{d=new URL(window.location.href).searchParams.get('pwa')==='1';}catch(e){}if(!d){var modes=['standalone','minimal-ui','window-controls-overlay','fullscreen'];for(var i=0;i<modes.length;i++){try{if(window.matchMedia('(display-mode: '+modes[i]+')').matches){d=true;break;}}catch(e){}}}if(!d&&window.navigator&&window.navigator.standalone===true){d=true;}if(d){document.documentElement.classList.add('pwa');}if(window.innerWidth<1024){document.documentElement.classList.add('drawer-mode');}}catch(e){}})();`,
+          }}
+        />
+      </head>
       <body className={`${inter.variable} font-sans antialiased`}>
         <ThemeProvider>
           <I18nProvider>
             <ToastProvider>
               <SSEProvider>
-                <div className="flex h-screen overflow-hidden">
-                  <Sidebar />
-                  <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden pt-14 lg:pt-0 safe-top">
-                    {children}
-                  </main>
-                </div>
+                <AuthGate>
+                  <div className="flex h-screen overflow-hidden">
+                    <Sidebar />
+                    <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden safe-top main-shell">
+                      {children}
+                    </main>
+                  </div>
+                </AuthGate>
                 <RegisterSW />
               </SSEProvider>
             </ToastProvider>

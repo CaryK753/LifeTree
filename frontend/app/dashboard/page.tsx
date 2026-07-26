@@ -32,11 +32,12 @@ import {
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
 import type { DashboardSummary } from "@/lib/api";
+import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 
 export default function DashboardPage() {
   const t = useT();
   const { data: profile } = useUserProfile();
-  const { data: goals, isLoading: goalsLoading } = useGoals();
+  const { data: goals, isLoading: goalsLoading, error: goalsError } = useGoals();
 
   const statusLabel = (s?: string) => (s ? t(`status.${s}`) : "—");
 
@@ -52,7 +53,7 @@ export default function DashboardPage() {
   }, [profile, goals, selectedId]);
 
   const goalId = selectedId;
-  const { data: dashboard, isLoading } = useDashboard(goalId);
+  const { data: dashboard, isLoading, error: dashboardError } = useDashboard(goalId);
 
   const goalList = (goals ?? []) as any[];
   const activeGoal = goalList.find((g) => g.id === goalId);
@@ -62,6 +63,7 @@ export default function DashboardPage() {
       <header className="flex items-end justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold text-zinc-100 flex items-center gap-2">
+            <SidebarToggleButton />
             <Gauge className="h-6 w-6 text-brand-400" />
             {t("dashboard.title")}
           </h1>
@@ -97,27 +99,47 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      {goalsLoading || (!goalId && !goalList.length) ? (
+      {goalsLoading && !goalList.length ? (
         <Card>
           <CardContent className="py-10 text-center text-sm text-zinc-500 flex items-center justify-center gap-2">
             <Loader2 className="h-4 w-4 animate-spin" /> {t("dashboard.loading")}
           </CardContent>
         </Card>
-      ) : !goalId ? (
+      ) : goalsError && !goalList.length ? (
+        <Card>
+          <CardContent className="py-10 text-center text-sm text-red-500 dark:text-red-400 space-y-2">
+            <p>{t("dashboard.loadFailed")}</p>
+            <p className="text-xs text-zinc-400 dark:text-zinc-500">{String(goalsError?.message ?? goalsError)}</p>
+          </CardContent>
+        </Card>
+      ) : !goalList.length ? (
         <EmptyGoalState />
-      ) : isLoading || !dashboard ? (
+      ) : !goalId ? (
+        <Card>
+          <CardContent className="py-10 text-center text-sm text-zinc-500 flex items-center justify-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" /> {t("dashboard.loading")}
+          </CardContent>
+        </Card>
+      ) : isLoading && !dashboard ? (
         <Card>
           <CardContent className="py-10 text-center text-sm text-zinc-500 flex items-center justify-center gap-2">
             <Loader2 className="h-4 w-4 animate-spin" /> {t("dashboard.loadingDashboard")}
           </CardContent>
         </Card>
-      ) : (
+      ) : dashboardError && !dashboard ? (
+        <Card>
+          <CardContent className="py-10 text-center text-sm text-red-500 dark:text-red-400 space-y-2">
+            <p>{t("dashboard.loadFailed")}</p>
+            <p className="text-xs text-zinc-400 dark:text-zinc-500">{String(dashboardError?.message ?? dashboardError)}</p>
+          </CardContent>
+        </Card>
+      ) : dashboard ? (
         <DashboardBody
           dashboard={dashboard}
           goalTitle={activeGoal?.title ?? dashboard.goal_title ?? "—"}
           statusLabel={statusLabel}
         />
-      )}
+      ) : null}
     </div>
   );
 }

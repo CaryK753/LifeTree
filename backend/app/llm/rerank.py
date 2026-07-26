@@ -76,12 +76,12 @@ def rerank(
         raise RerankError("No rerank model configured. Add one in Settings.")
 
     protocol = resolved.provider.protocol
-    if protocol == "bailian":
+    if protocol in ("bailian", "bailian_rerank"):
         return _rerank_bailian(resolved, query, documents, top_n, return_documents)
     # Future: cohere / jina / voyage
     raise RerankError(
         f"Rerank is not supported for provider protocol '{protocol}'. "
-        "Use a Bailian (DashScope) provider."
+        "Use a Bailian (DashScope) provider or the dedicated Bailian Rerank provider."
     )
 
 
@@ -207,13 +207,25 @@ def _rerank_bailian(
             f"(request_id={data.get('request_id')})"
         )
 
-    if "output" not in data or "results" not in data.get("output", {}):
+    # Two response shapes exist depending on which endpoint was called:
+    #
+    # 1. Native endpoint (/api/v1/services/rerank/text-rerank/text-rerank):
+    #    {"output": {"results": [...]}, "usage": {...}, "request_id": "..."}
+    #
+    # 2. Compatible endpoint (/compatible-api/v1/reranks, used by qwen3-rerank):
+    #    {"object": "list", "results": [...], "model": "...", "id": "...", "usage": {...}}
+    #    NOTE: no ``output`` wrapper, no ``request_id``. The results array is
+    #    at the top level. This is the OpenAI-style rerank response shape.
+    if "output" in data and "results" in data.get("output", {}):
+        results = data["output"]["results"]
+    elif "results" in data and isinstance(data["results"], list):
+        results = data["results"]
+    else:
         req_id = data.get("request_id")
         raise RerankError(
             f"Bailian rerank unexpected response (request_id={req_id}): {str(data)[:300]}"
         )
 
-    results = data["output"]["results"]
     out: list[dict[str, Any]] = []
     for r in results:
         out.append(

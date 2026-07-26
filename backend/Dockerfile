@@ -61,6 +61,13 @@ COPY --chown=appuser:appuser alembic.ini ./
 COPY --chown=appuser:appuser plugins ./plugins
 COPY --chown=appuser:appuser scripts ./scripts
 
+# Create the user_uploaded plugins directory. This is the mount point
+# for the shared backend_plugins volume in docker-compose.yml — must
+# exist before the volume is mounted so ownership is correct.
+RUN mkdir -p /app/plugins/user_uploaded && \
+    touch /app/plugins/user_uploaded/__init__.py && \
+    chown -R appuser:appuser /app/plugins/user_uploaded
+
 # Entrypoint runs Alembic migrations before handing off to CMD.
 COPY --chown=appuser:appuser scripts/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

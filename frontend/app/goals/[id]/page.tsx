@@ -21,6 +21,7 @@ import { api, type GoalStatus } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { useT } from "@/lib/i18n/provider";
 import { mutate } from "swr";
+import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 
 export default function GoalDetailPage({
   params,
@@ -87,7 +88,10 @@ export default function GoalDetailPage({
     <div className="p-4 sm:p-6 lg:p-8 space-y-6 animate-fade-in">
       <header className="space-y-2">
         <div className="flex items-start justify-between gap-3 flex-wrap">
-          <h1 className="text-2xl font-semibold text-zinc-100">{goalTitle}</h1>
+          <h1 className="text-2xl font-semibold text-zinc-100 flex items-center gap-2">
+            <SidebarToggleButton />
+            {goalTitle}
+          </h1>
           <div className="flex items-center gap-2 shrink-0">
             {/* Quick "mark achieved" / "reactivate" shortcuts */}
             {goalStatus && goalStatus !== "achieved" && (

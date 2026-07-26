@@ -43,6 +43,7 @@ import { useI18n, useT } from "@/lib/i18n/provider";
 import type { Locale } from "@/lib/i18n/messages";
 import { formatDistanceToNow } from "date-fns";
 import { zhCN, zhTW, enUS, es, de, fr as frLocale } from "date-fns/locale";
+import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 
 type SeverityFilter = "all" | NotificationSeverity;
 type ReadFilter = "all" | "unread" | "read";
@@ -315,20 +316,9 @@ export default function NotificationsPage() {
       <header className="flex items-end justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold text-zinc-100 flex items-center gap-2">
+            <SidebarToggleButton />
             <Bell className="h-6 w-6 text-brand-600 dark:text-brand-400" />
             {t("notifications.title")}
-            {/* Real-time indicator — a soft pulsing dot signals the page
-                is wired up for live SSE updates. */}
-            <span
-              className="inline-flex items-center gap-1.5 ml-1 text-[10px] font-normal text-zinc-500 dark:text-zinc-400 px-2 py-0.5 rounded-full border border-white/10 bg-white/[0.03]"
-              title={t("notifications.realTimeConnected")}
-            >
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="absolute inline-flex h-full w-full rounded-full bg-brand-400 opacity-75 animate-ping" />
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-brand-500" />
-              </span>
-              {t("notifications.realTimeConnected")}
-            </span>
             {unreadCount > 0 && (
               <span className="ml-1.5 text-xs font-medium px-2 py-0.5 rounded-full bg-brand-500/15 text-brand-700 dark:text-brand-300 border border-brand-500/30">
                 {t("notifications.unreadBadge", { n: unreadCount })}

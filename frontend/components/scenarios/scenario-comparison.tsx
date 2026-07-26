@@ -5,12 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
-import { Loader2, Play, GitBranch, X } from "lucide-react";
+import { Loader2, Play, GitBranch, GitMerge, X } from "lucide-react";
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { formatPercent, formatDate } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
 import { useToast } from "@/components/ui/toast";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 interface Scenario {
   id: string;
@@ -39,7 +40,9 @@ interface Props {
 export function ScenarioComparison({ scenarios, onRerun }: Props) {
   const t = useT();
   const toast = useToast();
+  const { confirm, ConfirmRoot } = useConfirm();
   const [running, setRunning] = useState<string | null>(null);
+  const [mergingId, setMergingId] = useState<string | null>(null);
   const [branchingId, setBranchingId] = useState<string | null>(null);
   const [branchName, setBranchName] = useState("");
   const [branching, setBranching] = useState(false);
@@ -75,6 +78,39 @@ export function ScenarioComparison({ scenarios, onRerun }: Props) {
     }
   }
 
+  async function handleMerge(s: Scenario) {
+    if (!s.parent_scenario_id) {
+      toast({
+        title: t("scenarios.toast.mergeFailed"),
+        description: t("scenarios.toast.noParent"),
+        variant: "warning",
+      });
+      return;
+    }
+    const ok = await confirm({
+      title: t("scenarioComparison.merge"),
+      description: t("scenarioComparison.mergeHint"),
+      confirmLabel: t("scenarioComparison.merge"),
+      cancelLabel: t("common.cancel"),
+    });
+    if (!ok) return;
+    setMergingId(s.id);
+    try {
+      await api.mergeScenario(s.id);
+      toast({ title: t("scenarios.toast.merged"), variant: "success" });
+      onRerun?.();
+    } catch (e: any) {
+      const detail = (e as { details?: { detail?: string } })?.details?.detail;
+      toast({
+        title: t("scenarios.toast.mergeFailed"),
+        description: detail ?? e?.message,
+        variant: "error",
+      });
+    } finally {
+      setMergingId(null);
+    }
+  }
+
   if (scenarios.length === 0) {
     return (
       <Card>
@@ -94,6 +130,8 @@ export function ScenarioComparison({ scenarios, onRerun }: Props) {
         const p90 = s.success_probability?.p90;
         const isRunning = running === s.id;
         const isBranching = branchingId === s.id;
+        const isMerging = mergingId === s.id;
+        const canMerge = !!s.parent_scenario_id && s.status !== "merged" && s.status !== "closed";
 
         return (
           <Card key={s.id} className="flex flex-col">
@@ -223,10 +261,27 @@ export function ScenarioComparison({ scenarios, onRerun }: Props) {
                   <span className="ml-1">{t("scenarioComparison.branch")}</span>
                 </Button>
               )}
+              {canMerge && !isBranching && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={isMerging || branching}
+                  onClick={() => handleMerge(s)}
+                  title={t("scenarioComparison.mergeHint")}
+                >
+                  {isMerging ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <GitMerge className="h-3 w-3" />
+                  )}
+                  <span className="ml-1">{t("scenarioComparison.merge")}</span>
+                </Button>
+              )}
             </div>
           </Card>
         );
       })}
+      {ConfirmRoot}
     </div>
   );
 }

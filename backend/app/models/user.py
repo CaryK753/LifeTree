@@ -32,6 +32,18 @@ class UserProfile(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     # simplicity. Keeps the column narrow (Text) and avoids MinIO coupling.
     avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # ---------- Multi-user auth fields ----------
+    # bcrypt-hashed password. Null for legacy / pre-existing users created
+    # before auth was enabled — those users can't log in until an admin
+    # sets a password (or they go through a reset flow).
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # "admin" | "user". Admins can access /admin/* endpoints and manage
+    # global config. Role is also enforced via env override
+    # (LIFETREE_ADMIN_USER_IDS) so a user can be promoted without DB edits.
+    role: Mapped[str] = mapped_column(String(16), default="user", server_default="user")
+    # Whether the user account is enabled. Disabled users can't log in.
+    is_enabled: Mapped[bool] = mapped_column(default=True, server_default="true")
+
     # Demographics (free-form JSONB to support multiple scenarios)
     demographics: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
 

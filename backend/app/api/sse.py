@@ -3,8 +3,9 @@
 Clients subscribe with `GET /api/v1/sse?scenario_id=...`. The server emits
 `event: scenario_run`, `event: risk_alert`, etc.
 
-In single-user mode the ``user_id`` query param is optional and defaults to
-the default user; the Redis channel is ``lifetree:risk:{user_id}``.
+Multi-user isolation: the SSE channel is always keyed by the authenticated
+user's id — the ``user_id`` query param is ignored. In single-user mode
+``CurrentUser`` falls back to the default user.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.core.tenant import get_default_user
+from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
 from app.db.redis import get_redis
 
@@ -29,18 +30,18 @@ router = APIRouter(prefix="/sse", tags=["sse"])
 
 @router.get("")
 async def sse_stream(
+    user: CurrentUser,
     scenario_id: str | None = Query(None),
-    user_id: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
-    """Stream server-sent events for the default user.
+    """Stream server-sent events for the authenticated user.
 
     Uses Redis pub/sub channels:
       - `lifetree:risk:{user_id}` — risk alerts
       - `lifetree:scenario:{scenario_id}` — run progress (if scenario_id given)
     """
     redis = get_redis()
-    resolved_user_id = user_id or get_default_user(db).id
+    resolved_user_id = user.id
     channels = [f"lifetree:risk:{resolved_user_id}"]
     if scenario_id:
         channels.append(f"lifetree:scenario:{scenario_id}")

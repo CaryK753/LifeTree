@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
+from app.core.tenant import CurrentUser
 from app.db.minio import ensure_minio_bucket, get_minio_client
 from app.db.postgres import get_db
 from app.models.event import Event
@@ -26,11 +27,12 @@ router = APIRouter(prefix="/ingest", tags=["ingest"])
 
 @router.post("/text", response_model=IngestTextResponse)
 def ingest_text(
-    payload: IngestTextRequest, db: Session = Depends(get_db)
+    payload: IngestTextRequest, user: CurrentUser, db: Session = Depends(get_db)
 ) -> IngestTextResponse:
     """Run raw text through the structuring pipeline."""
     return _run_ingest(
         db=db,
+        user=user,
         text=payload.text,
         title=payload.title,
         source_kind=payload.source_kind,
@@ -44,6 +46,7 @@ def ingest_text(
 
 @router.post("/upload", response_model=IngestTextResponse)
 async def ingest_upload(
+    user: CurrentUser,
     file: UploadFile = File(...),
     title: str = Form(""),
     source_kind: str = Form("user_upload"),
@@ -91,6 +94,7 @@ async def ingest_upload(
         # Still create a source so the user sees the upload, but mark skip_llm
         return _run_ingest(
             db=db,
+            user=user,
             text=parsed.warning or "(空文本)",
             title=final_title,
             source_kind="user_upload",
@@ -102,6 +106,7 @@ async def ingest_upload(
 
     return _run_ingest(
         db=db,
+        user=user,
         text=parsed.text,
         title=final_title,
         source_kind=source_kind,
@@ -117,6 +122,7 @@ async def ingest_upload(
 def _run_ingest(
     *,
     db: Session,
+    user: CurrentUser,
     text: str,
     title: str,
     source_kind: str,
@@ -136,6 +142,7 @@ def _run_ingest(
         publisher=publisher,
         published_at=published_at,
         user_upload_id=user_upload_id,
+        user_id=user.id,
         skip_llm=skip_llm,
     )
 

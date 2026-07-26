@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
 from app.models.event import Event, InformationSource
 from app.models.goal import Goal, Pathway, RiskFactor
@@ -36,11 +37,18 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
 @router.get("/{goal_id}", response_model=DashboardSummary)
-def get_dashboard(goal_id: str, db: Session = Depends(get_db)) -> DashboardSummary:
+def get_dashboard(
+    goal_id: str, user: CurrentUser, db: Session = Depends(get_db)
+) -> DashboardSummary:
     """Compose the goal compass dashboard payload."""
     goal = db.get(Goal, goal_id)
     if goal is None:
         raise HTTPException(404, "Goal not found")
+    # Enforce per-user isolation: only the goal's owner (or an admin) may
+    # view its dashboard. In single-user mode CurrentUser falls back to
+    # the default user, so this is backward compatible.
+    if goal.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "You do not have access to this goal")
 
     # ---- Goal fields (so the compass card can render without a second fetch) ----
     goal_title = goal.title
@@ -195,7 +203,7 @@ def get_dashboard(goal_id: str, db: Session = Depends(get_db)) -> DashboardSumma
     # Count trailing days (ending today, in user's local timezone-ish UTC) on
     # which the user had ANY activity: scenario runs, notifications, or events
     # they ingested. This is the "连续规划天数" positive-progress signal.
-    consecutive_planning_days = _compute_consecutive_planning_days(db, goal_id)
+    consecutive_planning_days = _compute_consecutive_planning_days(db, goal_id, user.id)
 
     return DashboardSummary(
         goal_id=goal_id,
@@ -221,25 +229,20 @@ def get_dashboard(goal_id: str, db: Session = Depends(get_db)) -> DashboardSumma
     )
 
 
-def _compute_consecutive_planning_days(db: Session, goal_id: str) -> int:
+def _compute_consecutive_planning_days(
+    db: Session, goal_id: str, user_id: str
+) -> int:
     """Count the trailing streak of UTC days with any user activity.
 
     Activity sources (union by day):
     - ScenarioRun rows for scenarios under this goal
-    - NotificationLog rows for the default user
+    - NotificationLog rows for the given user
     - Event rows (any user event counts as engagement)
 
     We look back up to 365 days; if today has no activity yet, the streak
     still counts starting from yesterday so users aren't penalized for the
     current day not having fired a cron yet.
     """
-    from app.core.tenant import get_default_user
-
-    try:
-        user = get_default_user(db)
-        user_id = user.id
-    except Exception:  # noqa: BLE001
-        return 0
 
     # Gather all relevant timestamps' UTC dates.
     horizon = datetime.now(timezone.utc) - timedelta(days=365)

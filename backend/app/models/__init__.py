@@ -45,6 +45,7 @@ from app.models.user import (
     UserProfile,
     UserUpload,
 )
+from app.models.user_plugin import UserPlugin
 
 __all__ = [
     # Goal ontology
@@ -72,6 +73,7 @@ __all__ = [
     "UserUpload",
     "RiskTolerance",
     "UserMemory",
+    "UserPlugin",
     # Notifications / risk
     "NotificationLog",
     "NotificationChannel",

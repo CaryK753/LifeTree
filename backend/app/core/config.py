@@ -68,6 +68,37 @@ class Settings(BaseSettings):
     smtp_password: SecretStr = SecretStr("")
     smtp_from: str = "notify@lifetree.local"
 
+    # ---------- Plugins ----------
+    # Directory where user-uploaded plugin .py files are stored.
+    # Relative to the backend working directory; created on demand.
+    user_plugins_dir: str = "plugins/user_uploaded"
+
+    # ---------- Auth (multi-user) ----------
+    # Comma-separated list of user IDs that should be promoted to admin.
+    # Set in .env, e.g. LIFETREE_ADMIN_USER_IDS=00000000-0000-0000-0000-000000000001,abc-...
+    # These users gain admin role on next login / request regardless of their DB role.
+    lifetree_admin_user_ids: str = ""
+
+    # JWT access token lifetime (minutes). Short-lived; refreshed via /auth/refresh.
+    auth_access_token_ttl_minutes: int = 60 * 24  # 24h
+    # JWT refresh token lifetime (days). Long-lived; stored client-side.
+    auth_refresh_token_ttl_days: int = 30
+
+    # Usage mode: ``single`` (self-use, one admin user, no login required)
+    # or ``multi`` (multi-user, login required, admin promotes users via
+    # LIFETREE_ADMIN_USER_IDS). Defaults to ``single`` so existing
+    # deployments keep working. The runtime value lives in DB
+    # (``app_config.use_mode``); this env var only seeds the initial value
+    # at first boot — afterwards the admin can switch modes from the
+    # settings UI.
+    lifetree_use_mode: Literal["single", "multi"] = "single"
+
+    # When True, the legacy default-user fallback is enabled: requests
+    # without a Bearer token resolve to DEFAULT_USER_ID. This lets existing
+    # single-user deployments keep working during the migration. Set to
+    # False once all clients send tokens.
+    auth_allow_default_user_fallback: bool = True
+
     # ---------- Computed ----------
     @property
     def postgres_dsn(self) -> str:
@@ -95,6 +126,11 @@ class Settings(BaseSettings):
     @property
     def llm_configured(self) -> bool:
         return bool(self.llm_api_key.get_secret_value()) and bool(self.llm_base_url)
+
+    @property
+    def admin_user_ids(self) -> set[str]:
+        """Return the set of user IDs promoted to admin via env var."""
+        return {uid.strip() for uid in self.lifetree_admin_user_ids.split(",") if uid.strip()}
 
 
 @lru_cache(maxsize=1)

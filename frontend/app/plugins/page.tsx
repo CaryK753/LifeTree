@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useSWRConfig } from "swr";
 import { usePlugins } from "@/lib/hooks";
 import { api, type PluginManifest, type PluginRunResult } from "@/lib/api";
 import {
@@ -14,6 +15,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogClose,
+} from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 import {
   Plug,
@@ -24,22 +34,34 @@ import {
   ChevronDown,
   ChevronRight,
   Tag,
+  Upload,
+  Trash2,
+  Power,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
+import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 
 export default function PluginsPage() {
   const t = useT();
   const { data: plugins, isLoading } = usePlugins();
+  const [uploadOpen, setUploadOpen] = useState(false);
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-6 animate-fade-in">
-      <header>
-        <h1 className="text-2xl font-semibold text-zinc-100 flex items-center gap-2">
-          <Plug className="h-6 w-6 text-brand-400" />
-          {t("plugins.title")}
-        </h1>
-        <p className="text-sm text-zinc-500 mt-1">{t("plugins.subtitle")}</p>
+      <header className="flex items-start justify-between gap-2">
+        <div>
+          <h1 className="text-2xl font-semibold text-zinc-100 flex items-center gap-2">
+            <SidebarToggleButton />
+            <Plug className="h-6 w-6 text-brand-400" />
+            {t("plugins.title")}
+          </h1>
+          <p className="text-sm text-zinc-500 mt-1">{t("plugins.subtitle")}</p>
+        </div>
+        <Button onClick={() => setUploadOpen(true)} variant="outline" size="sm">
+          <Upload className="h-4 w-4 mr-1.5" />
+          {t("plugins.upload.button")}
+        </Button>
       </header>
 
       {isLoading && (
@@ -65,7 +87,7 @@ export default function PluginsPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {plugins?.map((p) => (
-          <PluginCard key={p.id} plugin={p} />
+          <PluginCard key={`${p.source ?? "builtin"}-${p.id}`} plugin={p} />
         ))}
       </div>
 
@@ -103,18 +125,197 @@ export default function PluginsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <UploadPluginDialog open={uploadOpen} onOpenChange={setUploadOpen} />
     </div>
+  );
+}
+
+function UploadPluginDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const t = useT();
+  const toast = useToast();
+  const { mutate } = useSWRConfig();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [overwrite, setOverwrite] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<
+    { kind: "error" | "success"; message: string } | null
+  >(null);
+
+  function reset() {
+    setFile(null);
+    setOverwrite(false);
+    setFeedback(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0] ?? null;
+    setFeedback(null);
+    if (f && !f.name.endsWith(".py")) {
+      setFeedback({
+        kind: "error",
+        message: t("plugins.upload.invalidExtension"),
+      });
+      setFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    setFile(f);
+  }
+
+  async function handleSubmit() {
+    if (!file) return;
+    setBusy(true);
+    setFeedback(null);
+    try {
+      const r = await api.uploadPlugin(file, overwrite);
+      if (r.ok) {
+        toast({
+          title: t("plugins.upload.success"),
+          description: r.plugin_id ?? file.name,
+          variant: "success",
+        });
+        await mutate("plugins");
+        reset();
+        onOpenChange(false);
+      } else {
+        const msg = r.error ?? t("plugins.upload.failed");
+        setFeedback({ kind: "error", message: msg });
+        toast({
+          title: t("plugins.upload.failed"),
+          description: msg,
+          variant: "error",
+        });
+      }
+    } catch (e: any) {
+      const msg = e?.message ?? t("plugins.upload.failed");
+      setFeedback({ kind: "error", message: msg });
+      toast({
+        title: t("plugins.upload.failed"),
+        description: msg,
+        variant: "error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!busy) {
+          onOpenChange(v);
+          if (!v) reset();
+        }
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("plugins.upload.dialogTitle")}</DialogTitle>
+          <DialogDescription>
+            {t("plugins.upload.dropzone")}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          <div
+            className={cn(
+              "border border-dashed border-white/15 rounded-md p-4 text-center cursor-pointer hover:bg-white/5 transition-colors",
+              file && "border-brand-500/40 bg-brand-500/5"
+            )}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".py"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            {file ? (
+              <div className="text-sm text-zinc-200 font-mono">{file.name}</div>
+            ) : (
+              <div className="text-sm text-zinc-500">
+                {t("plugins.upload.dropzone")}
+              </div>
+            )}
+            <div className="text-[10px] text-zinc-600 mt-1">
+              .py — {t("plugins.upload.dropzone")}
+            </div>
+          </div>
+
+          <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={overwrite}
+              onChange={(e) => setOverwrite(e.target.checked)}
+              className="accent-brand-500"
+            />
+            {t("plugins.upload.overwrite")}
+          </label>
+
+          {feedback && (
+            <div
+              className={cn(
+                "rounded-md border p-2 text-xs",
+                feedback.kind === "error"
+                  ? "border-red-500/30 bg-red-500/5 text-red-300"
+                  : "border-emerald-500/30 bg-emerald-500/5 text-emerald-300"
+              )}
+            >
+              {feedback.message}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="ghost" size="sm" disabled={busy}>
+              {t("common.cancel")}
+            </Button>
+          </DialogClose>
+          <Button onClick={handleSubmit} disabled={!file || busy} size="sm">
+            {busy ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                {t("common.loading")}
+              </>
+            ) : (
+              <>
+                <Upload className="h-3.5 w-3.5 mr-1" />
+                {t("plugins.upload.submit")}
+              </>
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
 function PluginCard({ plugin }: { plugin: PluginManifest }) {
   const t = useT();
+  const { mutate } = useSWRConfig();
+  const toast = useToast();
   const [expanded, setExpanded] = useState(false);
   const [params, setParams] = useState<Record<string, string>>({});
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PluginRunResult | null>(null);
-  const toast = useToast();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [toggling, setToggling] = useState(false);
+
+  const isUser = plugin.source === "user";
+  const enabled = plugin.enabled !== false; // builtin or user-enabled
 
   function setParam(name: string, value: string) {
     setParams((prev) => ({ ...prev, [name]: value }));
@@ -180,6 +381,53 @@ function PluginCard({ plugin }: { plugin: PluginManifest }) {
     }
   }
 
+  async function handleToggle() {
+    if (!isUser) return;
+    setToggling(true);
+    try {
+      await api.togglePlugin(plugin.id, !enabled);
+      await mutate("plugins");
+      toast({
+        title: enabled
+          ? t("plugins.card.disable")
+          : t("plugins.card.enable"),
+        description: plugin.id,
+        variant: "success",
+      });
+    } catch (e: any) {
+      toast({
+        title: t("plugins.toast.runFailed"),
+        description: e?.message ?? t("plugins.toast.retryLater"),
+        variant: "error",
+      });
+    } finally {
+      setToggling(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!isUser) return;
+    setBusy(true);
+    try {
+      await api.deletePlugin(plugin.id);
+      await mutate("plugins");
+      toast({
+        title: t("plugins.card.delete"),
+        description: plugin.id,
+        variant: "success",
+      });
+      setConfirmingDelete(false);
+    } catch (e: any) {
+      toast({
+        title: t("plugins.toast.runFailed"),
+        description: e?.message ?? t("plugins.toast.retryLater"),
+        variant: "error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Card className="flex flex-col">
       <CardHeader>
@@ -204,6 +452,27 @@ function PluginCard({ plugin }: { plugin: PluginManifest }) {
               <Badge variant="default" className="text-[10px] font-mono">
                 v{plugin.version}
               </Badge>
+              <Badge
+                variant="default"
+                className={cn(
+                  "text-[10px]",
+                  isUser
+                    ? "border-brand-500/40 text-brand-300"
+                    : "border-white/10 text-zinc-400"
+                )}
+              >
+                {isUser
+                  ? t("plugins.card.sourceUser")
+                  : t("plugins.card.sourceBuiltin")}
+              </Badge>
+              {isUser && !enabled && (
+                <Badge
+                  variant="default"
+                  className="text-[10px] border-amber-500/40 text-amber-300"
+                >
+                  {t("plugins.card.disable")}
+                </Badge>
+              )}
             </CardTitle>
             <CardDescription className="mt-1">{plugin.description}</CardDescription>
             {plugin.tags.length > 0 && (
@@ -219,7 +488,44 @@ function PluginCard({ plugin }: { plugin: PluginManifest }) {
                 ))}
               </div>
             )}
+            {isUser && plugin.uploaded_at && (
+              <div className="text-[10px] text-zinc-600 mt-1">
+                {t("plugins.card.uploadedAt", {
+                  when: new Date(plugin.uploaded_at).toLocaleString(),
+                })}
+              </div>
+            )}
           </div>
+
+          {isUser && (
+            <div className="flex items-center gap-1 shrink-0">
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={handleToggle}
+                disabled={toggling}
+                title={enabled ? t("plugins.card.disable") : t("plugins.card.enable")}
+                className="h-7 w-7"
+              >
+                <Power
+                  className={cn(
+                    "h-3.5 w-3.5",
+                    enabled ? "text-emerald-400" : "text-zinc-500"
+                  )}
+                />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={() => setConfirmingDelete(true)}
+                disabled={busy}
+                title={t("plugins.card.delete")}
+                className="h-7 w-7 hover:text-red-300"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
         </div>
       </CardHeader>
 
@@ -256,7 +562,11 @@ function PluginCard({ plugin }: { plugin: PluginManifest }) {
             />
           </div>
 
-          <Button onClick={handleRun} disabled={busy} className="w-full">
+          <Button
+            onClick={handleRun}
+            disabled={busy || !enabled}
+            className="w-full"
+          >
             {busy ? (
               <>
                 <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
@@ -270,9 +580,49 @@ function PluginCard({ plugin }: { plugin: PluginManifest }) {
             )}
           </Button>
 
+          {!enabled && (
+            <p className="text-[10px] text-amber-300 leading-snug">
+              {t("plugins.card.disable")}
+            </p>
+          )}
+
           {result && <ResultBlock result={result} />}
         </CardContent>
       )}
+
+      <Dialog
+        open={confirmingDelete}
+        onOpenChange={(v) => !busy && setConfirmingDelete(v)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("plugins.card.delete")}</DialogTitle>
+            <DialogDescription>
+              {t("plugins.card.deleteConfirm", { name: plugin.name })}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="ghost" size="sm" disabled={busy}>
+                {t("common.cancel")}
+              </Button>
+            </DialogClose>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleDelete}
+              disabled={busy}
+            >
+              {busy ? (
+                <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5 mr-1" />
+              )}
+              {t("common.delete")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

@@ -44,6 +44,12 @@ class InformationSource(UUIDPkMixin, TimestampMixin, Base):
 
     __tablename__ = "information_sources"
 
+    # Owner — NULL for legacy/global rows, set to the user who ingested it.
+    # In single-user mode this is the default user's id.
+    user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+
     kind: Mapped[str] = mapped_column(String(32), default="public")
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
@@ -94,6 +100,11 @@ class Event(UUIDPkMixin, TimestampMixin, Base):
     """
 
     __tablename__ = "events"
+
+    # Owner — NULL for legacy/global rows, set to the user who ingested it.
+    user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=True, index=True
+    )
 
     source_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("information_sources.id", ondelete="SET NULL"), index=True

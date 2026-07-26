@@ -11,11 +11,12 @@ public config (host/port). Passwords / keys are masked.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.tenant import CurrentUser
 
 log = get_logger(__name__)
 
@@ -90,8 +91,12 @@ def _check_minio() -> tuple[bool, str | None, str | None]:
 
 
 @router.get("/components", response_model=SystemComponentsView)
-async def get_system_components() -> SystemComponentsView:
+async def get_system_components(user: CurrentUser) -> SystemComponentsView:
     """Return the status of all backing services.
+
+    Requires authentication — infrastructure topology (host/port) is not
+    public info. In single-user mode CurrentUser falls back to the
+    default user, so behavior is unchanged.
 
     Each probe runs in a short try/except so a single broken service does
     not take down the whole endpoint. Probes are run sequentially — there
