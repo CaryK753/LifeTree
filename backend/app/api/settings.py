@@ -269,7 +269,16 @@ def put_use_mode(user: CurrentUser, payload: UseModeUpdate) -> UseModeUpdate:
         raise HTTPException(400, f"use_mode must be 'single' or 'multi', got {payload.mode!r}")
 
     current_mode = get_use_mode()
-    if current_mode == "multi" and user.role != "admin":
+    # Allow anyone to switch modes during bootstrap (no real users exist yet,
+    # so there's nothing to protect). This breaks the circular dependency
+    # where switching from multi→single requires admin, but becoming admin
+    # in multi mode requires registering, which the non-dismissible first-admin
+    # dialog blocks.
+    from app.api.auth import _should_promote_first_admin
+    from app.db.postgres import SessionLocal
+    with SessionLocal() as session:
+        bootstrap = _should_promote_first_admin(session)
+    if current_mode == "multi" and user.role != "admin" and not bootstrap:
         raise HTTPException(
             403,
             "Admin access required to switch usage mode in multi-user mode",

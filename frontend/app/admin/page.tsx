@@ -45,7 +45,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
-import { useAuth, useAdminStats, useAdminUsers } from "@/lib/hooks";
+import { useAuth, useAuthConfig, useAdminStats, useAdminUsers } from "@/lib/hooks";
 import { api, type AdminUserRead, type AdminUserUpdate } from "@/lib/api";
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 import { PlatformConfig } from "@/components/settings/platform-config";
@@ -53,16 +53,20 @@ import { PlatformConfig } from "@/components/settings/platform-config";
 export default function AdminPage() {
   const t = useT();
   const router = useRouter();
-  const { user, isAuthenticated, isLoading: authLoading } = useAuth();
+  const { user, isAuthenticated, isLoading: authLoading, isAdmin } = useAuth();
+  const { data: authConfig } = useAuthConfig();
+  const singleMode = (authConfig?.use_mode ?? "single") === "single";
   const { data: stats, mutate: refreshStats } = useAdminStats();
   const { data: users, mutate: refreshUsers, isLoading: usersLoading } = useAdminUsers();
   const toast = useToast();
   const { confirm, ConfirmRoot } = useConfirm();
 
   // ---------- Access control ----------
-  // Wait for auth to load; if not admin, redirect home.
+  // In single mode, the default-user fallback has admin rights — skip the
+  // auth check. In multi mode, require an authenticated admin.
   useEffect(() => {
     if (authLoading) return;
+    if (singleMode) return;
     if (!isAuthenticated) {
       router.replace("/");
       return;
@@ -75,7 +79,7 @@ export default function AdminPage() {
       });
       router.replace("/");
     }
-  }, [authLoading, isAuthenticated, user, router, t, toast]);
+  }, [authLoading, singleMode, isAuthenticated, user, router, t, toast]);
 
   // ---------- Edit user dialog ----------
   const [editingUser, setEditingUser] = useState<AdminUserRead | null>(null);
@@ -165,7 +169,8 @@ export default function AdminPage() {
     );
   }
 
-  if (!isAuthenticated || user?.role !== "admin") {
+  // Access check — in single mode, the default user is admin.
+  if (!singleMode && (!isAuthenticated || !isAdmin)) {
     return null;
   }
 

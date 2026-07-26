@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useAuth, useAuthConfig } from "@/lib/hooks";
 import { LoginDialog } from "@/components/auth/login-dialog";
 import { setChatUserScope } from "@/lib/chat-store";
+import { api } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 
 /**
@@ -11,11 +12,12 @@ import { Loader2 } from "lucide-react";
  *
  * Strategy:
  *   - **First-run setup** (``has_users === false``): no real users exist
- *     yet, so the dialog auto-opens in "first admin" mode and is NOT
- *     dismissible. The user must create the first admin account to
- *     continue. This applies to BOTH single and multi mode — even in
- *     single mode, at least one account must exist so the user can
- *     access profile/settings/admin features.
+ *     yet. In multi mode the dialog auto-opens in "first admin" mode and
+ *     is NOT dismissible — the user must create the first admin account
+ *     OR switch to single mode via the link on the dialog. In single
+ *     mode the dialog is dismissible so the user can skip registration
+ *     and use anonymous access (the default-user fallback has admin
+ *     rights, so all features work without logging in).
  *   - **Single-user mode** (``use_mode === "single"``, has users): the
  *     app runs without login. The backend serves data via the
  *     default-user fallback. Users who want a personal scope can still
@@ -43,20 +45,22 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const multiUserMode = useMode === "multi";
 
   // ``has_users``: False when no real users exist (excluding the default-user
-  // fallback). The frontend shows a non-dismissible "create admin" setup
-  // screen in that case, regardless of use_mode.
+  // fallback). The frontend shows a "create admin" setup screen in that case.
   const hasUsers = authConfig?.has_users ?? true; // default true to avoid flashing setup on slow loads
   const needsFirstAdmin = !hasUsers;
 
   // The dialog is dismissible only when:
-  //   - real users already exist (not first-run setup), AND
-  //   - we're in single-user mode (anonymous access allowed)
-  const dismissible = !needsFirstAdmin && !multiUserMode;
+  //   - in single-user mode (anonymous access allowed), OR
+  //   - real users already exist (not first-run setup)
+  // In multi mode + first-run setup, the dialog is non-dismissible — the
+  // user must either register the first admin or switch to single mode
+  // via the link on the dialog.
+  const dismissible = !multiUserMode || !needsFirstAdmin;
 
   // Auto-open login dialog when:
   //   1. First-run setup (no users yet) — must create admin account, OR
   //   2. Multi-user mode + not authenticated — must log in.
-  // In both cases the dialog is non-dismissible.
+  // In multi mode + first-run, the dialog is non-dismissible.
   useEffect(() => {
     if (isLoading || isAuthenticated) return;
     if (needsFirstAdmin && !dismissed) {
@@ -75,9 +79,22 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   function handleOpenChange(open: boolean) {
     // Non-dismissible modes: the dialog can never be closed (no fallback).
-    if (!open && (needsFirstAdmin || multiUserMode)) return;
+    if (!open && !dismissible) return;
     setShowLogin(open);
     if (!open) setDismissed(true);
+  }
+
+  async function handleSwitchToSingle() {
+    try {
+      await api.setUseMode("single");
+      // Reload so the new use_mode takes effect everywhere.
+      window.location.reload();
+    } catch (err) {
+      // If the switch fails (e.g. server-side validation), just reload —
+      // the user will see the same dialog again.
+      console.error("Failed to switch to single mode:", err);
+      window.location.reload();
+    }
   }
 
   return (
@@ -88,6 +105,8 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         onOpenChange={handleOpenChange}
         dismissible={dismissible}
         firstAdminSetup={needsFirstAdmin}
+        useMode={useMode}
+        onSwitchToSingle={handleSwitchToSingle}
       />
 
       {/* Loading overlay while verifying token.

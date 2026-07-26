@@ -38,11 +38,15 @@ export function LoginDialog({
   onOpenChange,
   dismissible = true,
   firstAdminSetup = false,
+  useMode,
+  onSwitchToSingle,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   dismissible?: boolean;
   firstAdminSetup?: boolean;
+  useMode?: string;
+  onSwitchToSingle?: () => void;
 }) {
   const t = useT();
   const toast = useToast();
@@ -417,6 +421,23 @@ export function LoginDialog({
                   : t("auth.register")}
           </Button>
         </form>
+
+        {/* Switch-to-single-mode link — shown in first-admin setup when the
+            current mode is "multi". Lets the user skip registration and use
+            the app in single mode instead (the default-user fallback has
+            admin rights). This breaks the circular dependency where multi
+            mode + no users = stuck on a non-dismissible dialog. */}
+        {firstAdminSetup && useMode === "multi" && onSwitchToSingle && (
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={onSwitchToSingle}
+              className="text-xs text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200 underline underline-offset-2 transition-colors"
+            >
+              {t("auth.firstAdminSwitchToSingle")}
+            </button>
+          </div>
+        )}
 
         {/* OAuth section — only render when at least one provider is configured. */}
         {oauthProviders.length > 0 && (

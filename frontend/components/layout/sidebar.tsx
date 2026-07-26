@@ -166,6 +166,14 @@ function SidebarContent({
   const t = useT();
   const compact = collapsed;
   const { user, isAuthenticated, isAdmin } = useAuth();
+  // In single mode, the default-user fallback is active — treat the user
+  // as having admin access so the admin nav (admin page, etc.) is visible
+  // even without logging in. The backend's _require_admin_in_multi_user
+  // check is also skipped in single mode, so this is consistent.
+  const { data: authConfig } = useAuthConfig();
+  const useMode = authConfig?.use_mode ?? (authConfig?.multi_user_mode ? "multi" : "single");
+  const singleMode = useMode === "single";
+  const showAdminNav = (isAuthenticated && isAdmin) || singleMode;
 
   // Unread notification count — used to badge the Bell icon.
   // refreshInterval keeps the badge fresh without manual reloads. The hook is
@@ -269,10 +277,11 @@ function SidebarContent({
         })}
       </nav>
 
-      {/* Admin-only nav — only rendered when user is an admin.
-          Visual treatment: red accent so it's visually distinct from
-          regular user nav. */}
-      {isAuthenticated && isAdmin && (
+      {/* Admin-only nav — rendered when the user is an admin OR in single
+          mode (where the default-user fallback has admin rights and the
+          backend skips the admin check). Visual treatment: red accent so
+          it's visually distinct from regular user nav. */}
+      {showAdminNav && (
         <div className="px-2 py-2 border-t border-white/5 space-y-0.5">
           {ADMIN_NAV.map((item) => {
             const Icon = item.icon;
@@ -472,7 +481,7 @@ function UserChip({
             <div className="flex-1 min-w-0 leading-tight">
               <div className="text-xs font-medium text-zinc-900 dark:text-zinc-100 truncate flex items-center gap-1">
                 {displayName}
-                {isAuthenticated && isAdmin && (
+                {((isAuthenticated && isAdmin) || singleMode) && (
                   <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 font-medium uppercase tracking-wide">
                     {t("auth.adminBadge")}
                   </span>
@@ -511,6 +520,7 @@ function UserChip({
           pathname={pathname}
           t={t}
           isAuthenticated={isAuthenticated}
+          singleMode={singleMode}
           onClose={() => setOpen(false)}
           onLogout={() => {
             // Close the dropdown first, then surface the confirmation
@@ -564,6 +574,7 @@ function DropdownMenu({
   pathname,
   t,
   isAuthenticated,
+  singleMode,
   onClose,
   onLogout,
 }: {
@@ -573,6 +584,7 @@ function DropdownMenu({
   pathname: string;
   t: (key: string, vars?: Record<string, string | number>) => string;
   isAuthenticated: boolean;
+  singleMode: boolean;
   onClose: () => void;
   onLogout: () => void;
 }) {
@@ -662,8 +674,12 @@ function DropdownMenu({
           : "opacity-0 scale-95 translate-y-1 pointer-events-none"
       )}
     >
-      {/* Menu items — no user/email header by request. */}
-      {isAuthenticated && (
+      {/* Menu items — no user/email header by request.
+          Profile is shown in single mode too (the default-user fallback
+          is active, so the user has a profile to view even without login).
+          This lets the user see their user ID (needed for admin promotion
+          via LIFETREE_ADMIN_USER_IDS) and access profile-related features. */}
+      {(isAuthenticated || singleMode) && (
         <MenuLink
           href="/profile"
           icon={User}

@@ -62,6 +62,7 @@ def get_default_user(db: Session) -> UserProfile:
         display_name=DEFAULT_DISPLAY_NAME,
         email=DEFAULT_EMAIL,
         risk_tolerance="medium",
+        role="admin",
     )
     db.add(user)
     db.commit()
