@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="docs/assets/brand-hero.jpg" alt="LifeTree · 人生树" width="100%" />
-</p>
-
 <h1 align="center">LifeTree · 人生树</h1>
 
 <p align="center">
@@ -17,7 +13,7 @@
   <img alt="Neo4j" src="https://img.shields.io/badge/Neo4j-5-008CC1?logo=neo4j&logoColor=white" />
   <img alt="Redis" src="https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white" />
   <img alt="Docker" src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white" />
-  <img alt="License" src="https://img.shields.io/badge/License-MIT-yellow" />
+  <img alt="License" src="https://img.shields.io/badge/License-AGPL_v3-blue" />
   <img alt="PWA" src="https://img.shields.io/badge/PWA-ready-5A0FC8?logo=pwa&logoColor=white" />
 </p>
 
@@ -28,7 +24,9 @@
   <a href="#inicio-rápido">Español</a> ·
   <a href="#schnellstart">Deutsch</a>
 </p>
-
+<p align="center">
+  <img src="docs/assets/brand-hero.jpg" alt="LifeTree · 人生树" width="100%" />
+</p>
 ---
 
 ## 目录 / Table of Contents
@@ -570,7 +568,7 @@ cd frontend && npm install && npm run dev
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) file for details.
+GNU Affero General Public License v3.0 — see [LICENSE](LICENSE) file for details.
 
 ---
 

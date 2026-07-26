@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1.6
 # LifeTree frontend image — Next.js standalone build.
+# Uses Node 22 (required by Next.js 16).
 
 # ---------- Stage 1: deps ----------
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS deps
 
 WORKDIR /app
 
@@ -10,7 +11,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 # ---------- Stage 2: builder ----------
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -25,7 +26,7 @@ ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL \
 RUN npm run build
 
 # ---------- Stage 3: runtime ----------
-FROM node:20-alpine AS runtime
+FROM node:22-alpine AS runtime
 
 WORKDIR /app
 
@@ -34,7 +35,7 @@ ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0 \
     NEXT_TELEMETRY_DISABLED=1
 
-# node:20-alpine ships with a non-root `node` user (UID 1000).
+# node:22-alpine ships with a non-root `node` user (UID 1000).
 RUN mkdir -p /app && chown -R node:node /app
 
 # Standalone output: server.js + minimal node_modules.

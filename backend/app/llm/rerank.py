@@ -3,26 +3,16 @@
 Supports Alibaba Cloud Bailian (DashScope) rerank models:
 
   - **qwen3-rerank** uses *flat* request params (``model``, ``query``,
-    ``documents``, ``top_n``, ``instruct`` at top level).
+    ``documents``, ``top_n``, ``instruct`` at top level) and the
+    OpenAI-compatible endpoint ``/compatible-api/v1/reranks``.
   - **gte-rerank-v2** and **qwen3-vl-rerank** use *nested* params
-    (``{model, input:{query, documents}, parameters:{top_n, return_documents}}``).
+    (``{model, input:{query, documents}, parameters:{top_n, return_documents}}``)
+    and the native endpoint ``/api/v1/services/rerank/text-rerank/text-rerank``.
 
-Endpoint routing depends on BOTH the model AND the host derived from the
-provider ``base_url``:
-
-  - **MaaS API host** (``*.maas.aliyuncs.com``, with workspace ID):
-      - qwen3-rerank → ``/compatible-api/v1/reranks`` (compatible, flat params)
-      - gte-rerank-v2 / qwen3-vl-rerank → ``/api/v1/services/rerank/text-rerank/text-rerank`` (native, nested params)
-  - **DashScope host** (``dashscope.aliyuncs.com``, no workspace ID):
-      - All models → ``/api/v1/services/rerank/text-rerank/text-rerank`` (native endpoint).
-        The native endpoint accepts flat params for qwen3-rerank and nested
-        params for the others, so the payload format is still chosen per model.
-
-The DashScope host does NOT expose ``/compatible-api/v1/reranks`` — that path
-only exists on the MaaS API host. Routing qwen3-rerank through the native
-endpoint on the DashScope host is the documented fallback (see the official
-DashScope SDK examples, which call qwen3-rerank via the native URL with flat
-params).
+Endpoint routing depends on the MODEL ONLY (per the official Bailian rerank
+doc). Both the DashScope host (``dashscope.aliyuncs.com``) and the MaaS API
+host (``*.maas.aliyuncs.com``) expose both endpoints; the choice is determined
+by which model is being called, NOT by which host was configured.
 
 Both endpoints share the response shape::
 
@@ -49,12 +39,6 @@ log = get_logger(__name__)
 BAILIAN_COMPATIBLE_RERANK_PATH = "/compatible-api/v1/reranks"
 BAILIAN_NATIVE_RERANK_PATH = "/api/v1/services/rerank/text-rerank/text-rerank"
 BAILIAN_DEFAULT_HOST = "https://dashscope.aliyuncs.com"
-
-# Hosts that expose the OpenAI-compatible rerank endpoint
-# (``/compatible-api/v1/reranks``). The DashScope host
-# (``dashscope.aliyuncs.com``) does NOT — it only exposes the native endpoint,
-# so qwen3-rerank must be routed through the native path there.
-_MAAS_API_HOST_SUFFIX = ".maas.aliyuncs.com"
 
 # Models that use the OpenAI-compatible flat-param endpoint.
 # Everything else (gte-rerank-v2, qwen3-vl-rerank, future native models)
@@ -121,12 +105,17 @@ def _resolve_bailian_url(base_url: str | None, model_name: str) -> str:
       - empty / None → use the default host
 
     We normalize to the host root, then append the correct path based on
-    model AND host:
+    MODEL ONLY (per the official Alibaba Cloud Bailian rerank doc):
 
-      - MaaS API host (``*.maas.aliyuncs.com``) + qwen3-rerank → compatible endpoint
-      - DashScope host (``dashscope.aliyuncs.com``) + ANY model → native endpoint
-        (the DashScope host does not expose ``/compatible-api/v1/reranks``)
-      - Unknown host → native endpoint (safer default)
+      - qwen3-rerank → ``/compatible-api/v1/reranks`` (flat params: model, query,
+        documents, top_n, instruct at top level). Both DashScope host and
+        MaaS API host expose this endpoint.
+      - gte-rerank-v2 / qwen3-vl-rerank → ``/api/v1/services/rerank/text-rerank/text-rerank``
+        (nested params: input.{query,documents} + parameters.{top_n, return_documents}).
+
+    The previous host-based routing was wrong: it sent qwen3-rerank to the
+    native endpoint on the DashScope host, but that endpoint does NOT accept
+    the flat params qwen3-rerank uses — causing connection failures.
     """
     host = BAILIAN_DEFAULT_HOST
     if base_url:
@@ -145,12 +134,9 @@ def _resolve_bailian_url(base_url: str | None, model_name: str) -> str:
                 break
         host = b or BAILIAN_DEFAULT_HOST
 
-    # Use the OpenAI-compatible endpoint ONLY on the MaaS API host. The
-    # DashScope host (and any unknown host) does not expose that path —
-    # we route qwen3-rerank through the native endpoint there, which the
-    # official docs confirm accepts flat params for qwen3-rerank.
-    is_maas_api_host = _MAAS_API_HOST_SUFFIX in host
-    if is_maas_api_host and _is_compatible_model(model_name):
+    # Route by MODEL, not by host. Both DashScope and MaaS API hosts expose
+    # both endpoints; the choice depends only on which model is being called.
+    if _is_compatible_model(model_name):
         return f"{host}{BAILIAN_COMPATIBLE_RERANK_PATH}"
     return f"{host}{BAILIAN_NATIVE_RERANK_PATH}"
 
