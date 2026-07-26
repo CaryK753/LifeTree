@@ -30,6 +30,7 @@
 <p align="center">
   <img src="docs/assets/brand-hero.jpg" alt="LifeTree · 人生樹" width="100%" />
 </p>
+
 ---
 
 ## 目錄
@@ -279,12 +280,12 @@ docker compose exec backend python scripts/seed_fsw.py
 > ```
 
 啟動後造訪：
-- 前端：http://localhost:3000
-- 後端 API：http://localhost:8000
-- API 文件：http://localhost:8000/docs
-- Flower（Celery 監控）：http://localhost:5555
-- MinIO 控制台：http://localhost:9001
-- Neo4j 瀏覽器：http://localhost:7474
+- 前端：http://localhost:13000
+- 後端 API：http://localhost:18000
+- API 文件：http://localhost:18000/docs
+- Flower（Celery 監控）：http://localhost:15555
+- MinIO 控制台：http://localhost:19001
+- Neo4j 瀏覽器：http://localhost:17474
 
 ### 方式二：本地建置映像啟動
 
@@ -309,15 +310,15 @@ docker compose exec backend python scripts/init_db.py
 
 | 服務 | 映像 | 連接埠 | 說明 |
 |---|---|---|---|
-| `postgres` | `pgvector/pgvector:pg16` | 5432 | PG + pgvector 向量擴展 |
-| `neo4j` | `neo4j:5.20` | 7687, 7474 | 知識圖譜 + APOC |
-| `redis` | `redis:7-alpine` | 6379 | Celery broker + 快取 |
-| `minio` | `minio/minio:latest` | 9000, 9001 | 物件儲存 |
-| `backend` | `ghcr.io/caryk753/lifetree-backend` | 8000 | FastAPI 應用 |
+| `postgres` | `pgvector/pgvector:pg16` | 15432 | PG + pgvector 向量擴展 |
+| `neo4j` | `neo4j:5.20` | 17687, 17474 | 知識圖譜 + APOC |
+| `redis` | `redis:7-alpine` | 16379 | Celery broker + 快取 |
+| `minio` | `minio/minio:latest` | 19000, 19001 | 物件儲存 |
+| `backend` | `ghcr.io/caryk753/lifetree-backend` | 18000 | FastAPI 應用 |
 | `worker` | `ghcr.io/caryk753/lifetree-backend` | - | Celery Worker |
 | `beat` | `ghcr.io/caryk753/lifetree-backend` | - | Celery Beat 排程器 |
-| `flower` | `mher/flower:latest` | 5555 | Celery 監控 |
-| `frontend` | `ghcr.io/caryk753/lifetree-frontend` | 3000 | Next.js standalone |
+| `flower` | `mher/flower:latest` | 15555 | Celery 監控 |
+| `frontend` | `ghcr.io/caryk753/lifetree-frontend` | 13000 | Next.js standalone |
 
 ```bash
 # 啟動所有服務（預設拉取 GHCR 預建置映像）
@@ -376,7 +377,7 @@ pip install -e ".[dev]"
 python scripts/init_db.py
 
 # 啟動 API
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 18000
 
 # 另開終端：啟動 Celery Worker + Beat
 celery -A app.workers.celery_app worker -l info
@@ -398,7 +399,7 @@ cd backend
 python scripts/seed_fsw.py
 ```
 
-打開 http://localhost:3000 即可看到目標羅盤儀表盤。
+打開 http://localhost:13000 即可看到目標羅盤儀表盤。
 
 ---
 

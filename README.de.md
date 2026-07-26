@@ -30,6 +30,7 @@
 <p align="center">
   <img src="docs/assets/brand-hero.jpg" alt="LifeTree · 人生树" width="100%" />
 </p>
+
 ---
 
 ## Inhaltsverzeichnis
@@ -279,12 +280,12 @@ docker compose exec backend python scripts/seed_fsw.py
 > ```
 
 Nach dem Start besuchen:
-- Frontend: http://localhost:3000
-- Backend-API: http://localhost:8000
-- API-Dokumentation: http://localhost:8000/docs
-- Flower (Celery-Monitor): http://localhost:5555
-- MinIO-Konsole: http://localhost:9001
-- Neo4j-Browser: http://localhost:7474
+- Frontend: http://localhost:13000
+- Backend-API: http://localhost:18000
+- API-Dokumentation: http://localhost:18000/docs
+- Flower (Celery-Monitor): http://localhost:15555
+- MinIO-Konsole: http://localhost:19001
+- Neo4j-Browser: http://localhost:17474
 
 ### Option 2: Images lokal bauen
 
@@ -309,15 +310,15 @@ Die vollständige `docker-compose.yml` umfasst folgende Dienste:
 
 | Dienst | Image | Port | Beschreibung |
 |---|---|---|---|
-| `postgres` | `pgvector/pgvector:pg16` | 5432 | PG + pgvector-Vektorerweiterung |
-| `neo4j` | `neo4j:5.20` | 7687, 7474 | Wissensgraph + APOC |
-| `redis` | `redis:7-alpine` | 6379 | Celery-Broker + Cache |
-| `minio` | `minio/minio:latest` | 9000, 9001 | Objektspeicher |
-| `backend` | `ghcr.io/caryk753/lifetree-backend` | 8000 | FastAPI-Anwendung |
+| `postgres` | `pgvector/pgvector:pg16` | 15432 | PG + pgvector-Vektorerweiterung |
+| `neo4j` | `neo4j:5.20` | 17687, 17474 | Wissensgraph + APOC |
+| `redis` | `redis:7-alpine` | 16379 | Celery-Broker + Cache |
+| `minio` | `minio/minio:latest` | 19000, 19001 | Objektspeicher |
+| `backend` | `ghcr.io/caryk753/lifetree-backend` | 18000 | FastAPI-Anwendung |
 | `worker` | `ghcr.io/caryk753/lifetree-backend` | - | Celery-Worker |
 | `beat` | `ghcr.io/caryk753/lifetree-backend` | - | Celery-Beat-Scheduler |
-| `flower` | `mher/flower:latest` | 5555 | Celery-Monitor |
-| `frontend` | `ghcr.io/caryk753/lifetree-frontend` | 3000 | Next.js standalone |
+| `flower` | `mher/flower:latest` | 15555 | Celery-Monitor |
+| `frontend` | `ghcr.io/caryk753/lifetree-frontend` | 13000 | Next.js standalone |
 
 ```bash
 # Alle Dienste starten (standardmäßig GHCR-Vorgefertigte-Images ziehen)
@@ -376,7 +377,7 @@ pip install -e ".[dev]"
 python scripts/init_db.py
 
 # API starten
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 18000
 
 # In anderem Terminal: Celery-Worker + Beat starten
 celery -A app.workers.celery_app worker -l info
@@ -398,7 +399,7 @@ cd backend
 python scripts/seed_fsw.py
 ```
 
-http://localhost:3000 öffnen, um das Zielkompass-Dashboard zu sehen.
+http://localhost:13000 öffnen, um das Zielkompass-Dashboard zu sehen.
 
 ---
 

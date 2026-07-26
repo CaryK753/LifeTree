@@ -23,30 +23,30 @@ class Settings(BaseSettings):
     app_env: Literal["development", "staging", "production"] = "development"
     app_debug: bool = True
     app_secret_key: SecretStr = SecretStr("change-me-in-production")
-    app_backend_port: int = 8000
-    app_frontend_port: int = 3000
-    app_cors_origins: str = "http://localhost:3000"
+    app_backend_port: int = 18000
+    app_frontend_port: int = 13000
+    app_cors_origins: str = "http://localhost:13000"
 
     # ---------- PostgreSQL ----------
     postgres_user: str = "lifetree"
     postgres_password: SecretStr = SecretStr("lifetree")
     postgres_db: str = "lifetree"
     postgres_host: str = "localhost"
-    postgres_port: int = 5432
+    postgres_port: int = 15432
 
     # ---------- Neo4j ----------
     neo4j_user: str = "neo4j"
     neo4j_password: SecretStr = SecretStr("lifetree123")
-    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_uri: str = "bolt://localhost:17687"
 
     # ---------- Redis ----------
     redis_host: str = "localhost"
-    redis_port: int = 6379
+    redis_port: int = 16379
 
     # ---------- MinIO ----------
     minio_root_user: str = "lifetree"
     minio_root_password: SecretStr = SecretStr("lifetree123")
-    minio_endpoint: str = "localhost:9000"
+    minio_endpoint: str = "localhost:19000"
     minio_bucket: str = "lifetree-uploads"
 
     # ---------- LLM (legacy env bootstrap — configure via WebUI instead) ----------
