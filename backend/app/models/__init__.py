@@ -22,6 +22,11 @@ from app.models.goal import (
     RiskFactor,
     RiskFactorType,
 )
+from app.models.llm_config import (
+    AppConfig,
+    LLMModel,
+    LLMProvider,
+)
 from app.models.memory import UserMemory
 from app.models.notification import (
     NotificationChannel,
@@ -73,4 +78,8 @@ __all__ = [
     "NotificationStatus",
     "RiskAssessment",
     "RiskPropagationLog",
+    # LLM config
+    "LLMProvider",
+    "LLMModel",
+    "AppConfig",
 ]

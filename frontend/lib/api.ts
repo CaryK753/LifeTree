@@ -310,6 +310,13 @@ export const api = {
   deleteSource: (id: string) =>
     request<void>(`/sources/${id}`, { method: "DELETE" }),
 
+  // Meta — project about + update check
+  get: <T>(path: string) => request<T>(path),
+  getAbout: () =>
+    request<AboutInfo>(`/meta/about`),
+  checkUpdate: () =>
+    request<UpdateCheck>(`/meta/check-update`),
+
   // Lifecycle — information half-life / decay management (§4.8)
   getDecayDistribution: () =>
     request<DecayDistribution>(`/lifecycle/distribution`),
@@ -743,6 +750,23 @@ export interface SystemComponentView {
 
 export interface SystemComponentsView {
   components: SystemComponentView[];
+}
+
+// ---------- Meta (about / update check) ----------
+
+export interface AboutInfo {
+  name: string;
+  version: string;
+  description: string;
+  github_url: string;
+  license: string;
+}
+
+export interface UpdateCheck {
+  has_update: boolean;
+  latest_version: string;
+  current_version: string;
+  release_url: string;
 }
 
 // Legacy aliases kept so older imports don't break.

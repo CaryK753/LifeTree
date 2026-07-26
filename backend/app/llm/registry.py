@@ -2,11 +2,13 @@
 
 Single source of truth for AI model configuration in LifeTree. Replaces the
 old single-LLM env-var setup (``LLM_BASE_URL`` / ``LLM_API_KEY`` / etc.) with
-a JSON document that can describe many providers and many models, each tagged
-with the roles they can serve.
+a structured document that can describe many providers and many models, each
+tagged with the roles they can serve.
 
-Storage: ``backend/.llm_config.json`` (gitignored). The file is created on
-first write; if it does not exist on startup, the registry bootstraps from
+Storage: PostgreSQL tables (``llm_providers``, ``llm_models``, ``app_config``).
+Previously this module persisted to ``backend/.llm_config.json``; on first load
+against an empty DB, any existing JSON file is imported once and then the JSON
+file is ignored. If neither DB nor JSON has data, the registry bootstraps from
 legacy ``LLM_*`` env vars so existing deployments keep working.
 
 Schema (v1):
@@ -55,13 +57,18 @@ import json
 import os
 import threading
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
+from app.db.postgres import SessionLocal
+from app.models.llm_config import AppConfig, LLMModel, LLMProvider
 
 log = get_logger(__name__)
 
@@ -81,7 +88,7 @@ class Provider(BaseModel):
     protocol: Protocol = "openai_compatible"
     base_url: str | None = None
     api_key: str = ""
-    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class Model(BaseModel):
@@ -92,7 +99,7 @@ class Model(BaseModel):
     name: str  # the model id sent to the API (e.g. "gpt-4o-mini")
     display_name: str  # human label in the UI
     capabilities: list[Role] = Field(default_factory=list)
-    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class LLMConfig(BaseModel):
@@ -103,7 +110,7 @@ class LLMConfig(BaseModel):
     models: list[Model] = Field(default_factory=list)
     role_assignments: dict[Role, str] = Field(default_factory=dict)
     tavily_api_key: str = ""
-    # Third-party service keys (kept here so the whole config is one file)
+    # Third-party service keys (kept here so the whole config is one document)
     mineru_api_key: str = ""
     mineru_base_url: str = "https://mineru.net/api/v4"
     # SMTP for risk-warning email notifications (§4.5). Hot-reloadable like
@@ -175,9 +182,39 @@ class ResolvedModel(BaseModel):
 
 # ---------- Storage ----------
 
+# Legacy JSON path — only consulted once for migration into the DB.
 CONFIG_PATH = Path(__file__).resolve().parents[2] / ".llm_config.json"
 
+# app_config keys (single source of truth — keep in sync with load/save).
+_KEY_TAVILY = "tavily_api_key"
+_KEY_MINERU_KEY = "mineru_api_key"
+_KEY_MINERU_URL = "mineru_base_url"
+_KEY_SMTP_HOST = "smtp_host"
+_KEY_SMTP_PORT = "smtp_port"
+_KEY_SMTP_USER = "smtp_user"
+_KEY_SMTP_PASSWORD = "smtp_password"
+_KEY_SMTP_FROM = "smtp_from"
+_KEY_SMTP_USE_TLS = "smtp_use_tls"
+_KEY_ROLE_ASSIGNMENTS = "role_assignments"
+
+_DEFAULT_MINERU_URL = "https://mineru.net/api/v4"
+_DEFAULT_SMTP_FROM = "notify@lifetree.local"
+
 _lock = threading.RLock()
+
+
+@contextmanager
+def _db_session() -> Iterator[Session]:
+    """Context-managed DB session: commit on success, rollback on error."""
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 def _mask(secret: str) -> str:
@@ -188,12 +225,61 @@ def _mask(secret: str) -> str:
     return "••••" + secret[-4:]
 
 
+def _parse_iso(s: str) -> datetime | None:
+    """Parse an ISO-8601 timestamp string into a tz-aware datetime.
+
+    Returns None if the string is empty or unparseable (lets the DB fall
+    back to its ``server_default``).
+    """
+    if not s:
+        return None
+    try:
+        # ``datetime.fromisoformat`` accepts "+00:00" but not "Z" pre-3.11.
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+def _iso(dt: datetime | None) -> str:
+    """Render a DB datetime as an ISO string (matching the old JSON format)."""
+    if dt is None:
+        return datetime.now(UTC).isoformat()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.isoformat()
+
+
+def _decode_value(raw: str | None, default: Any) -> Any:
+    """Decode a JSON-encoded app_config value, falling back to default.
+
+    All app_config values are stored JSON-encoded so scalars (int/bool/str)
+    and complex types (dict/list) round-trip losslessly. This avoids the
+    classic ``False or default`` / ``0 or default`` coercion trap.
+    """
+    if raw is None:
+        return default
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return default
+
+
+def _set_app_config(session: Session, key: str, value: Any) -> None:
+    """Upsert one app_config row. Value is JSON-encoded."""
+    encoded = json.dumps(value)
+    row = session.get(AppConfig, key)
+    if row is None:
+        session.add(AppConfig(key=key, value=encoded))
+    else:
+        row.value = encoded
+
+
 def _bootstrap_from_env() -> LLMConfig:
     """Build an initial config from legacy LLM_* env vars.
 
-    This runs once on first startup if ``.llm_config.json`` doesn't exist.
-    The resulting config is *not* written to disk by this function — callers
-    decide whether to persist.
+    This runs once on first startup if neither the DB nor the legacy JSON
+    file has any config. The resulting config is *not* written to the DB by
+    this function — callers decide whether to persist.
     """
     base_url = os.environ.get("LLM_BASE_URL", "").strip() or None
     api_key = os.environ.get("LLM_API_KEY", "").strip()
@@ -258,33 +344,215 @@ def _bootstrap_from_env() -> LLMConfig:
     )
 
 
+# ---------- DB <-> pydantic translation ----------
+
+def _load_from_db() -> LLMConfig | None:
+    """Build an LLMConfig from DB rows.
+
+    Returns None if the DB has no config rows at all (so the caller can
+    decide to bootstrap from JSON or env vars).
+    """
+    with _db_session() as session:
+        providers_orm = (
+            session.query(LLMProvider).order_by(LLMProvider.created_at).all()
+        )
+        models_orm = session.query(LLMModel).order_by(LLMModel.created_at).all()
+        config_rows = {r.key: r.value for r in session.query(AppConfig).all()}
+
+        if not providers_orm and not models_orm and not config_rows:
+            return None
+
+        providers = [
+            Provider(
+                id=p.id,
+                name=p.name,
+                protocol=p.protocol,
+                base_url=p.base_url,
+                api_key=p.api_key or "",
+                created_at=_iso(p.created_at),
+            )
+            for p in providers_orm
+        ]
+        models = [
+            Model(
+                id=m.id,
+                provider_id=m.provider_id,
+                name=m.name,
+                display_name=m.display_name,
+                capabilities=list(m.capabilities or []),
+                created_at=_iso(m.created_at),
+            )
+            for m in models_orm
+        ]
+
+        role_assignments = _decode_value(
+            config_rows.get(_KEY_ROLE_ASSIGNMENTS), {}
+        ) or {}
+        if not isinstance(role_assignments, dict):
+            role_assignments = {}
+
+        tavily = _decode_value(config_rows.get(_KEY_TAVILY), "") or ""
+        mineru_key = _decode_value(config_rows.get(_KEY_MINERU_KEY), "") or ""
+        mineru_url = (
+            _decode_value(config_rows.get(_KEY_MINERU_URL), _DEFAULT_MINERU_URL)
+            or _DEFAULT_MINERU_URL
+        )
+        smtp_host = _decode_value(config_rows.get(_KEY_SMTP_HOST), "") or ""
+        smtp_port = _decode_value(config_rows.get(_KEY_SMTP_PORT), 587) or 587
+        smtp_user = _decode_value(config_rows.get(_KEY_SMTP_USER), "") or ""
+        smtp_password = _decode_value(config_rows.get(_KEY_SMTP_PASSWORD), "") or ""
+        smtp_from = (
+            _decode_value(config_rows.get(_KEY_SMTP_FROM), _DEFAULT_SMTP_FROM)
+            or _DEFAULT_SMTP_FROM
+        )
+        # NOTE: do not coerce ``smtp_use_tls`` with ``or`` — False is valid.
+        smtp_use_tls = _decode_value(config_rows.get(_KEY_SMTP_USE_TLS), True)
+        if not isinstance(smtp_use_tls, bool):
+            smtp_use_tls = True
+
+        return LLMConfig(
+            version=1,
+            providers=providers,
+            models=models,
+            role_assignments=role_assignments,
+            tavily_api_key=tavily,
+            mineru_api_key=mineru_key,
+            mineru_base_url=mineru_url,
+            smtp_host=smtp_host,
+            smtp_port=smtp_port,
+            smtp_user=smtp_user,
+            smtp_password=smtp_password,
+            smtp_from=smtp_from,
+            smtp_use_tls=smtp_use_tls,
+        )
+
+
 def load_config() -> LLMConfig:
-    """Load the config from disk, bootstrapping from env on first run."""
+    """Load the config from the DB.
+
+    On first run against an empty DB:
+      1. If the legacy ``.llm_config.json`` exists, its contents are imported
+         into the DB once and then the JSON file is ignored.
+      2. Otherwise, bootstrap from ``LLM_*`` env vars and persist to DB.
+    """
     with _lock:
-        if not CONFIG_PATH.exists():
-            cfg = _bootstrap_from_env()
-            # Persist the bootstrapped config so subsequent writes have a base.
-            try:
-                save_config(cfg)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("registry.bootstrap_save_failed", error=str(exc))
-            return cfg
         try:
-            data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-            return LLMConfig.model_validate(data)
+            cfg = _load_from_db()
+            if cfg is not None:
+                return cfg
         except Exception as exc:  # noqa: BLE001
-            log.error("registry.load_failed", error=str(exc), path=str(CONFIG_PATH))
-            # Fall back to env bootstrap if the file is corrupt.
+            log.error("registry.load_db_failed", error=str(exc))
+            # Fall back to env bootstrap if the DB read fails outright.
             return _bootstrap_from_env()
+
+        # DB is empty — try the one-time JSON migration.
+        if CONFIG_PATH.exists():
+            try:
+                data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+                cfg = LLMConfig.model_validate(data)
+                # Persist the migrated config so subsequent loads skip JSON.
+                try:
+                    save_config(cfg)
+                    log.info(
+                        "registry.json_migrated",
+                        providers=len(cfg.providers),
+                        models=len(cfg.models),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("registry.json_migrate_save_failed", error=str(exc))
+                return cfg
+            except Exception as exc:  # noqa: BLE001
+                log.warning("registry.json_migration_failed", error=str(exc))
+                # Fall through to env bootstrap.
+
+        # No DB data, no JSON — bootstrap from env and persist.
+        cfg = _bootstrap_from_env()
+        try:
+            save_config(cfg)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("registry.bootstrap_save_failed", error=str(exc))
+        return cfg
 
 
 def save_config(cfg: LLMConfig) -> None:
-    """Persist config to disk atomically."""
+    """Persist config to the DB (full sync).
+
+    Upserts every provider/model/app_config row from ``cfg`` and deletes
+    DB rows that no longer exist in ``cfg``. ``created_at`` is preserved
+    on existing rows; new rows get the DB ``server_default`` (or the
+    pydantic ``created_at`` if it carries a real timestamp).
+    """
     with _lock:
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = CONFIG_PATH.with_suffix(".tmp")
-        tmp.write_text(cfg.model_dump_json(indent=2), encoding="utf-8")
-        tmp.replace(CONFIG_PATH)
+        with _db_session() as session:
+            cfg_provider_ids = {p.id for p in cfg.providers}
+            cfg_model_ids = {m.id for m in cfg.models}
+
+            # --- Providers: upsert + delete missing ---
+            for p in cfg.providers:
+                row = session.get(LLMProvider, p.id)
+                if row is None:
+                    created_at = _parse_iso(p.created_at)
+                    session.add(
+                        LLMProvider(
+                            id=p.id,
+                            name=p.name,
+                            protocol=p.protocol,
+                            base_url=p.base_url,
+                            api_key=p.api_key or "",
+                            created_at=created_at,  # None → DB server_default
+                            updated_at=created_at,
+                        )
+                    )
+                else:
+                    row.name = p.name
+                    row.protocol = p.protocol
+                    row.base_url = p.base_url
+                    row.api_key = p.api_key or ""
+                    # created_at intentionally untouched
+
+            existing_providers = session.query(LLMProvider).all()
+            for row in existing_providers:
+                if row.id not in cfg_provider_ids:
+                    session.delete(row)  # CASCADE removes its models
+
+            # --- Models: upsert + delete missing ---
+            for m in cfg.models:
+                row = session.get(LLMModel, m.id)
+                if row is None:
+                    created_at = _parse_iso(m.created_at)
+                    session.add(
+                        LLMModel(
+                            id=m.id,
+                            provider_id=m.provider_id,
+                            name=m.name,
+                            display_name=m.display_name,
+                            capabilities=list(m.capabilities),
+                            created_at=created_at,
+                            updated_at=created_at,
+                        )
+                    )
+                else:
+                    row.provider_id = m.provider_id
+                    row.name = m.name
+                    row.display_name = m.display_name
+                    row.capabilities = list(m.capabilities)
+
+            existing_models = session.query(LLMModel).all()
+            for row in existing_models:
+                if row.id not in cfg_model_ids:
+                    session.delete(row)
+
+            # --- app_config: upsert all known keys ---
+            _set_app_config(session, _KEY_TAVILY, cfg.tavily_api_key)
+            _set_app_config(session, _KEY_MINERU_KEY, cfg.mineru_api_key)
+            _set_app_config(session, _KEY_MINERU_URL, cfg.mineru_base_url)
+            _set_app_config(session, _KEY_SMTP_HOST, cfg.smtp_host)
+            _set_app_config(session, _KEY_SMTP_PORT, cfg.smtp_port)
+            _set_app_config(session, _KEY_SMTP_USER, cfg.smtp_user)
+            _set_app_config(session, _KEY_SMTP_PASSWORD, cfg.smtp_password)
+            _set_app_config(session, _KEY_SMTP_FROM, cfg.smtp_from)
+            _set_app_config(session, _KEY_SMTP_USE_TLS, cfg.smtp_use_tls)
+            _set_app_config(session, _KEY_ROLE_ASSIGNMENTS, dict(cfg.role_assignments))
 
 
 def to_view(cfg: LLMConfig) -> LLMConfigView:
@@ -482,7 +750,7 @@ def set_mineru_key(cfg: LLMConfig, key: str, base_url: str | None = None) -> Non
 
 
 def get_mineru_config() -> tuple[str, str]:
-    """Return (api_key, base_url) from the on-disk config."""
+    """Return (api_key, base_url) from the DB-backed config."""
     cfg = load_config()
     return cfg.mineru_api_key, cfg.mineru_base_url
 
@@ -517,7 +785,7 @@ def set_smtp_config(
 
 
 def get_smtp_config() -> dict[str, Any]:
-    """Return SMTP settings from the on-disk config (hot-reloadable).
+    """Return SMTP settings from the DB-backed config (hot-reloadable).
 
     Keys: host, port, user, password, from, use_tls.
     """
@@ -549,7 +817,7 @@ def _resolve(cfg: LLMConfig, role: Role) -> ResolvedModel | None:
 
 
 def resolve_role(role: Role) -> ResolvedModel | None:
-    """Look up the configured model for ``role`` from the on-disk config."""
+    """Look up the configured model for ``role`` from the DB-backed config."""
     cfg = load_config()
     return _resolve(cfg, role)
 

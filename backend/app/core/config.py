@@ -49,17 +49,19 @@ class Settings(BaseSettings):
     minio_endpoint: str = "localhost:9000"
     minio_bucket: str = "lifetree-uploads"
 
-    # ---------- LLM ----------
+    # ---------- LLM (legacy env bootstrap — configure via WebUI instead) ----------
+    # These fields are only used by registry._bootstrap_from_env() on first startup
+    # if the database has no LLM config yet. After that, all LLM config lives in DB.
     llm_provider: Literal["openai", "anthropic", "openai_compatible"] = "openai"
     llm_base_url: str | None = None
     llm_api_key: SecretStr = SecretStr("")
     llm_model: str = "gpt-4o-mini"
     llm_embedding_model: str = "text-embedding-3-small"
 
-    # ---------- Tavily ----------
+    # ---------- Tavily (legacy — configure via WebUI) ----------
     tavily_api_key: SecretStr = SecretStr("")
 
-    # ---------- SMTP ----------
+    # ---------- SMTP (legacy — configure via WebUI) ----------
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""

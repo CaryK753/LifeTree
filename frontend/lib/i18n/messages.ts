@@ -523,6 +523,17 @@ const zhCN: Dict = {
   "settings.rolesReady": "{n} / {total} 角色就绪",
   "settings.localOnlyHint": "所有配置只保存在你本机，不会上传到任何地方。",
 
+  // About card
+  "settings.about.title": "关于",
+  "settings.about.description": "LifeTree 是一个把长期决策拆解成路径、风险和里程碑，并持续追踪与推演的开源工具。",
+  "settings.about.version": "版本",
+  "settings.about.license": "许可证",
+  "settings.about.starOnGithub": "Star on GitHub",
+  "settings.about.checkUpdate": "检查更新",
+  "settings.about.upToDate": "已是最新版本",
+  "settings.about.newVersion": "发现新版本：{version}",
+  "settings.about.checkFailed": "无法检查更新",
+
   // Theme (light / dark / system)
   "theme.title": "主题",
   "theme.subtitle": "选择亮色、暗色或跟随系统",
@@ -1313,6 +1324,17 @@ const zhTW: Dict = {
   "settings.rolesReady": "{n} / {total} 角色就緒",
   "settings.localOnlyHint": "所有設定只保存在你本機，不會上傳到任何地方。",
 
+  // About card
+  "settings.about.title": "關於",
+  "settings.about.description": "LifeTree 是一個把長期決策拆解成路徑、風險和里程碑，並持續追蹤與推演的開源工具。",
+  "settings.about.version": "版本",
+  "settings.about.license": "授權條款",
+  "settings.about.starOnGithub": "Star on GitHub",
+  "settings.about.checkUpdate": "檢查更新",
+  "settings.about.upToDate": "已是最新版本",
+  "settings.about.newVersion": "發現新版本：{version}",
+  "settings.about.checkFailed": "無法檢查更新",
+
   // Theme (light / dark / system)
   "theme.title": "主題",
   "theme.subtitle": "選擇亮色、暗色或跟隨系統",
@@ -2099,6 +2121,17 @@ const en: Dict = {
   "settings.rolesReady": "{n} / {total} roles ready",
   "settings.localOnlyHint": "All settings stay on this machine only — nothing is uploaded.",
 
+  // About card
+  "settings.about.title": "About",
+  "settings.about.description": "LifeTree is an open-source tool that breaks long-term decisions into pathways, risks, and milestones, then continuously tracks and simulates them.",
+  "settings.about.version": "Version",
+  "settings.about.license": "License",
+  "settings.about.starOnGithub": "Star on GitHub",
+  "settings.about.checkUpdate": "Check for Updates",
+  "settings.about.upToDate": "You're up to date",
+  "settings.about.newVersion": "New version available: {version}",
+  "settings.about.checkFailed": "Unable to check for updates",
+
   // Theme (light / dark / system)
   "theme.title": "Theme",
   "theme.subtitle": "Choose light, dark, or follow the system preference",
@@ -2883,6 +2916,17 @@ const es: Dict = {
   "settings.subtitle": "Añade modelos de IA y asigna roles para que chat, extracción y búsqueda funcionen",
   "settings.rolesReady": "{n} / {total} roles listos",
   "settings.localOnlyHint": "Todos los ajustes se guardan solo en este equipo — nada se sube.",
+
+  // About card
+  "settings.about.title": "Acerca de",
+  "settings.about.description": "LifeTree es una herramienta de código abierto que descompone las decisiones a largo plazo en rutas, riesgos y hitos, y las sigue y simula continuamente.",
+  "settings.about.version": "Versión",
+  "settings.about.license": "Licencia",
+  "settings.about.starOnGithub": "Star on GitHub",
+  "settings.about.checkUpdate": "Buscar actualizaciones",
+  "settings.about.upToDate": "Estás actualizado",
+  "settings.about.newVersion": "Nueva versión disponible: {version}",
+  "settings.about.checkFailed": "No se pudieron buscar actualizaciones",
 
   // Theme (light / dark / system)
   "theme.title": "Tema",
@@ -3670,6 +3714,17 @@ const de: Dict = {
   "settings.rolesReady": "{n} / {total} Rollen bereit",
   "settings.localOnlyHint": "Alle Einstellungen bleiben nur auf diesem Rechner — nichts wird hochgeladen.",
 
+  // About card
+  "settings.about.title": "Über",
+  "settings.about.description": "LifeTree ist ein Open-Source-Tool, das langfristige Entscheidungen in Pfade, Risiken und Meilensteine zerlegt und diese kontinuierlich verfolgt und simuliert.",
+  "settings.about.version": "Version",
+  "settings.about.license": "Lizenz",
+  "settings.about.starOnGithub": "Star on GitHub",
+  "settings.about.checkUpdate": "Nach Updates suchen",
+  "settings.about.upToDate": "Du bist auf dem neuesten Stand",
+  "settings.about.newVersion": "Neue Version verfügbar: {version}",
+  "settings.about.checkFailed": "Update-Prüfung fehlgeschlagen",
+
   // Theme (light / dark / system)
   "theme.title": "Design",
   "theme.subtitle": "Wähle Hell, Dunkel oder System",
@@ -4455,6 +4510,17 @@ const fr: Dict = {
   "settings.subtitle": "Ajoutez des modèles IA et attribuez des rôles pour que chat, extraction et récupération fonctionnent tous",
   "settings.rolesReady": "{n} / {total} rôles prêts",
   "settings.localOnlyHint": "Tous les paramètres restent uniquement sur cette machine — rien n'est téléversé.",
+
+  // About card
+  "settings.about.title": "À propos",
+  "settings.about.description": "LifeTree est un outil open source qui décompose les décisions à long terme en chemins, risques et jalons, puis les suit et les simule en continu.",
+  "settings.about.version": "Version",
+  "settings.about.license": "Licence",
+  "settings.about.starOnGithub": "Star on GitHub",
+  "settings.about.checkUpdate": "Rechercher des mises à jour",
+  "settings.about.upToDate": "Vous êtes à jour",
+  "settings.about.newVersion": "Nouvelle version disponible : {version}",
+  "settings.about.checkFailed": "Impossible de vérifier les mises à jour",
 
   // Theme (light / dark / system)
   "theme.title": "Thème",

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSettings, useSystemComponents } from "@/lib/hooks";
 import {
   api,
+  type AboutInfo,
   type ModelView,
   type Protocol,
   type ProviderView,
@@ -11,6 +12,7 @@ import {
   type SmtpUpdate,
   type SystemComponentView,
   type TestResult,
+  type UpdateCheck,
   ALL_ROLES,
 } from "@/lib/api";
 import {
@@ -51,9 +53,11 @@ import {
   Eye,
   EyeOff,
   FileText,
+  Github,
   Globe,
   HardDrive,
   ImageIcon,
+  Info,
   Layers,
   Loader2,
   Mail,
@@ -456,6 +460,9 @@ export default function SettingsPage() {
       {/* ---------- Language ---------- */}
       <LanguageCard />
 
+      {/* ---------- About ---------- */}
+      <AboutCard />
+
       <p className="text-xs text-zinc-600 pt-2">
         {t("settings.localOnlyHint")}
       </p>
@@ -711,6 +718,148 @@ function LanguageCard() {
             );
           })}
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ============== About Card ==============
+
+function AboutCard() {
+  const t = useT();
+  const [about, setAbout] = useState<AboutInfo | null>(null);
+  const [update, setUpdate] = useState<UpdateCheck | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .get<AboutInfo>("/meta/about")
+      .then((data) => {
+        if (!cancelled) setAbout(data);
+      })
+      .catch(() => {
+        // silently ignore — card just shows fallback strings
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleCheckUpdate() {
+    setChecking(true);
+    setCheckError(false);
+    try {
+      const data = await api.get<UpdateCheck>("/meta/check-update");
+      setUpdate(data);
+    } catch {
+      setCheckError(true);
+      setUpdate(null);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  const name = about?.name ?? "LifeTree";
+  const description = about?.description ?? t("settings.about.description");
+  const version = about?.version ?? "—";
+  const license = about?.license ?? "AGPL-3.0";
+  const githubUrl = about?.github_url ?? "https://github.com/lifetree/lifetree";
+
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle className="flex items-center gap-2">
+            <Info className="h-4 w-4 text-brand-600 dark:text-brand-400" />
+            {t("settings.about.title")}
+          </CardTitle>
+          <CardDescription className="mt-1">
+            {t("settings.about.description")}
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div>
+          <div className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+            {name}
+          </div>
+          <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-snug mt-1">
+            {description}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+          <div className="flex items-center gap-1.5">
+            <span className="text-zinc-500 dark:text-zinc-400">
+              {t("settings.about.version")}
+            </span>
+            <Badge variant="default" className="text-[10px] font-mono">
+              {version}
+            </Badge>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-zinc-500 dark:text-zinc-400">
+              {t("settings.about.license")}
+            </span>
+            <span className="font-mono text-zinc-700 dark:text-zinc-300">
+              {license}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button asChild variant="outline" size="sm">
+            <a
+              href={githubUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5"
+            >
+              <Github className="h-3.5 w-3.5" />
+              {t("settings.about.starOnGithub")}
+            </a>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCheckUpdate}
+            disabled={checking}
+          >
+            <RefreshCw
+              className={cn("h-3.5 w-3.5 mr-1.5", checking && "animate-spin")}
+            />
+            {t("settings.about.checkUpdate")}
+          </Button>
+        </div>
+
+        {update?.has_update ? (
+          <div className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              {t("settings.about.newVersion", { version: update.latest_version })}
+            </span>
+            <a
+              href={update.release_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-0.5 text-brand-600 dark:text-brand-400 hover:underline"
+            >
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          </div>
+        ) : update && !update.has_update ? (
+          <div className="flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-300">
+            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+            <span>{t("settings.about.upToDate")}</span>
+          </div>
+        ) : checkError ? (
+          <div className="flex items-center gap-2 text-xs text-red-600 dark:text-red-300">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span>{t("settings.about.checkFailed")}</span>
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );

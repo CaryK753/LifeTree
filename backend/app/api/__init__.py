@@ -46,3 +46,58 @@ api_router.include_router(lifecycle_router)
 @api_router.get("/_meta", tags=["meta"])
 async def meta() -> dict[str, str]:
     return {"name": "LifeTree API", "phase": "MVP"}
+
+
+@api_router.get("/meta/about", tags=["meta"])
+async def about() -> dict[str, str]:
+    """Return project metadata for the Settings → About panel."""
+    return {
+        "name": "LifeTree",
+        "version": "0.1.0",
+        "description": "知识图谱驱动的决策支持系统",
+        "github_url": "https://github.com/caryg/lifetree",
+        "license": "AGPL-3.0",
+    }
+
+
+@api_router.get("/meta/check-update", tags=["meta"])
+async def check_update() -> dict[str, str | bool | None]:
+    """Check GitHub releases for a newer version.
+
+    Returns ``latest_version``, ``has_update``, and ``release_url``.
+    Network failures are non-fatal — the frontend just shows "unable to check".
+    """
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://api.github.com/repos/caryg/lifetree/releases/latest",
+                headers={"Accept": "application/vnd.github+json"},
+            )
+        if resp.status_code != 200:
+            return {"has_update": False, "latest_version": None, "release_url": None}
+        data = resp.json()
+        latest = (data.get("tag_name") or "").lstrip("v")
+        current = "0.1.0"
+        # Simple semver compare (major.minor.patch).
+        def _parse(v: str):
+            parts = []
+            for p in (v or "").split("."):
+                try:
+                    parts.append(int(p))
+                except ValueError:
+                    parts.append(0)
+            return parts[:3]
+
+        cur_parts = _parse(current)
+        new_parts = _parse(latest)
+        has_update = new_parts > cur_parts
+        return {
+            "has_update": has_update,
+            "latest_version": latest or None,
+            "current_version": current,
+            "release_url": data.get("html_url"),
+        }
+    except Exception:  # noqa: BLE001
+        return {"has_update": False, "latest_version": None, "release_url": None}
