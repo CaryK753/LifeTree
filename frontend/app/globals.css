@@ -1,0 +1,239 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Theme tokens
+ * ------------
+ * LifeTree uses a CSS-variable-based palette so the same utility classes
+ * work in both light and dark mode. The `dark` class is applied to <html>
+ * by next-themes (attribute="class"). Light mode is the default :root.
+ *
+ * Tokens:
+ *   --background  : page background (rgb triplet, alpha applied via / <alpha>)
+ *   --foreground  : primary text
+ *   --surface     : card / panel background
+ *   --surface-2   : raised surface (hovers, inputs)
+ *   --muted       : secondary text
+ *   --border      : default border color
+ *   --ring        : focus ring
+ *
+ * Values are space-separated RGB triplets (e.g. "15 20 16") so Tailwind's
+ * `rgb(var(--x) / <alpha-value>)` form works with opacity modifiers.
+ */
+
+:root {
+  /* Light theme — warm-tinted paper */
+  --background: 247 246 242;       /* #f7f6f2 */
+  --foreground: 24 24 27;          /* zinc-900 */
+  --surface: 255 255 255;          /* white */
+  --surface-2: 244 244 245;        /* zinc-100 */
+  --muted: 82 82 91;               /* zinc-600 */
+  --border: 0 0 0;                 /* black, used with low alpha */
+  --ring: 59 141 97;               /* brand-500 */
+}
+
+:root.dark {
+  /* Dark theme — original LifeTree forest-dark palette */
+  --background: 15 20 16;          /* #0f1410 */
+  --foreground: 230 235 232;
+  --surface: 23 29 24;             /* #171d18 */
+  --surface-2: 30 36 31;
+  --muted: 156 163 160;            /* #9ca3a0 */
+  --border: 255 255 255;           /* white, used with low alpha */
+  --ring: 59 141 97;
+}
+
+html, body {
+  background-color: rgb(var(--background));
+  color: rgb(var(--foreground));
+  font-feature-settings: "rlig" 1, "calt" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  border-color: rgb(var(--border) / 0.06);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--border) / 0.12);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--border) / 0.2);
+}
+
+/* Card surface — uses CSS variables so it adapts to both themes */
+.surface {
+  background: linear-gradient(
+    180deg,
+    rgb(var(--surface) / 0.6),
+    rgb(var(--surface) / 0.4)
+  );
+  border: 1px solid rgb(var(--border) / 0.08);
+  border-radius: 1rem;
+}
+
+.surface-hover:hover {
+  border-color: rgb(var(--border) / 0.16);
+  background: linear-gradient(
+    180deg,
+    rgb(var(--surface-2) / 0.7),
+    rgb(var(--surface-2) / 0.5)
+  );
+}
+
+/* Risk pill helpers — colors are themed by intent, kept consistent */
+.pill-risk-low    { background: rgba(34, 197, 94, 0.12);  color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.3); }
+:root.dark .pill-risk-low { color: #4ade80; }
+.pill-risk-medium { background: rgba(245, 158, 11, 0.12); color: #d97706; border: 1px solid rgba(245, 158, 11, 0.3); }
+:root.dark .pill-risk-medium { color: #fbbf24; }
+.pill-risk-high   { background: rgba(239, 68, 68, 0.12);  color: #dc2626; border: 1px solid rgba(239, 68, 68, 0.3); }
+:root.dark .pill-risk-high { color: #f87171; }
+
+/* Cytoscape canvas — themed via CSS variables */
+.cytoscape-container {
+  width: 100%;
+  height: 100%;
+  min-height: 480px;
+  background: radial-gradient(circle at 30% 20%, rgba(59, 141, 97, 0.1), transparent 60%);
+}
+:root:not(.dark) .cytoscape-container {
+  background: radial-gradient(circle at 30% 20%, rgba(59, 141, 97, 0.12), rgb(244 244 245) 60%);
+}
+
+/* Range input (sliders) — themed track + thumb.
+   `accent-color` styles the modern browsers' default, but the track itself
+   is browser-styled and looks wrong (too dark) in light mode. We provide an
+   explicit track + thumb for both themes. */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 9999px;
+  background: rgb(var(--border) / 0.18);
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: rgb(var(--ring));
+  border: 2px solid rgb(var(--surface));
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+  transition: transform 120ms ease-out;
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: rgb(var(--ring));
+  border: 2px solid rgb(var(--surface));
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+}
+input[type="range"]:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgb(var(--ring) / 0.25);
+}
+
+/*
+ * Light-mode shim for legacy dark-only utility classes
+ * ----------------------------------------------------
+ * The codebase was originally dark-only, so most components use
+ * `bg-white/5`, `text-zinc-100`, `border-white/10` etc. These classes
+ * compile to fixed light-on-dark colors that look wrong in light mode.
+ *
+ * Rather than rewrite 100+ components, we override the compiled rules
+ * in light mode (`:root:not(.dark)`) to remap them to theme-appropriate
+ * values. The `!important` is needed because Tailwind utilities have
+ * the same specificity.
+ *
+ * Dark mode is unaffected — the original utilities keep working.
+ */
+
+:root:not(.dark) {
+  /* Semi-transparent white backgrounds → semi-transparent black */
+  .bg-white\/5  { background-color: rgb(0 0 0 / 0.04) !important; }
+  .bg-white\/10 { background-color: rgb(0 0 0 / 0.06) !important; }
+  .bg-white\/\[0\.02\] { background-color: rgb(0 0 0 / 0.02) !important; }
+  .bg-white\/\[0\.03\] { background-color: rgb(0 0 0 / 0.03) !important; }
+  .bg-white\/\[0\.04\] { background-color: rgb(0 0 0 / 0.04) !important; }
+  .bg-white\/\[0\.06\] { background-color: rgb(0 0 0 / 0.06) !important; }
+  .bg-white\/20 { background-color: rgb(0 0 0 / 0.08) !important; }
+
+  /* White-on-dark text → dark-on-light */
+  .text-zinc-50  { color: rgb(24 24 27) !important; }       /* zinc-900 */
+  .text-zinc-100 { color: rgb(24 24 27) !important; }
+  .text-zinc-200 { color: rgb(39 39 42) !important; }       /* zinc-800 */
+  .text-zinc-300 { color: rgb(63 63 70) !important; }       /* zinc-700 */
+  .text-zinc-400 { color: rgb(82 82 91) !important; }       /* zinc-600 */
+  /* zinc-500/600 stay the same — they work in both themes */
+
+  /* White borders → dark borders */
+  .border-white\/5  { border-color: rgb(0 0 0 / 0.08) !important; }
+  .border-white\/10 { border-color: rgb(0 0 0 / 0.12) !important; }
+
+  /* Hard-coded dark backgrounds */
+  .bg-\[\#0b0d12\]\/95 { background-color: rgb(255 255 255 / 0.95) !important; }
+  .bg-\[\#0d1015\]     { background-color: rgb(244 244 245) !important; } /* zinc-100 */
+  .bg-\[\#0b0d12\]     { background-color: rgb(255 255 255) !important; }
+
+  /* Hover states that use white overlays → use dark overlays */
+  .hover\:bg-white\/5:hover  { background-color: rgb(0 0 0 / 0.05) !important; }
+  .hover\:bg-white\/10:hover { background-color: rgb(0 0 0 / 0.08) !important; }
+  .hover\:bg-white\/\[0\.04\]:hover { background-color: rgb(0 0 0 / 0.04) !important; }
+  .hover\:bg-white\/\[0\.06\]:hover { background-color: rgb(0 0 0 / 0.06) !important; }
+  .hover\:text-zinc-100:hover { color: rgb(24 24 27) !important; }
+  .hover\:text-zinc-200:hover { color: rgb(39 39 42) !important; }
+  .hover\:text-zinc-300:hover { color: rgb(63 63 70) !important; }
+
+  /* Surfaces using bg-surface (mapped via tailwind config) are already themed,
+     but a few places hard-code bg-black/60 (modal backdrops) — that's fine. */
+}
+
+/* ---------- PWA / mobile helpers ---------- */
+
+/* Safe-area insets for notched iOS devices when installed as PWA. */
+.safe-top    { padding-top:    env(safe-area-inset-top); }
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+.safe-left   { padding-left:   env(safe-area-inset-left); }
+.safe-right  { padding-right:  env(safe-area-inset-right); }
+
+/* When running as a standalone PWA, allow content to extend under the
+   status bar / home indicator but keep interactive elements clear. */
+@media (display-mode: standalone) {
+  .safe-top    { padding-top:    max(env(safe-area-inset-top), 0.5rem); }
+  .safe-bottom { padding-bottom: max(env(safe-area-inset-bottom), 0.5rem); }
+}
+
+/* Fade-in animation used by page roots for a soft PWA-like transition. */
+@keyframes lifetree-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: lifetree-fade-in 220ms ease-out both;
+}
+
+/* On small screens, slim down the default page padding. */
+@media (max-width: 640px) {
+  .animate-fade-in { animation-duration: 160ms; }
+}
+
+/* Prevent iOS rubber-band scroll leak when drawer is open. */
+body.drawer-open { overflow: hidden; }
+
+/* Larger touch targets on coarse pointers (mobile / tablets). */
+@media (pointer: coarse) {
+  button, [role="button"], a {
+    min-height: 36px;
+  }
+}

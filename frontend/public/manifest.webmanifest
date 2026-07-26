@@ -1,0 +1,64 @@
+{
+  "name": "LifeTree · 人生树",
+  "short_name": "LifeTree",
+  "description": "把长期决策拆解成路径、风险和里程碑，持续追踪与推演。",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#0b0d12",
+  "theme_color": "#0b0d12",
+  "categories": ["productivity", "lifestyle", "utilities"],
+  "icons": [
+    {
+      "src": "/media/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/media/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/media/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/media/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "目标罗盘",
+      "short_name": "罗盘",
+      "description": "查看当前主目标的进度、风险与推演",
+      "url": "/dashboard",
+      "icons": [{ "src": "/media/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "AI 顾问",
+      "short_name": "对话",
+      "description": "与 AI 决策顾问对话，自动更新画像",
+      "url": "/chat",
+      "icons": [{ "src": "/media/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "风险预警",
+      "short_name": "预警",
+      "description": "查看系统推送的风险预警通知",
+      "url": "/notifications",
+      "icons": [{ "src": "/media/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}
