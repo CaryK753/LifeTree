@@ -75,6 +75,11 @@ class UserProfile(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     def __repr__(self) -> str:
         return f"<UserProfile {self.display_name}>"
 
+    @property
+    def has_password(self) -> bool:
+        """True if this user has a password set (can log in via /auth/login)."""
+        return self.password_hash is not None
+
 
 class UserUpload(UUIDPkMixin, TimestampMixin, Base):
     """Private information uploaded by user (PDF, screenshot, email forward, etc.)."""
