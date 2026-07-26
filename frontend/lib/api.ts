@@ -671,7 +671,9 @@ export interface LLMConfigView {
   smtp_password_configured: boolean;
   smtp_password_preview: string;
   smtp_from: string;
+  smtp_sender_name: string;
   smtp_use_tls: boolean;
+  smtp_use_ssl: boolean;
 }
 
 export interface ProviderCreate {
@@ -707,7 +709,9 @@ export interface SmtpUpdate {
   user?: string | null;
   password?: string | null;
   from_addr?: string | null;
+  sender_name?: string | null;
   use_tls?: boolean | null;
+  use_ssl?: boolean | null;
 }
 
 export interface TestResult {

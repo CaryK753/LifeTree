@@ -447,7 +447,9 @@ export default function SettingsPage() {
         passwordConfigured={settings?.smtp_password_configured ?? false}
         passwordPreview={settings?.smtp_password_preview ?? ""}
         fromAddr={settings?.smtp_from ?? "notify@lifetree.local"}
+        senderName={settings?.smtp_sender_name ?? "LifeTree"}
         useTls={settings?.smtp_use_tls ?? true}
+        useSsl={settings?.smtp_use_ssl ?? false}
         onSave={handleSmtpSave}
       />
 
@@ -1915,7 +1917,9 @@ function SmtpCard({
   passwordConfigured,
   passwordPreview,
   fromAddr,
+  senderName,
   useTls,
+  useSsl,
   onSave,
 }: {
   host: string;
@@ -1924,7 +1928,9 @@ function SmtpCard({
   passwordConfigured: boolean;
   passwordPreview: string;
   fromAddr: string;
+  senderName: string;
   useTls: boolean;
+  useSsl: boolean;
   onSave: (patch: SmtpUpdate) => void;
 }) {
   const t = useT();
@@ -1936,12 +1942,16 @@ function SmtpCard({
   const [userV, setUserV] = useState(user);
   const [passwordV, setPasswordV] = useState("");
   const [fromV, setFromV] = useState(fromAddr);
+  const [senderNameV, setSenderNameV] = useState(senderName);
   const [tlsV, setTlsV] = useState(useTls);
+  const [sslV, setSslV] = useState(useSsl);
   const [hostTouched, setHostTouched] = useState(false);
   const [portTouched, setPortTouched] = useState(false);
   const [userTouched, setUserTouched] = useState(false);
   const [fromTouched, setFromTouched] = useState(false);
+  const [senderNameTouched, setSenderNameTouched] = useState(false);
   const [tlsTouched, setTlsTouched] = useState(false);
+  const [sslTouched, setSslTouched] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const [revealingPw, setRevealingPw] = useState(false);
   // Test-email state — recipient defaults to the SMTP user (most common case),
@@ -1968,8 +1978,14 @@ function SmtpCard({
     if (!fromTouched) setFromV(fromAddr);
   }, [fromAddr, fromTouched]);
   useEffect(() => {
+    if (!senderNameTouched) setSenderNameV(senderName);
+  }, [senderName, senderNameTouched]);
+  useEffect(() => {
     if (!tlsTouched) setTlsV(useTls);
   }, [useTls, tlsTouched]);
+  useEffect(() => {
+    if (!sslTouched) setSslV(useSsl);
+  }, [useSsl, sslTouched]);
 
   const configured = !!host;
   const hasEdit =
@@ -1977,7 +1993,9 @@ function SmtpCard({
     portTouched ||
     userTouched ||
     fromTouched ||
+    senderNameTouched ||
     tlsTouched ||
+    sslTouched ||
     !!passwordV.trim();
 
   function buildPatch(): SmtpUpdate {
@@ -1989,7 +2007,9 @@ function SmtpCard({
     }
     if (userTouched) patch.user = userV.trim();
     if (fromTouched) patch.from_addr = fromV.trim();
+    if (senderNameTouched) patch.sender_name = senderNameV.trim();
     if (tlsTouched) patch.use_tls = tlsV;
+    if (sslTouched) patch.use_ssl = sslV;
     if (passwordV.trim()) patch.password = passwordV;
     return patch;
   }
@@ -2162,30 +2182,59 @@ function SmtpCard({
           </Field>
         </div>
 
-        <Field label={t("settings.smtp.from")} hint={t("settings.smtp.fromHint")}>
-          <Input
-            value={fromV}
-            onChange={(e) => {
-              setFromV(e.target.value);
-              setFromTouched(true);
-            }}
-            placeholder="notify@lifetree.local"
-            className="font-mono"
-          />
-        </Field>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Field label={t("settings.smtp.from")} hint={t("settings.smtp.fromHint")}>
+            <Input
+              value={fromV}
+              onChange={(e) => {
+                setFromV(e.target.value);
+                setFromTouched(true);
+              }}
+              placeholder="notify@lifetree.local"
+              className="font-mono"
+            />
+          </Field>
+          <Field label={t("settings.smtp.senderName")}>
+            <Input
+              value={senderNameV}
+              onChange={(e) => {
+                setSenderNameV(e.target.value);
+                setSenderNameTouched(true);
+              }}
+              placeholder="LifeTree"
+            />
+          </Field>
+        </div>
 
-        <label className="flex items-center gap-2 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={tlsV}
-            onChange={(e) => {
-              setTlsV(e.target.checked);
-              setTlsTouched(true);
-            }}
-            className="h-3.5 w-3.5 accent-brand-500"
-          />
-          <span className="text-xs text-zinc-700 dark:text-zinc-300">{t("settings.smtp.useTls")}</span>
-        </label>
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-4">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={tlsV}
+                onChange={(e) => {
+                  setTlsV(e.target.checked);
+                  setTlsTouched(true);
+                }}
+                className="h-3.5 w-3.5 accent-brand-500"
+              />
+              <span className="text-xs text-zinc-700 dark:text-zinc-300">{t("settings.smtp.useTls")}</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={sslV}
+                onChange={(e) => {
+                  setSslV(e.target.checked);
+                  setSslTouched(true);
+                }}
+                className="h-3.5 w-3.5 accent-brand-500"
+              />
+              <span className="text-xs text-zinc-700 dark:text-zinc-300">{t("settings.smtp.useSSL")}</span>
+            </label>
+          </div>
+          <p className="text-[10px] text-zinc-500 leading-snug">{t("settings.smtp.sslHint")}</p>
+        </div>
 
         {/* Test email section */}
         <div className="rounded-md border border-black/5 dark:border-white/10 bg-black/[0.02] dark:bg-black/20 p-3 space-y-2">

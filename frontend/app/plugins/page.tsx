@@ -96,6 +96,11 @@ export default function PluginsPage() {
               b: "sample_rss_feed.py",
             })}
           </p>
+          <div className="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              {t("plugins.howTo.contribute")}
+            </p>
+          </div>
         </CardContent>
       </Card>
     </div>

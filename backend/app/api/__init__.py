@@ -55,7 +55,7 @@ async def about() -> dict[str, str]:
         "name": "LifeTree",
         "version": "0.1.0",
         "description": "知识图谱驱动的决策支持系统",
-        "github_url": "https://github.com/caryg/lifetree",
+        "github_url": "https://github.com/CaryK753/LifeTree",
         "license": "AGPL-3.0",
     }
 
@@ -72,7 +72,7 @@ async def check_update() -> dict[str, str | bool | None]:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
-                "https://api.github.com/repos/caryg/lifetree/releases/latest",
+                "https://api.github.com/repos/CaryK753/LifeTree/releases/latest",
                 headers={"Accept": "application/vnd.github+json"},
             )
         if resp.status_code != 200:

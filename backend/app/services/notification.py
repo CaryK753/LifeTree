@@ -10,6 +10,7 @@ import json
 import smtplib
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
+from email.utils import formataddr
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -216,19 +217,29 @@ class NotificationService:
             smtp_password = self.settings.smtp_password.get_secret_value()
         from_addr = smtp["from"] if smtp["host"] else self.settings.smtp_from
         use_tls = smtp["use_tls"] if smtp["host"] else True
+        use_ssl = smtp.get("use_ssl", False) if smtp["host"] else False
+        sender_name = (
+            smtp.get("sender_name", "LifeTree") if smtp["host"] else "LifeTree"
+        ) or "LifeTree"
 
         msg = MIMEText(body)
         msg["Subject"] = f"[LifeTree] {title}"
-        msg["From"] = from_addr
+        msg["From"] = formataddr((sender_name, from_addr))
         msg["To"] = user.email
 
         try:
-            with smtplib.SMTP(host, port, timeout=10) as server:
-                if use_tls:
-                    server.starttls()
-                if smtp_user:
-                    server.login(smtp_user, smtp_password)
-                server.sendmail(from_addr, [user.email], msg.as_string())
+            if use_ssl:
+                with smtplib.SMTP_SSL(host, port, timeout=10) as server:
+                    if smtp_user:
+                        server.login(smtp_user, smtp_password)
+                    server.sendmail(from_addr, [user.email], msg.as_string())
+            else:
+                with smtplib.SMTP(host, port, timeout=10) as server:
+                    if use_tls:
+                        server.starttls()
+                    if smtp_user:
+                        server.login(smtp_user, smtp_password)
+                    server.sendmail(from_addr, [user.email], msg.as_string())
         except (smtplib.SMTPException, OSError) as exc:
             log.error(
                 "notification.email_send_failed",

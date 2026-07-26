@@ -402,11 +402,58 @@ python scripts/seed_fsw.py
 
 ### SMTP 邮件配置
 
-在设置页面配置 SMTP，启用风险预警邮件推送。支持发送测试邮件验证配置。
+在设置页面配置 SMTP，启用风险预警邮件推送。支持发送测试邮件验证配置。配置项包括：
+
+- SMTP 服务器地址、端口
+- 用户名、密码
+- 发件人邮箱、发件人名称
+- 使用 TLS（STARTTLS，端口 587）/ 使用 SSL（端口 465）
 
 ### 环境变量
 
 完整变量见 [`.env.example`](.env.example)。
+
+---
+
+## 插件系统
+
+LifeTree 的插件系统允许通过自定义 Python 脚本接入任意数据源（RSS、网页爬虫、API 等），将外部信息自动结构化为知识图谱中的事件、指标、断言和关系。
+
+### 插件契约
+
+每个插件是一个 Python 文件，放在 `backend/plugins/` 目录下，需实现以下静态方法：
+
+```python
+from app.services.plugins import Plugin, PluginManifest, PluginParam
+
+class Plugin:
+    @staticmethod
+    def manifest() -> PluginManifest:
+        """返回插件元数据：名称、描述、参数定义"""
+
+    @staticmethod
+    def fetch(params: dict) -> str | bytes:
+        """抓取原始数据，返回文本或二进制"""
+
+    @staticmethod
+    def transform(raw, llm) -> str:  # 可选
+        """可选：用 LLM 预处理原始数据后再交给结构化服务"""
+```
+
+参考示例：[`sample_rss_feed.py`](backend/plugins/sample_rss_feed.py)、[`sample_web_scraper.py`](backend/plugins/sample_web_scraper.py)。
+
+### 贡献插件
+
+欢迎通过 Pull Request 提交自定义插件：
+
+1. Fork 仓库并在 `backend/plugins/` 下创建插件文件（文件名须为小写蛇形，如 `my_feed.py`）
+2. 实现插件契约，确保 `manifest()` 和 `fetch()` 正常工作
+3. 在 PR 描述中说明插件用途、参数说明和测试方式
+4. 通过审核后合并到主线版本，随正式版本发布
+
+### 插件上传（计划中）
+
+未来版本将在插件页面支持直接上传 `.py` 文件，并通过 Docker volume 持久化存储，无需重新构建镜像即可添加自定义插件。
 
 ---
 

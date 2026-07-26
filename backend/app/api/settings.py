@@ -119,7 +119,14 @@ class SmtpUpdate(BaseModel):
         None,
         description="From address. Empty string resets to notify@lifetree.local.",
     )
+    sender_name: str | None = Field(
+        None,
+        description="Sender display name. Empty string resets to 'LifeTree'.",
+    )
     use_tls: bool | None = Field(None, description="Whether to use STARTTLS.")
+    use_ssl: bool | None = Field(
+        None, description="Use SSL (port 465) instead of STARTTLS."
+    )
 
 
 class TestResult(BaseModel):
@@ -305,7 +312,9 @@ async def put_smtp(payload: SmtpUpdate) -> LLMConfigView:
             user=payload.user,
             password=payload.password,
             from_addr=payload.from_addr,
+            sender_name=payload.sender_name,
             use_tls=payload.use_tls,
+            use_ssl=payload.use_ssl,
         )
     )
 
@@ -359,6 +368,7 @@ def test_smtp(payload: SmtpTestRequest) -> SmtpTestResult:
     """
     import smtplib
     from email.mime.text import MIMEText
+    from email.utils import formataddr
 
     from app.llm.registry import get_smtp_config
 
@@ -372,27 +382,36 @@ def test_smtp(payload: SmtpTestRequest) -> SmtpTestResult:
     smtp_user = smtp["user"]
     smtp_password = smtp["password"]
     from_addr = smtp["from"] or "notify@lifetree.local"
+    sender_name = smtp.get("sender_name", "LifeTree") or "LifeTree"
     use_tls = smtp["use_tls"] if smtp["use_tls"] is not None else True
+    use_ssl = smtp["use_ssl"] if smtp["use_ssl"] is not None else False
 
     body = (
         "This is a test email from LifeTree.\n\n"
         "If you received this message, your SMTP configuration is working correctly.\n\n"
         f"Server: {host}:{port}\n"
         f"From: {from_addr}\n"
-        f"TLS: {'on' if use_tls else 'off'}"
+        f"TLS: {'on' if use_tls else 'off'}\n"
+        f"SSL: {'on' if use_ssl else 'off'}"
     )
     msg = MIMEText(body)
     msg["Subject"] = "[LifeTree] SMTP Test"
-    msg["From"] = from_addr
+    msg["From"] = formataddr((sender_name, from_addr))
     msg["To"] = payload.to_addr
 
     try:
-        with smtplib.SMTP(host, port, timeout=10) as server:
-            if use_tls:
-                server.starttls()
-            if smtp_user:
-                server.login(smtp_user, smtp_password)
-            server.sendmail(from_addr, [payload.to_addr], msg.as_string())
+        if use_ssl:
+            with smtplib.SMTP_SSL(host, port, timeout=10) as server:
+                if smtp_user:
+                    server.login(smtp_user, smtp_password)
+                server.sendmail(from_addr, [payload.to_addr], msg.as_string())
+        else:
+            with smtplib.SMTP(host, port, timeout=10) as server:
+                if use_tls:
+                    server.starttls()
+                if smtp_user:
+                    server.login(smtp_user, smtp_password)
+                server.sendmail(from_addr, [payload.to_addr], msg.as_string())
     except (smtplib.SMTPException, OSError) as exc:
         return SmtpTestResult(ok=False, error=str(exc))
     return SmtpTestResult(ok=True)

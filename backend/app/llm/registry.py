@@ -120,7 +120,9 @@ class LLMConfig(BaseModel):
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_from: str = "notify@lifetree.local"
+    smtp_sender_name: str = "LifeTree"  # display name for From header
     smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False  # use SSL (port 465) instead of STARTTLS
 
 
 # ---------- Resolved view (no secrets) ----------
@@ -168,7 +170,9 @@ class LLMConfigView(BaseModel):
     smtp_password_configured: bool
     smtp_password_preview: str
     smtp_from: str
+    smtp_sender_name: str
     smtp_use_tls: bool
+    smtp_use_ssl: bool
 
 
 # ---------- Resolved client target (internal) ----------
@@ -194,11 +198,14 @@ _KEY_SMTP_PORT = "smtp_port"
 _KEY_SMTP_USER = "smtp_user"
 _KEY_SMTP_PASSWORD = "smtp_password"
 _KEY_SMTP_FROM = "smtp_from"
+_KEY_SMTP_SENDER_NAME = "smtp_sender_name"
 _KEY_SMTP_USE_TLS = "smtp_use_tls"
+_KEY_SMTP_USE_SSL = "smtp_use_ssl"
 _KEY_ROLE_ASSIGNMENTS = "role_assignments"
 
 _DEFAULT_MINERU_URL = "https://mineru.net/api/v4"
 _DEFAULT_SMTP_FROM = "notify@lifetree.local"
+_DEFAULT_SMTP_SENDER_NAME = "LifeTree"
 
 _lock = threading.RLock()
 
@@ -405,10 +412,18 @@ def _load_from_db() -> LLMConfig | None:
             _decode_value(config_rows.get(_KEY_SMTP_FROM), _DEFAULT_SMTP_FROM)
             or _DEFAULT_SMTP_FROM
         )
+        smtp_sender_name = (
+            _decode_value(config_rows.get(_KEY_SMTP_SENDER_NAME), _DEFAULT_SMTP_SENDER_NAME)
+            or _DEFAULT_SMTP_SENDER_NAME
+        )
         # NOTE: do not coerce ``smtp_use_tls`` with ``or`` — False is valid.
         smtp_use_tls = _decode_value(config_rows.get(_KEY_SMTP_USE_TLS), True)
         if not isinstance(smtp_use_tls, bool):
             smtp_use_tls = True
+        # NOTE: same bool-safe pattern for ``smtp_use_ssl``.
+        smtp_use_ssl = _decode_value(config_rows.get(_KEY_SMTP_USE_SSL), False)
+        if not isinstance(smtp_use_ssl, bool):
+            smtp_use_ssl = False
 
         return LLMConfig(
             version=1,
@@ -423,7 +438,9 @@ def _load_from_db() -> LLMConfig | None:
             smtp_user=smtp_user,
             smtp_password=smtp_password,
             smtp_from=smtp_from,
+            smtp_sender_name=smtp_sender_name,
             smtp_use_tls=smtp_use_tls,
+            smtp_use_ssl=smtp_use_ssl,
         )
 
 
@@ -551,7 +568,9 @@ def save_config(cfg: LLMConfig) -> None:
             _set_app_config(session, _KEY_SMTP_USER, cfg.smtp_user)
             _set_app_config(session, _KEY_SMTP_PASSWORD, cfg.smtp_password)
             _set_app_config(session, _KEY_SMTP_FROM, cfg.smtp_from)
+            _set_app_config(session, _KEY_SMTP_SENDER_NAME, cfg.smtp_sender_name)
             _set_app_config(session, _KEY_SMTP_USE_TLS, cfg.smtp_use_tls)
+            _set_app_config(session, _KEY_SMTP_USE_SSL, cfg.smtp_use_ssl)
             _set_app_config(session, _KEY_ROLE_ASSIGNMENTS, dict(cfg.role_assignments))
 
 
@@ -601,7 +620,9 @@ def to_view(cfg: LLMConfig) -> LLMConfigView:
         smtp_password_configured=bool(cfg.smtp_password),
         smtp_password_preview=_mask(cfg.smtp_password),
         smtp_from=cfg.smtp_from,
+        smtp_sender_name=cfg.smtp_sender_name,
         smtp_use_tls=cfg.smtp_use_tls,
+        smtp_use_ssl=cfg.smtp_use_ssl,
     )
 
 
@@ -763,7 +784,9 @@ def set_smtp_config(
     user: str | None = None,
     password: str | None = None,
     from_addr: str | None = None,
+    sender_name: str | None = None,
     use_tls: bool | None = None,
+    use_ssl: bool | None = None,
 ) -> None:
     """Update SMTP settings. None leaves a field unchanged; empty string clears.
 
@@ -780,14 +803,18 @@ def set_smtp_config(
         cfg.smtp_password = password
     if from_addr is not None:
         cfg.smtp_from = from_addr.strip() or "notify@lifetree.local"
+    if sender_name is not None:
+        cfg.smtp_sender_name = sender_name.strip() or "LifeTree"
     if use_tls is not None:
         cfg.smtp_use_tls = bool(use_tls)
+    if use_ssl is not None:
+        cfg.smtp_use_ssl = bool(use_ssl)
 
 
 def get_smtp_config() -> dict[str, Any]:
     """Return SMTP settings from the DB-backed config (hot-reloadable).
 
-    Keys: host, port, user, password, from, use_tls.
+    Keys: host, port, user, password, from, sender_name, use_tls, use_ssl.
     """
     cfg = load_config()
     return {
@@ -796,7 +823,9 @@ def get_smtp_config() -> dict[str, Any]:
         "user": cfg.smtp_user,
         "password": cfg.smtp_password,
         "from": cfg.smtp_from,
+        "sender_name": cfg.smtp_sender_name,
         "use_tls": cfg.smtp_use_tls,
+        "use_ssl": cfg.smtp_use_ssl,
     }
 
 
