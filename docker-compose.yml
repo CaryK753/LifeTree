@@ -141,7 +141,7 @@ services:
     build:
       context: ./backend
     container_name: lifetree-beat
-    command: celery -A app.workers.celery_app beat -l info
+    command: celery -A app.workers.celery_app beat -l info --schedule /tmp/celerybeat-schedule
     depends_on:
       - worker
       - redis
