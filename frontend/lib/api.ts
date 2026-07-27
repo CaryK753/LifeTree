@@ -17,12 +17,28 @@ export const API_PREFIX = "/api/v1";
  * at the browser as a single buffered chunk, defeating token-by-token
  * streaming and making the typewriter cursor look fake.
  *
- * For SSE endpoints only, we bypass the proxy and hit the backend origin
- * directly. Falls back to the proxy path when no backend URL is configured
- * (e.g. in production behind a proper streaming-aware reverse proxy).
+ * Resolution order:
+ *   1. ``window.__BACKEND_PUBLIC_URL__`` — runtime-injected by layout.tsx
+ *      from the server-side ``BACKEND_PUBLIC_URL`` env var. Set when the
+ *      browser can reach the backend directly (requires CORS).
+ *   2. ``NEXT_PUBLIC_API_BASE_URL`` — build-time fallback (local dev only).
+ *   3. empty string → SSE uses same-origin ``/api/v1/*``. This is the
+ *      default in cloud/Docker deployments where nginx (or a similar
+ *      streaming-aware reverse proxy) fronts both frontend and backend,
+ *      so the browser only talks to one origin and there are no CORS
+ *      issues. See nginx/nginx.conf in the repo.
  */
-export const STREAM_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "";
+function getStreamBaseUrl(): string {
+  if (typeof window !== "undefined") {
+    const w = window as unknown as { __BACKEND_PUBLIC_URL__?: string };
+    if (typeof w.__BACKEND_PUBLIC_URL__ === "string") {
+      return w.__BACKEND_PUBLIC_URL__;
+    }
+  }
+  return process.env.NEXT_PUBLIC_API_BASE_URL || "";
+}
+
+export const STREAM_BASE_URL = getStreamBaseUrl();
 
 // ---------- Auth token storage ----------
 //

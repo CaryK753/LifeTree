@@ -1,5 +1,13 @@
 # LifeTree full stack — infrastructure + app services.
 #
+# 架构：nginx 作为统一入口（默认 80 端口），浏览器只访问 nginx。
+#   /api/v1/*  → backend (FastAPI, SSE 流式)
+#   /*         → frontend (Next.js)
+# 所有请求同源，无 CORS 问题，SSE 流式正常。
+# .env 不需要配置 BACKEND_PUBLIC_URL。
+#
+# 访问地址：http://<服务器IP>  （或 http://<服务器IP>:${APP_PORT} 自定义端口）
+#
 # By default this compose file pulls pre-built images from GHCR
 # (ghcr.io/caryk753/lifetree-backend, ghcr.io/caryk753/lifetree-frontend)
 # so a plain `docker compose up -d` is enough — no local build required.
@@ -180,8 +188,12 @@ services:
         # Local dev sets this via frontend/.env.local instead.
         - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-}
     container_name: lifetree-frontend
-    ports:
-      - "${APP_FRONTEND_PORT:-13000}:13000"
+    # No host port — nginx fronts the frontend. Expose only if you need
+    # direct access for debugging (e.g. APP_FRONTEND_PORT=13000).
+    # ports:
+    #   - "${APP_FRONTEND_PORT:-13000}:13000"
+    expose:
+      - "13000"
     depends_on:
       - backend
     environment:
@@ -192,7 +204,25 @@ services:
       - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-}
       # Server-side only: used by next.config.mjs rewrites to proxy /api/v1/*
       # to the backend container. Uses the docker-compose service name.
+      # In the nginx setup, /api/v1/* is routed directly to backend by nginx,
+      # so this is only used for SSR / server-side fetches.
       - BACKEND_URL=http://backend:18000
+    restart: unless-stopped
+
+  # ==================== Reverse Proxy (Entry Point) ====================
+  # nginx 统一入口：浏览器只访问 nginx，由它转发到 frontend/backend。
+  # 这样所有请求同源，无 CORS 问题；SSE 走 nginx 流式转发（proxy_buffering off）。
+  # 浏览器不需要知道 backend 地址，.env 也不用配 BACKEND_PUBLIC_URL。
+  nginx:
+    image: nginx:alpine
+    container_name: lifetree-nginx
+    ports:
+      - "${APP_PORT:-80}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - frontend
+      - backend
     restart: unless-stopped
 
 volumes:
