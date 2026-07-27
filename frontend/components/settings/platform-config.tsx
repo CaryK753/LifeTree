@@ -2124,6 +2124,10 @@ const OAUTH_PRESETS: Record<
     token_url: string;
     userinfo_url: string;
     scopes: string[];
+    // CDN-hosted logo/favicon for the provider. Auto-filled into the
+    // avatar_url field so the login dialog shows a recognizable icon
+    // without the admin having to upload one manually.
+    avatar_url: string;
   }
 > = {
   github: {
@@ -2132,6 +2136,7 @@ const OAUTH_PRESETS: Record<
     token_url: "https://github.com/login/oauth/access_token",
     userinfo_url: "https://api.github.com/user",
     scopes: ["read:user", "user:email"],
+    avatar_url: "https://github.githubassets.com/favicons/favicon.svg",
   },
   google: {
     name: "Google",
@@ -2139,6 +2144,18 @@ const OAUTH_PRESETS: Record<
     token_url: "https://oauth2.googleapis.com/token",
     userinfo_url: "https://www.googleapis.com/oauth2/v3/userinfo",
     scopes: ["openid", "email", "profile"],
+    avatar_url:
+      "https://fonts.gstatic.com/s/i/productlogos/googleg/v6/24px.svg",
+  },
+  microsoft: {
+    name: "Microsoft",
+    authorize_url:
+      "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+    token_url: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    userinfo_url: "https://graph.microsoft.com/oidc/userinfo",
+    scopes: ["openid", "email", "profile"],
+    avatar_url:
+      "https://login.microsoftonline.com/static/$/common/images/favicon.ico",
   },
   gitlab: {
     name: "GitLab",
@@ -2146,6 +2163,42 @@ const OAUTH_PRESETS: Record<
     token_url: "https://gitlab.com/oauth/token",
     userinfo_url: "https://gitlab.com/api/v4/user",
     scopes: ["read_user"],
+    avatar_url: "https://gitlab.com/favicon.ico",
+  },
+  discord: {
+    name: "Discord",
+    authorize_url: "https://discord.com/api/oauth2/authorize",
+    token_url: "https://discord.com/api/oauth2/token",
+    userinfo_url: "https://discord.com/api/users/@me",
+    scopes: ["identify", "email"],
+    avatar_url: "https://discord.com/assets/favicons/favicon.ico",
+  },
+  linkedin: {
+    name: "LinkedIn",
+    authorize_url: "https://www.linkedin.com/oauth/v2/authorization",
+    token_url: "https://www.linkedin.com/oauth/v2/accessToken",
+    userinfo_url: "https://api.linkedin.com/v2/userinfo",
+    scopes: ["openid", "profile", "email"],
+    avatar_url: "https://www.linkedin.com/favicon.ico",
+  },
+  facebook: {
+    name: "Facebook",
+    authorize_url: "https://www.facebook.com/v18.0/dialog/oauth",
+    token_url: "https://graph.facebook.com/v18.0/oauth/access_token",
+    userinfo_url: "https://graph.facebook.com/me?fields=id,name,email",
+    scopes: ["email", "public_profile"],
+    avatar_url: "https://www.facebook.com/favicon.ico",
+  },
+  apple: {
+    name: "Apple",
+    authorize_url: "https://appleid.apple.com/auth/authorize",
+    token_url: "https://appleid.apple.com/auth/token",
+    userinfo_url: "",
+    // Sign in with Apple returns ID token (JWT) instead of userinfo
+    // endpoint — backend needs special handling. Kept here so admins
+    // at least get the right authorize/token URLs auto-filled.
+    scopes: ["name", "email"],
+    avatar_url: "https://www.apple.com/favicon.ico",
   },
   custom: {
     name: "",
@@ -2153,6 +2206,7 @@ const OAUTH_PRESETS: Record<
     token_url: "",
     userinfo_url: "",
     scopes: [],
+    avatar_url: "",
   },
 };
 
@@ -2456,6 +2510,11 @@ function OAuthProviderDialog({
   const toast = useToast();
   const isEdit = !!provider;
 
+  // Current origin — used to auto-fill redirect_uri when a preset is
+  // selected. Declared at the top so applyPreset can reference it.
+  const origin =
+    typeof window !== "undefined" ? window.location.origin : "";
+
   // Detect preset from provider's authorize_url when editing.
   const detectPreset = (p: OAuthProviderView | null): string => {
     if (!p) return "github";
@@ -2490,6 +2549,9 @@ function OAuthProviderDialog({
     const p = OAUTH_PRESETS[key];
     if (!p) return;
     const allPresets = Object.values(OAUTH_PRESETS);
+    // Auto-fill redirect_uri too — derived from current origin so the
+    // admin can copy-paste it directly into the provider's dashboard.
+    const redirectUri = `${origin}/auth/callback/${key === "custom" ? "provider_id" : key}`;
     setForm((prev) => ({
       ...prev,
       name:
@@ -2516,6 +2578,17 @@ function OAuthProviderDialog({
         allPresets.some((x) => x.scopes.join(" ") === prev.scopes)
           ? p.scopes.join(" ")
           : prev.scopes,
+      avatar_url:
+        !prev.avatar_url.trim() ||
+        allPresets.some((x) => x.avatar_url === prev.avatar_url)
+          ? p.avatar_url
+          : prev.avatar_url,
+      // Auto-fill redirect_uri if empty or matches a preset pattern.
+      redirect_uri:
+        !prev.redirect_uri.trim() ||
+        /\/auth\/callback\/[a-z_]+$/.test(prev.redirect_uri)
+          ? redirectUri
+          : prev.redirect_uri,
     }));
   }
 
@@ -2637,8 +2710,6 @@ function OAuthProviderDialog({
   }
 
   // Compute the redirect URI hint with the current origin.
-  const origin =
-    typeof window !== "undefined" ? window.location.origin : "";
   const redirectHint = t("settings.oauth.redirectUriHint", { origin });
 
   return (
@@ -2664,8 +2735,23 @@ function OAuthProviderDialog({
                 <SelectItem value="google">
                   {t("settings.oauth.preset.google")}
                 </SelectItem>
+                <SelectItem value="microsoft">
+                  {t("settings.oauth.preset.microsoft")}
+                </SelectItem>
                 <SelectItem value="gitlab">
                   {t("settings.oauth.preset.gitlab")}
+                </SelectItem>
+                <SelectItem value="discord">
+                  {t("settings.oauth.preset.discord")}
+                </SelectItem>
+                <SelectItem value="linkedin">
+                  {t("settings.oauth.preset.linkedin")}
+                </SelectItem>
+                <SelectItem value="facebook">
+                  {t("settings.oauth.preset.facebook")}
+                </SelectItem>
+                <SelectItem value="apple">
+                  {t("settings.oauth.preset.apple")}
                 </SelectItem>
                 <SelectItem value="custom">
                   {t("settings.oauth.preset.custom")}
