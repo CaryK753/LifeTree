@@ -43,6 +43,7 @@ from app.llm.registry import (
     get_email_verification_enabled,
     get_oauth_provider_by_id,
     get_oauth_providers,
+    get_passkey_login_enabled,
     get_service_address,
     get_use_mode,
     load_config,
@@ -51,6 +52,7 @@ from app.llm.registry import (
     set_disable_registration,
     set_email_verification_enabled,
     set_mineru_key,
+    set_passkey_login_enabled,
     set_role_assignment,
     set_service_address,
     set_smtp_config,
@@ -753,6 +755,12 @@ class DisableRegistrationUpdate(BaseModel):
     enabled: bool
 
 
+class PasskeyLoginUpdate(BaseModel):
+    """Payload for PUT /settings/passkey-login."""
+
+    enabled: bool
+
+
 class ServiceAddressUpdate(BaseModel):
     """Payload for PUT /settings/service-address."""
 
@@ -876,6 +884,27 @@ def put_disable_registration_setting(
     """Disable or re-enable new-user registration."""
     set_disable_registration(payload.enabled)
     return DisableRegistrationUpdate(enabled=payload.enabled)
+
+
+# ---------- Passkey login toggle (admin-only) ----------
+
+@router.get("/passkey-login", response_model=PasskeyLoginUpdate)
+def get_passkey_login_setting(admin: AdminUser) -> PasskeyLoginUpdate:
+    """Return whether passkey (WebAuthn) login is enabled."""
+    return PasskeyLoginUpdate(enabled=get_passkey_login_enabled())
+
+
+@router.put("/passkey-login", response_model=PasskeyLoginUpdate)
+def put_passkey_login_setting(
+    admin: AdminUser, payload: PasskeyLoginUpdate
+) -> PasskeyLoginUpdate:
+    """Enable or disable passkey login.
+
+    When enabled, users can bind passkeys on the /profile page and the
+    login dialog shows a "Sign in with passkey" button.
+    """
+    set_passkey_login_enabled(payload.enabled)
+    return PasskeyLoginUpdate(enabled=payload.enabled)
 
 
 # ---------- Service address (admin-only) ----------

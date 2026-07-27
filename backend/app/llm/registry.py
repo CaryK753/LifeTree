@@ -859,6 +859,7 @@ _KEY_EMAIL_VERIFICATION_ENABLED = "email_verification_enabled"
 _KEY_DISABLE_REGISTRATION = "disable_registration"
 _KEY_SERVICE_ADDRESS = "service_address"
 _KEY_USE_MODE = "use_mode"
+_KEY_PASSKEY_LOGIN_ENABLED = "passkey_login_enabled"
 
 
 class OAuthProvider(BaseModel):
@@ -1134,6 +1135,27 @@ def set_use_mode(mode: str) -> None:
         _set_app_config(session, _KEY_USE_MODE, mode)
 
 
+def get_passkey_login_enabled() -> bool:
+    """Return whether passkey (WebAuthn) login is enabled.
+
+    When True, the login dialog shows a "Sign in with passkey" button and
+    the /profile page lets users bind/unbind passkeys. When False, all
+    passkey endpoints are disabled.
+    """
+    with _db_session() as session:
+        row = session.get(AppConfig, _KEY_PASSKEY_LOGIN_ENABLED)
+        if row is None:
+            return False
+        val = _decode_value(row.value, False)
+        return bool(val) if isinstance(val, bool) else False
+
+
+def set_passkey_login_enabled(enabled: bool) -> None:
+    """Enable or disable passkey login (admin only)."""
+    with _db_session() as session:
+        _set_app_config(session, _KEY_PASSKEY_LOGIN_ENABLED, bool(enabled))
+
+
 def get_public_auth_config() -> dict[str, Any]:
     """Return auth config safe for unauthenticated clients (login dialog).
 
@@ -1144,6 +1166,9 @@ def get_public_auth_config() -> dict[str, Any]:
         the register tab so only existing users can log in.
       - ``multi_user_mode``: True when ``use_mode == "multi"``. The login
         dialog is then not dismissible — the user must authenticate.
+      - ``passkey_login_enabled``: bool — when True, the login dialog shows
+        a "Sign in with passkey" button and the /profile page shows the
+        passkey management UI.
 
     No secrets, no URLs, no client_ids.
     """
@@ -1157,6 +1182,7 @@ def get_public_auth_config() -> dict[str, Any]:
         "disable_registration": get_disable_registration(),
         "multi_user_mode": get_use_mode() == "multi",
         "use_mode": get_use_mode(),
+        "passkey_login_enabled": get_passkey_login_enabled(),
     }
 
 
@@ -1211,6 +1237,7 @@ __all__ = [
     "get_mineru_config",
     "get_oauth_provider_by_id",
     "get_oauth_providers",
+    "get_passkey_login_enabled",
     "get_public_auth_config",
     "get_service_address",
     "get_smtp_config",
@@ -1222,6 +1249,7 @@ __all__ = [
     "set_email_verification_enabled",
     "set_disable_registration",
     "set_mineru_key",
+    "set_passkey_login_enabled",
     "set_service_address",
     "set_use_mode",
     "set_oauth_providers",

@@ -11,12 +11,50 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, LogIn, Mail, ShieldCheck, UserPlus } from "lucide-react";
+import { Loader2, LogIn, Mail, ShieldCheck, UserPlus, KeyRound } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { useT } from "@/lib/i18n/provider";
 import { useAuth, useAuthConfig } from "@/lib/hooks";
-import { api } from "@/lib/api";
+import { api, setTokens } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+/**
+ * Decode a base64url string into a Uint8Array. WebAuthn API requires
+ * ArrayBuffer inputs for challenge / credential_id fields.
+ */
+function base64urlToUint8Array(b64: string): Uint8Array {
+  const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+  const b64std = padded.replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(b64std);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * Encode an ArrayBuffer into a base64url string (no padding).
+ * Used to convert PublicKeyCredential.rawId → the id field the backend expects.
+ */
+function uint8ArrayToBase64url(bytes: ArrayBuffer | Uint8Array): string {
+  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let bin = "";
+  for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]);
+  const b64 = btoa(bin);
+  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * Browser support check — WebAuthn is available in all modern browsers
+ * but not in older ones or non-secure contexts (HTTP other than localhost).
+ */
+function isPasskeySupported(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    typeof PublicKeyCredential !== "undefined" &&
+    typeof navigator !== "undefined" &&
+    typeof navigator.credentials !== "undefined"
+  );
+}
 
 /**
  * Login dialog with two tabs: login + register.
@@ -55,6 +93,7 @@ export function LoginDialog({
   const [mode, setMode] = useState<"login" | "register">("login");
   const [loading, setLoading] = useState(false);
   const [oauthLoadingId, setOauthLoadingId] = useState<string | null>(null);
+  const [passkeyLoading, setPasskeyLoading] = useState(false);
   const [form, setForm] = useState({
     displayName: "",
     email: "",
@@ -81,6 +120,7 @@ export function LoginDialog({
       setMode("login");
       setLoading(false);
       setOauthLoadingId(null);
+      setPasskeyLoading(false);
       setCodeSending(false);
       setCodeCooldown(0);
       if (cooldownTimer.current) {
@@ -241,6 +281,109 @@ export function LoginDialog({
         variant: "error",
       });
       setOauthLoadingId(null);
+    }
+  }
+
+  /**
+   * Passkey (WebAuthn) login — passwordless authentication using a
+   * device-bound credential. The flow is:
+   *   1. POST /auth/passkey/auth/options → get challenge + allowCredentials
+   *   2. navigator.credentials.get() → prompt user to touch authenticator
+   *   3. POST /auth/passkey/auth/verify → backend verifies signature,
+   *      returns JWT access/refresh tokens
+   *
+   * Only available on the login tab (not register) when the admin has
+   * enabled passkey login. Requires HTTPS or localhost.
+   */
+  async function handlePasskeyLogin() {
+    if (!isPasskeySupported()) {
+      toast({
+        title: t("auth.passkeyUnsupported"),
+        variant: "error",
+      });
+      return;
+    }
+    setPasskeyLoading(true);
+    try {
+      // 1. Fetch authentication options from the backend.
+      const { options } = await api.passkeyAuthOptions();
+
+      // 2. Convert the JSON-serializable options back into the format
+      //    navigator.credentials.get() expects (ArrayBuffer for challenge
+      //    and allowCredentials[].id).
+      const publicKey: PublicKeyCredentialRequestOptions = {
+        ...options,
+        challenge: base64urlToUint8Array(
+          (options as { challenge?: string }).challenge ?? ""
+        ),
+        allowCredentials: (
+          (options as { allowCredentials?: Array<{ id: string }> })
+            .allowCredentials ?? []
+        ).map((c) => ({
+          ...c,
+          id: base64urlToUint8Array(c.id),
+          type: "public-key" as PublicKeyCredentialType,
+        })),
+      };
+
+      // 3. Prompt the user to unlock their authenticator.
+      const credential = (await navigator.credentials.get({
+        publicKey,
+      })) as PublicKeyCredential | null;
+
+      if (!credential) {
+        toast({
+          title: t("auth.passkeyLoginCanceled"),
+          variant: "error",
+        });
+        return;
+      }
+
+      // 4. Serialize the credential into the JSON format the backend
+      //    expects. The rawId and response fields are ArrayBuffers —
+      //    they need to be base64url-encoded.
+      const response = credential.response as AuthenticatorAssertionResponse;
+      const serializedCredential = {
+        id: credential.id,
+        rawId: uint8ArrayToBase64url(credential.rawId),
+        type: credential.type,
+        response: {
+          authenticatorData: uint8ArrayToBase64url(response.authenticatorData),
+          clientDataJSON: uint8ArrayToBase64url(response.clientDataJSON),
+          signature: uint8ArrayToBase64url(response.signature),
+          userHandle: response.userHandle
+            ? uint8ArrayToBase64url(response.userHandle)
+            : null,
+        },
+        clientExtensionResults:
+          credential.getClientExtensionResults?.() ?? {},
+      };
+
+      // 5. Send to backend for verification → receive JWT tokens.
+      const res = await api.passkeyAuthVerify(serializedCredential);
+      setTokens(res.access_token, res.refresh_token);
+      toast({ title: t("auth.loginSuccess"), variant: "success" });
+      onOpenChange(false);
+      // Force a full page reload so all SWR caches refetch with the
+      // new auth token (same pattern as email/password login above).
+      window.location.reload();
+    } catch (e: unknown) {
+      const err = e as { name?: string; message?: string };
+      const name = err?.name ?? "";
+      if (name === "NotAllowedError" || name === "AbortError") {
+        toast({
+          title: t("auth.passkeyLoginCanceled"),
+          variant: "error",
+        });
+      } else {
+        toast({
+          title: t("auth.passkeyLoginFailed"),
+          description: err?.message,
+          variant: "error",
+        });
+      }
+    } finally {
+      setPasskeyLoading(false);
     }
   }
 
@@ -433,6 +576,31 @@ export function LoginDialog({
                   ? t("auth.verifyCode.register")
                   : t("auth.register")}
           </Button>
+
+          {/* Passkey login button — only on the login tab (not register)
+              when the admin has enabled it and the browser supports
+              WebAuthn. Uses type="button" so it doesn't submit the form. */}
+          {!firstAdminSetup &&
+            effectiveMode === "login" &&
+            authConfig?.passkey_login_enabled &&
+            isPasskeySupported() && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handlePasskeyLogin}
+                disabled={passkeyLoading || loading || oauthLoadingId !== null}
+                className="w-full h-9"
+              >
+                {passkeyLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                ) : (
+                  <KeyRound className="h-4 w-4 mr-1.5" />
+                )}
+                {passkeyLoading
+                  ? t("auth.passkeyDiscovering")
+                  : t("auth.passkeyLogin")}
+              </Button>
+            )}
         </form>
 
         {/* Switch-to-single-mode link — shown in first-admin setup when the

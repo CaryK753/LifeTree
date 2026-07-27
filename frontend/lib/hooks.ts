@@ -15,6 +15,7 @@ import {
   type NotificationSeverity,
   type NotificationStatus,
   type NotificationRead,
+  type PasskeyRead,
   type PublicAuthConfig,
   type RegisterWithCodeRequest,
   type UserProfileRead,
@@ -273,6 +274,21 @@ export function useMemories(category?: string) {
   return useSWR(
     category ? ["memories", category] : "memories",
     () => api.listMemories(category),
+    swrConfig
+  );
+}
+
+/**
+ * usePasskeys: list of passkeys bound to the current user.
+ *
+ * Only fetched when ``enabled`` is true (i.e. admin has turned on passkey
+ * login) — otherwise the backend returns 403 and we'd just waste a
+ * network round-trip.
+ */
+export function usePasskeys(enabled: boolean) {
+  return useSWR<PasskeyRead[]>(
+    enabled ? "passkeys" : null,
+    () => api.listPasskeys(),
     swrConfig
   );
 }

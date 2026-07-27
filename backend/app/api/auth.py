@@ -101,12 +101,16 @@ class PublicAuthConfig(BaseModel):
 
     oauth_providers: list[dict] = Field(default_factory=list)
     email_verification_enabled: bool = False
+    disable_registration: bool = False
     multi_user_mode: bool = True
     use_mode: Literal["single", "multi"] = "single"
     # True when at least one user who can actually log in exists
     # (password_hash or external_id set). Used by the frontend to decide
     # whether to show the first-run "create admin" setup screen.
     has_users: bool = False
+    # When True, the login dialog shows a "Sign in with passkey" button
+    # and the /profile page shows the passkey management UI.
+    passkey_login_enabled: bool = False
 
 
 class OAuthStartResponse(BaseModel):

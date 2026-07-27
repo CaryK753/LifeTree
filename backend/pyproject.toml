@@ -37,6 +37,7 @@ dependencies = [
     "tavily-python>=0.4",
     "passlib[bcrypt]>=1.7",
     "python-jose[cryptography]>=3.3",
+    "webauthn>=2.0.0",
 ]
 
 [project.optional-dependencies]

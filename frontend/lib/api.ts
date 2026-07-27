@@ -574,6 +574,52 @@ export const api = {
       body: JSON.stringify({ address }),
     }),
 
+  // Passkey login toggle (admin)
+  getPasskeyLogin: () =>
+    request<{ enabled: boolean }>(`/settings/passkey-login`),
+  setPasskeyLogin: (enabled: boolean) =>
+    request<{ enabled: boolean }>(`/settings/passkey-login`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+
+  // Passkey registration (current user — bind a new passkey to your account)
+  passkeyRegisterOptions: () =>
+    request<{ options: Record<string, unknown> }>(
+      `/auth/passkey/registration/options`,
+      { method: "POST" }
+    ),
+  passkeyRegisterVerify: (
+    credential: Record<string, unknown>,
+    nickname?: string
+  ) =>
+    request<{ ok: boolean; passkey: PasskeyRead }>(
+      `/auth/passkey/registration/verify`,
+      {
+        method: "POST",
+        body: JSON.stringify({ credential, nickname: nickname ?? "" }),
+      }
+    ),
+
+  // Passkey authentication (no auth — passwordless login)
+  passkeyAuthOptions: () =>
+    request<{ options: Record<string, unknown> }>(
+      `/auth/passkey/auth/options`,
+      { method: "POST" }
+    ),
+  passkeyAuthVerify: (credential: Record<string, unknown>) =>
+    request<AuthTokenResponse>(`/auth/passkey/auth/verify`, {
+      method: "POST",
+      body: JSON.stringify({ credential }),
+    }),
+
+  // Passkey management (current user)
+  listPasskeys: () => request<PasskeyRead[]>(`/auth/passkeys`),
+  deletePasskey: (id: string) =>
+    request<{ ok: boolean }>(`/auth/passkeys/${id}`, {
+      method: "DELETE",
+    }),
+
   testRole: (role: Role) =>
     request<TestResult>(`/settings/test/${role}`, { method: "POST" }),
 
@@ -773,6 +819,8 @@ export interface PublicAuthConfig {
   use_mode: "single" | "multi";
   /** False when no real users exist → frontend shows first-admin setup. */
   has_users: boolean;
+  /** When true, login dialog shows passkey button + profile shows passkey UI. */
+  passkey_login_enabled: boolean;
 }
 
 export interface SendCodeResponse {
@@ -843,6 +891,18 @@ export interface OAuthBindingRead {
   provider_id: string;
   provider_name: string;
   external_sub: string;
+  created_at: string;
+}
+
+// ---------- Passkey (current user) ----------
+
+export interface PasskeyRead {
+  id: string;
+  nickname: string;
+  device_type: string;
+  backed_up: boolean;
+  transports: string[];
+  aaguid: string;
   created_at: string;
 }
 

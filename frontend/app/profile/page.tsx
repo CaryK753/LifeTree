@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useUserProfile, useGoals, useMemories, useAuth } from "@/lib/hooks";
+import { useUserProfile, useGoals, useMemories, useAuth, useAuthConfig, usePasskeys } from "@/lib/hooks";
 import {
   api,
   type RiskTolerance,
+  type PasskeyRead,
 } from "@/lib/api";
 import {
   Card,
@@ -54,6 +55,7 @@ import {
   Crown,
   Bell,
   AlertTriangle,
+  Fingerprint,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
@@ -109,6 +111,7 @@ export default function ProfilePage() {
   const { data: profile, mutate, isLoading } = useUserProfile();
   const { data: goals } = useGoals();
   const { user: authUser } = useAuth();
+  const { data: authConfig } = useAuthConfig();
   const toast = useToast();
   const { confirm, ConfirmRoot } = useConfirm();
 
@@ -785,6 +788,11 @@ export default function ProfilePage() {
         </CardContent>
       </Card>
 
+      {/* ---------- 通行密钥 ---------- */}
+      {authUser && authConfig?.passkey_login_enabled && (
+        <PasskeyCard userId={authUser.id} />
+      )}
+
       {/* ---------- 记忆 ---------- */}
       <MemoryBoard />
 
@@ -887,6 +895,345 @@ export default function ProfilePage() {
 
 function catMeta(c: string) {
   return `memory.category.${c}`;
+}
+
+// ============== Passkey management ==============
+
+/**
+ * Decode a base64url string into a Uint8Array. WebAuthn API requires
+ * ArrayBuffer inputs for challenge / user.id / credential_id fields.
+ */
+function base64urlToUint8Array(b64: string): Uint8Array {
+  // Pad to length multiple of 4
+  const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+  // Convert base64url → base64
+  const b64std = padded.replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(b64std);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * Encode an ArrayBuffer into a base64url string (no padding).
+ * Used to convert PublicKeyCredential.rawId → the id field the backend expects.
+ */
+function uint8ArrayToBase64url(bytes: ArrayBuffer | Uint8Array): string {
+  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let bin = "";
+  for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]);
+  const b64 = btoa(bin);
+  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * Browser support check — WebAuthn is available in all modern browsers
+ * (Chrome 67+, Safari 14+, Firefox 60+) but not in older ones or
+ * non-secure contexts (HTTP other than localhost).
+ */
+function isPasskeySupported(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    typeof PublicKeyCredential !== "undefined" &&
+    typeof navigator !== "undefined" &&
+    typeof navigator.credentials !== "undefined"
+  );
+}
+
+function formatPasskeyDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
+function PasskeyCard({ userId }: { userId: string }) {
+  const t = useT();
+  const toast = useToast();
+  const { confirm, ConfirmRoot } = useConfirm();
+  const { data: passkeys, mutate, isLoading } = usePasskeys(true);
+  const [registering, setRegistering] = useState(false);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [nickname, setNickname] = useState("");
+
+  // WebAuthn requires a secure context (HTTPS or localhost). If not
+  // available, show a hint instead of letting the user click a button
+  // that will silently fail.
+  const supported = isPasskeySupported();
+
+  async function handleRegister() {
+    if (!supported) {
+      toast({
+        title: t("profile.passkey.unsupported"),
+        variant: "error",
+      });
+      return;
+    }
+    setRegistering(true);
+    try {
+      // 1. Fetch registration options from the backend.
+      const { options } = await api.passkeyRegisterOptions();
+
+      // 2. Convert the JSON-serializable options back into the format
+      //    navigator.credentials.create() expects (ArrayBuffers for
+      //    challenge and user.id).
+      const publicKey = {
+        ...options,
+        challenge: base64urlToUint8Array(
+          (options as { challenge?: string }).challenge ?? ""
+        ),
+        user: {
+          ...(options as { user?: Record<string, unknown> }).user,
+          id: base64urlToUint8Array(
+            ((options as { user?: { id?: string } }).user?.id as string) ??
+              userId
+          ),
+        },
+        excludeCredentials: (
+          (options as { excludeCredentials?: Array<{ id: string }> })
+            .excludeCredentials ?? []
+        ).map((c) => ({
+          ...c,
+          id: base64urlToUint8Array(c.id),
+          type: "public-key" as PublicKeyCredentialType,
+        })),
+      } as unknown as PublicKeyCredentialCreationOptions;
+
+      // 3. Prompt the user to touch their authenticator.
+      const credential = (await navigator.credentials.create({
+        publicKey,
+      })) as PublicKeyCredential | null;
+
+      if (!credential) {
+        toast({
+          title: t("profile.passkey.registerCanceled"),
+          variant: "error",
+        });
+        return;
+      }
+
+      // 4. Serialize the credential into the JSON format the backend
+      //    expects. The rawId and response.attestationObject/clientDataJSON
+      //    are all ArrayBuffers — they need to be base64url-encoded.
+      const response = credential.response as AuthenticatorAttestationResponse;
+      const serializedCredential = {
+        id: credential.id,
+        rawId: uint8ArrayToBase64url(credential.rawId),
+        type: credential.type,
+        response: {
+          attestationObject: uint8ArrayToBase64url(response.attestationObject),
+          clientDataJSON: uint8ArrayToBase64url(response.clientDataJSON),
+          transports:
+            response.getTransports?.() ?? [],
+        },
+        clientExtensionResults:
+          credential.getClientExtensionResults?.() ?? {},
+      };
+
+      // 5. Send to the backend for verification + storage.
+      const r = await api.passkeyRegisterVerify(
+        serializedCredential,
+        nickname.trim()
+      );
+      mutate((prev) => [...(prev ?? []), r.passkey], {
+        revalidate: false,
+      });
+      toast({
+        title: t("profile.passkey.registerSuccess"),
+        description: r.passkey.nickname || undefined,
+        variant: "success",
+      });
+      setShowAddForm(false);
+      setNickname("");
+    } catch (e: any) {
+      const name = e?.name ?? "";
+      if (name === "NotAllowedError" || name === "AbortError") {
+        toast({
+          title: t("profile.passkey.registerCanceled"),
+          variant: "error",
+        });
+      } else {
+        toast({
+          title: t("profile.passkey.registerFailed"),
+          description: e?.message ?? t("settings.toast.retryLater"),
+          variant: "error",
+        });
+      }
+    } finally {
+      setRegistering(false);
+    }
+  }
+
+  async function handleDelete(pk: PasskeyRead) {
+    const label = pk.nickname || formatPasskeyDate(pk.created_at);
+    const ok = await confirm({
+      title: t("profile.passkey.delete"),
+      description: pk.nickname
+        ? t("profile.passkey.deleteConfirm", { name: label })
+        : t("profile.passkey.deleteConfirmUnnamed"),
+      confirmLabel: t("common.delete"),
+      cancelLabel: t("common.cancel"),
+      variant: "danger",
+    });
+    if (!ok) return;
+    try {
+      await api.deletePasskey(pk.id);
+      mutate((prev) => (prev ?? []).filter((x) => x.id !== pk.id), {
+        revalidate: false,
+      });
+      toast({
+        title: t("settings.toast.deleted"),
+        description: label,
+        variant: "success",
+      });
+    } catch (e: any) {
+      toast({
+        title: t("settings.toast.deleteFailed"),
+        description: e?.message ?? t("settings.toast.retryLater"),
+        variant: "error",
+      });
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-2">
+        <div>
+          <CardTitle className="flex items-center gap-2">
+            <Fingerprint className="h-4 w-4 text-brand-600 dark:text-brand-400" />
+            {t("profile.passkey.title")}
+          </CardTitle>
+          <CardDescription className="mt-1">
+            {t("profile.passkey.subtitle")}
+          </CardDescription>
+        </div>
+        {supported && !showAddForm && (
+          <Button variant="outline" size="sm" onClick={() => setShowAddForm(true)}>
+            <Plus className="h-3.5 w-3.5 mr-1.5" />
+            {t("profile.passkey.add")}
+          </Button>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!supported ? (
+          <div className="text-sm text-amber-700 dark:text-amber-300 leading-relaxed">
+            {t("profile.passkey.unsupported")}
+          </div>
+        ) : isLoading ? (
+          <div className="flex items-center justify-center py-6 text-zinc-500 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin mr-2" /> {t("common.loading")}
+          </div>
+        ) : (passkeys?.length ?? 0) === 0 ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center">
+            <Fingerprint className="h-8 w-8 text-zinc-400 mb-2" />
+            <div className="text-sm text-zinc-800 dark:text-zinc-300">
+              {t("profile.passkey.empty")}
+            </div>
+            <div className="text-xs text-zinc-500 mt-1">
+              {t("profile.passkey.emptyHint")}
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {passkeys?.map((pk) => (
+              <div
+                key={pk.id}
+                className="rounded-lg border border-black/10 dark:border-white/10 bg-surface/40 p-3 group"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                        {pk.nickname || formatPasskeyDate(pk.created_at)}
+                      </span>
+                      <Badge
+                        className={
+                          pk.backed_up
+                            ? "text-[10px] border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                            : "text-[10px] border-zinc-400/30 dark:border-zinc-700/50 bg-zinc-200/50 dark:bg-zinc-800/50 text-zinc-700 dark:text-zinc-400"
+                        }
+                      >
+                        {pk.backed_up
+                          ? t("profile.passkey.backedUp")
+                          : t("profile.passkey.deviceBound")}
+                      </Badge>
+                      <Badge
+                        variant="default"
+                        className="text-[10px] font-mono"
+                      >
+                        {pk.device_type}
+                      </Badge>
+                    </div>
+                    <div className="mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
+                      {t("profile.passkey.createdAt")}:{" "}
+                      {formatPasskeyDate(pk.created_at)}
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 opacity-0 group-hover:opacity-100 hover:text-red-600 dark:hover:text-red-300 transition-opacity shrink-0"
+                    onClick={() => handleDelete(pk)}
+                    title={t("profile.passkey.delete")}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Inline add form — nickname is optional */}
+        {showAddForm && supported && (
+          <div className="rounded-md border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3 space-y-3">
+            <Field label={t("profile.passkey.nickname")}>
+              <Input
+                value={nickname}
+                onChange={(e) => setNickname(e.target.value)}
+                placeholder={t("profile.passkey.nicknamePlaceholder")}
+                className="h-9 text-sm"
+                maxLength={128}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !registering) {
+                    e.preventDefault();
+                    handleRegister();
+                  }
+                }}
+              />
+            </Field>
+            <p className="text-[10px] text-zinc-500 leading-snug">
+              {t("profile.passkey.addHint")}
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setShowAddForm(false);
+                  setNickname("");
+                }}
+                disabled={registering}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button size="sm" onClick={handleRegister} disabled={registering}>
+                {registering && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                )}
+                {registering
+                  ? t("profile.passkey.registering")
+                  : t("profile.passkey.add")}
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+      {ConfirmRoot}
+    </Card>
+  );
 }
 
 function MemoryBoard() {

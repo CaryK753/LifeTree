@@ -14,6 +14,7 @@ from app.api.ingest import router as ingest_router
 from app.api.lifecycle import router as lifecycle_router
 from app.api.memories import router as memories_router
 from app.api.notifications import router as notifications_router
+from app.api.passkey import router as passkey_router
 from app.api.plugins import router as plugins_router
 from app.api.risk_factors import router as risk_factors_router
 from app.api.scenarios import router as scenarios_router
@@ -27,6 +28,7 @@ from app.api.admin import router as admin_router
 api_router = APIRouter()
 
 api_router.include_router(auth_router)
+api_router.include_router(passkey_router)
 api_router.include_router(admin_router)
 api_router.include_router(users_router)
 api_router.include_router(goals_router)

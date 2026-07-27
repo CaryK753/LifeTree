@@ -1897,10 +1897,12 @@ function AuthSettingsCard() {
   const [emailVerification, setEmailVerification] = useState(false);
   const [disableRegistration, setDisableRegistration] = useState(false);
   const [serviceAddress, setServiceAddress] = useState("");
+  const [passkeyLogin, setPasskeyLogin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [savingEV, setSavingEV] = useState(false);
   const [savingDR, setSavingDR] = useState(false);
   const [savingAddr, setSavingAddr] = useState(false);
+  const [savingPK, setSavingPK] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -1908,11 +1910,13 @@ function AuthSettingsCard() {
       api.getEmailVerification().catch(() => ({ enabled: false })),
       api.getDisableRegistration().catch(() => ({ enabled: false })),
       api.getServiceAddress().catch(() => ({ address: "" })),
-    ]).then(([ev, dr, addr]) => {
+      api.getPasskeyLogin().catch(() => ({ enabled: false })),
+    ]).then(([ev, dr, addr, pk]) => {
       if (cancelled) return;
       setEmailVerification(ev.enabled);
       setDisableRegistration(dr.enabled);
       setServiceAddress(addr.address);
+      setPasskeyLogin(pk.enabled);
       setLoading(false);
     });
     return () => {
@@ -1961,6 +1965,28 @@ function AuthSettingsCard() {
       });
     } finally {
       setSavingDR(false);
+    }
+  }
+
+  async function togglePasskeyLogin(enabled: boolean) {
+    setSavingPK(true);
+    try {
+      const r = await api.setPasskeyLogin(enabled);
+      setPasskeyLogin(r.enabled);
+      toast({
+        title: r.enabled
+          ? t("settings.authSettings.passkeyLoginOn")
+          : t("settings.authSettings.passkeyLoginOff"),
+        variant: "success",
+      });
+    } catch (e: any) {
+      toast({
+        title: t("settings.toast.updateFailed"),
+        description: e?.message ?? t("settings.toast.retryLater"),
+        variant: "error",
+      });
+    } finally {
+      setSavingPK(false);
     }
   }
 
@@ -2032,6 +2058,23 @@ function AuthSettingsCard() {
                 checked={disableRegistration}
                 onChange={() => toggleDisableRegistration(!disableRegistration)}
                 disabled={savingDR}
+              />
+            </div>
+
+            {/* Passkey login */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                  {t("settings.authSettings.passkeyLogin")}
+                </div>
+                <div className="mt-0.5 text-[11px] text-zinc-500 leading-snug">
+                  {t("settings.authSettings.passkeyLoginHint")}
+                </div>
+              </div>
+              <Switch
+                checked={passkeyLogin}
+                onChange={() => togglePasskeyLogin(!passkeyLogin)}
+                disabled={savingPK}
               />
             </div>
 
