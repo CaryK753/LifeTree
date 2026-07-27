@@ -39,16 +39,20 @@ from app.llm.registry import (
     delete_model,
     delete_oauth_provider,
     delete_provider,
+    get_disable_registration,
     get_email_verification_enabled,
     get_oauth_provider_by_id,
     get_oauth_providers,
+    get_service_address,
     get_use_mode,
     load_config,
     resolve_role,
     save_config,
+    set_disable_registration,
     set_email_verification_enabled,
     set_mineru_key,
     set_role_assignment,
+    set_service_address,
     set_smtp_config,
     set_tavily_key,
     set_use_mode,
@@ -564,8 +568,32 @@ def test_smtp(payload: SmtpTestRequest, user: CurrentUser) -> SmtpTestResult:
         f"TLS: {'on' if use_tls else 'off'}\n"
         f"SSL: {'on' if use_ssl else 'off'}"
     )
-    msg = MIMEText(body)
-    msg["Subject"] = "[LifeTree] SMTP Test"
+    # Build an HTML test email using the shared template so admins see the
+    # same look-and-feel as real notifications.
+    from app.services.email_template import build_html_message, render_email_html
+
+    test_body_html = f"""
+<h1>SMTP 配置测试 · SMTP Test</h1>
+<p>这是一封来自 LifeTree 的测试邮件。如果你收到了这封邮件，说明你的 SMTP 配置正确无误。</p>
+<p>This is a test email from LifeTree. If you received this message, your SMTP configuration is working correctly.</p>
+<div class="alert">测试邮件 · Test email</div>
+<p style="font-family:monospace; font-size:12px; background:#f3f4f6; padding:12px; border-radius:6px;">
+Server: {host}:{port}<br />
+From: {from_addr}<br />
+TLS: {'on' if use_tls else 'off'}<br />
+SSL: {'on' if use_ssl else 'off'}
+</p>"""
+    html = render_email_html(
+        title="LifeTree SMTP Test",
+        preheader="LifeTree SMTP configuration test",
+        body_html=test_body_html,
+    )
+    msg = build_html_message(
+        to_addr=payload.to_addr,
+        subject="[LifeTree] SMTP Test",
+        html_body=html,
+        plain_text_fallback=body,
+    )
     msg["From"] = formataddr((sender_name, from_addr))
     msg["To"] = payload.to_addr
 
@@ -691,6 +719,7 @@ class OAuthProviderCreate(BaseModel):
     scopes: list[str] = Field(default_factory=list, description="OAuth scopes to request.")
     redirect_uri: str = Field("", description="Callback URL configured at the provider.")
     enabled: bool = True
+    avatar_url: str = Field("", description="Provider icon — data URL or external URL.")
 
 
 class OAuthProviderUpdate(BaseModel):
@@ -707,6 +736,9 @@ class OAuthProviderUpdate(BaseModel):
     scopes: list[str] | None = None
     redirect_uri: str | None = None
     enabled: bool | None = None
+    avatar_url: str | None = Field(
+        None, description="Empty string clears; null unchanged. Data URL or external URL."
+    )
 
 
 class EmailVerificationUpdate(BaseModel):
@@ -715,26 +747,22 @@ class EmailVerificationUpdate(BaseModel):
     enabled: bool
 
 
+class DisableRegistrationUpdate(BaseModel):
+    """Payload for PUT /settings/disable-registration."""
+
+    enabled: bool
+
+
+class ServiceAddressUpdate(BaseModel):
+    """Payload for PUT /settings/service-address."""
+
+    address: str = Field("", description="Public URL of this LifeTree instance, e.g. https://lifetree.example.com")
+
+
 @router.get("/oauth", response_model=list[OAuthProviderView])
 def list_oauth_providers(admin: AdminUser) -> list[OAuthProviderView]:
     """List all configured OAuth providers (masked — no client_secret)."""
-    return [
-        OAuthProviderView(
-            id=p.id,
-            name=p.name,
-            client_id=p.client_id,
-            client_id_configured=bool(p.client_id),
-            client_secret_configured=bool(p.client_secret),
-            authorize_url=p.authorize_url,
-            token_url=p.token_url,
-            userinfo_url=p.userinfo_url,
-            scopes=list(p.scopes),
-            redirect_uri=p.redirect_uri,
-            enabled=p.enabled,
-            created_at=p.created_at,
-        )
-        for p in get_oauth_providers()
-    ]
+    return [_oauth_provider_to_view_public(p) for p in get_oauth_providers()]
 
 
 @router.post("/oauth", response_model=OAuthProviderView, status_code=201)
@@ -752,21 +780,9 @@ def create_oauth_provider(
         scopes=payload.scopes,
         redirect_uri=payload.redirect_uri,
         enabled=payload.enabled,
+        avatar_url=payload.avatar_url,
     )
-    return OAuthProviderView(
-        id=p.id,
-        name=p.name,
-        client_id=p.client_id,
-        client_id_configured=bool(p.client_id),
-        client_secret_configured=bool(p.client_secret),
-        authorize_url=p.authorize_url,
-        token_url=p.token_url,
-        userinfo_url=p.userinfo_url,
-        scopes=list(p.scopes),
-        redirect_uri=p.redirect_uri,
-        enabled=p.enabled,
-        created_at=p.created_at,
-    )
+    return _oauth_provider_to_view_public(p)
 
 
 @router.patch("/oauth/{provider_id}", response_model=OAuthProviderView)
@@ -785,9 +801,15 @@ def patch_oauth_provider(
         scopes=payload.scopes,
         redirect_uri=payload.redirect_uri,
         enabled=payload.enabled,
+        avatar_url=payload.avatar_url,
     )
     if p is None:
         raise HTTPException(404, f"OAuth provider {provider_id} not found")
+    return _oauth_provider_to_view_public(p)
+
+
+def _oauth_provider_to_view_public(p) -> OAuthProviderView:
+    """Build a masked OAuthProviderView from an OAuthProvider model."""
     return OAuthProviderView(
         id=p.id,
         name=p.name,
@@ -800,6 +822,7 @@ def patch_oauth_provider(
         scopes=list(p.scopes),
         redirect_uri=p.redirect_uri,
         enabled=p.enabled,
+        avatar_url=p.avatar_url,
         created_at=p.created_at,
     )
 
@@ -836,6 +859,40 @@ def put_email_verification_setting(
     """Enable or disable email verification for registration."""
     set_email_verification_enabled(payload.enabled)
     return EmailVerificationUpdate(enabled=payload.enabled)
+
+
+# ---------- Disable registration toggle (admin-only) ----------
+
+@router.get("/disable-registration", response_model=DisableRegistrationUpdate)
+def get_disable_registration_setting(admin: AdminUser) -> DisableRegistrationUpdate:
+    """Return whether new-user registration is disabled."""
+    return DisableRegistrationUpdate(enabled=get_disable_registration())
+
+
+@router.put("/disable-registration", response_model=DisableRegistrationUpdate)
+def put_disable_registration_setting(
+    admin: AdminUser, payload: DisableRegistrationUpdate
+) -> DisableRegistrationUpdate:
+    """Disable or re-enable new-user registration."""
+    set_disable_registration(payload.enabled)
+    return DisableRegistrationUpdate(enabled=payload.enabled)
+
+
+# ---------- Service address (admin-only) ----------
+
+@router.get("/service-address", response_model=ServiceAddressUpdate)
+def get_service_address_setting(admin: AdminUser) -> ServiceAddressUpdate:
+    """Return the configured public service address."""
+    return ServiceAddressUpdate(address=get_service_address())
+
+
+@router.put("/service-address", response_model=ServiceAddressUpdate)
+def put_service_address_setting(
+    admin: AdminUser, payload: ServiceAddressUpdate
+) -> ServiceAddressUpdate:
+    """Set the public service address used in emails and notifications."""
+    set_service_address(payload.address)
+    return ServiceAddressUpdate(address=payload.address)
 
 
 # ---------- Smoke tests ----------

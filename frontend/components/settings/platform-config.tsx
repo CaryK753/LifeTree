@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSettings } from "@/lib/hooks";
 import {
   api,
@@ -10,6 +10,9 @@ import {
   type Role,
   type SmtpUpdate,
   type TestResult,
+  type OAuthProviderView,
+  type OAuthProviderCreate,
+  type OAuthProviderUpdate,
   ALL_ROLES,
 } from "@/lib/api";
 import {
@@ -50,6 +53,7 @@ import {
   EyeOff,
   FileText,
   ImageIcon,
+  KeyRound,
   Layers,
   Loader2,
   Mail,
@@ -57,8 +61,11 @@ import {
   Pencil,
   PlugZap,
   Plus,
+  Power,
   Search,
+  ShieldCheck,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -445,6 +452,12 @@ export function PlatformConfig() {
         useSsl={settings?.smtp_use_ssl ?? false}
         onSave={handleSmtpSave}
       />
+
+      {/* ---------- OAuth providers (admin-configured) ---------- */}
+      <OAuthProvidersCard />
+
+      {/* ---------- Auth settings (email verification, registration, service address) ---------- */}
+      <AuthSettingsCard />
       {ConfirmRoot}
     </>
   );
@@ -1873,6 +1886,1012 @@ function SmtpCard({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// ============== Auth Settings (email verification, registration, service address) ==============
+
+function AuthSettingsCard() {
+  const t = useT();
+  const toast = useToast();
+  const [emailVerification, setEmailVerification] = useState(false);
+  const [disableRegistration, setDisableRegistration] = useState(false);
+  const [serviceAddress, setServiceAddress] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [savingEV, setSavingEV] = useState(false);
+  const [savingDR, setSavingDR] = useState(false);
+  const [savingAddr, setSavingAddr] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      api.getEmailVerification().catch(() => ({ enabled: false })),
+      api.getDisableRegistration().catch(() => ({ enabled: false })),
+      api.getServiceAddress().catch(() => ({ address: "" })),
+    ]).then(([ev, dr, addr]) => {
+      if (cancelled) return;
+      setEmailVerification(ev.enabled);
+      setDisableRegistration(dr.enabled);
+      setServiceAddress(addr.address);
+      setLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function toggleEmailVerification(enabled: boolean) {
+    setSavingEV(true);
+    try {
+      const r = await api.setEmailVerification(enabled);
+      setEmailVerification(r.enabled);
+      toast({
+        title: r.enabled
+          ? t("settings.authSettings.emailVerificationOn")
+          : t("settings.authSettings.emailVerificationOff"),
+        variant: "success",
+      });
+    } catch (e: any) {
+      toast({
+        title: t("settings.toast.updateFailed"),
+        description: e?.message ?? t("settings.toast.retryLater"),
+        variant: "error",
+      });
+    } finally {
+      setSavingEV(false);
+    }
+  }
+
+  async function toggleDisableRegistration(enabled: boolean) {
+    setSavingDR(true);
+    try {
+      const r = await api.setDisableRegistration(enabled);
+      setDisableRegistration(r.enabled);
+      toast({
+        title: r.enabled
+          ? t("settings.authSettings.registrationDisabled")
+          : t("settings.authSettings.registrationEnabled"),
+        variant: "success",
+      });
+    } catch (e: any) {
+      toast({
+        title: t("settings.toast.updateFailed"),
+        description: e?.message ?? t("settings.toast.retryLater"),
+        variant: "error",
+      });
+    } finally {
+      setSavingDR(false);
+    }
+  }
+
+  async function saveServiceAddress() {
+    setSavingAddr(true);
+    try {
+      const r = await api.setServiceAddress(serviceAddress.trim());
+      setServiceAddress(r.address);
+      toast({ title: t("settings.toast.updated"), variant: "success" });
+    } catch (e: any) {
+      toast({
+        title: t("settings.toast.updateFailed"),
+        description: e?.message ?? t("settings.toast.retryLater"),
+        variant: "error",
+      });
+    } finally {
+      setSavingAddr(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 text-brand-600 dark:text-brand-400" />
+            {t("settings.authSettings.title")}
+          </CardTitle>
+          <CardDescription className="mt-1">
+            {t("settings.authSettings.subtitle")}
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-6 text-zinc-500 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin mr-2" /> {t("common.loading")}
+          </div>
+        ) : (
+          <>
+            {/* Email verification */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                  {t("settings.authSettings.emailVerification")}
+                </div>
+                <div className="mt-0.5 text-[11px] text-zinc-500 leading-snug">
+                  {t("settings.authSettings.emailVerificationHint")}
+                </div>
+              </div>
+              <Switch
+                checked={emailVerification}
+                onChange={() => toggleEmailVerification(!emailVerification)}
+                disabled={savingEV}
+              />
+            </div>
+
+            {/* Disable registration */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                  {t("settings.authSettings.disableRegistration")}
+                </div>
+                <div className="mt-0.5 text-[11px] text-zinc-500 leading-snug">
+                  {t("settings.authSettings.disableRegistrationHint")}
+                </div>
+              </div>
+              <Switch
+                checked={disableRegistration}
+                onChange={() => toggleDisableRegistration(!disableRegistration)}
+                disabled={savingDR}
+              />
+            </div>
+
+            {/* Service address */}
+            <div className="space-y-1.5">
+              <Label className="text-xs text-zinc-500 dark:text-zinc-400">
+                {t("settings.authSettings.serviceAddress")}
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  value={serviceAddress}
+                  onChange={(e) => setServiceAddress(e.target.value)}
+                  placeholder="https://lifetree.example.com"
+                  className="h-9 text-sm font-mono"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={saveServiceAddress}
+                  disabled={savingAddr}
+                >
+                  {savingAddr ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    t("common.save")
+                  )}
+                </Button>
+              </div>
+              <p className="text-[10px] text-zinc-500 leading-snug">
+                {t("settings.authSettings.serviceAddressHint")}
+              </p>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------- Switch (inline toggle) ----------
+//
+// Small self-contained switch so we don't need to import the shadcn Switch
+// (which has a slightly different API) just for this card.
+
+function Switch({
+  checked,
+  onChange,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={onChange}
+      className={cn(
+        "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+        checked
+          ? "bg-brand-500"
+          : "bg-zinc-300 dark:bg-zinc-700"
+      )}
+    >
+      <span
+        className={cn(
+          "pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+          checked ? "translate-x-4" : "translate-x-0"
+        )}
+      />
+    </button>
+  );
+}
+
+// ============== OAuth Providers (admin-configured) ==============
+
+/**
+ * OAuth2 provider presets. When the admin picks a preset, name/URLs/scopes
+ * are auto-filled (only if the fields are empty or match another preset, so
+ * manual overrides are preserved).
+ */
+const OAUTH_PRESETS: Record<
+  string,
+  {
+    name: string;
+    authorize_url: string;
+    token_url: string;
+    userinfo_url: string;
+    scopes: string[];
+  }
+> = {
+  github: {
+    name: "GitHub",
+    authorize_url: "https://github.com/login/oauth/authorize",
+    token_url: "https://github.com/login/oauth/access_token",
+    userinfo_url: "https://api.github.com/user",
+    scopes: ["read:user", "user:email"],
+  },
+  google: {
+    name: "Google",
+    authorize_url: "https://accounts.google.com/o/oauth2/v2/auth",
+    token_url: "https://oauth2.googleapis.com/token",
+    userinfo_url: "https://www.googleapis.com/oauth2/v3/userinfo",
+    scopes: ["openid", "email", "profile"],
+  },
+  gitlab: {
+    name: "GitLab",
+    authorize_url: "https://gitlab.com/oauth/authorize",
+    token_url: "https://gitlab.com/oauth/token",
+    userinfo_url: "https://gitlab.com/api/v4/user",
+    scopes: ["read_user"],
+  },
+  custom: {
+    name: "",
+    authorize_url: "",
+    token_url: "",
+    userinfo_url: "",
+    scopes: [],
+  },
+};
+
+function OAuthProvidersCard() {
+  const t = useT();
+  const toast = useToast();
+  const { confirm, ConfirmRoot } = useConfirm();
+  const [providers, setProviders] = useState<OAuthProviderView[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<OAuthProviderView | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  async function refresh() {
+    try {
+      const list = await api.listOAuthProviders();
+      setProviders(list);
+    } catch (e: any) {
+      toast({
+        title: t("settings.oauth.title"),
+        description: e?.message ?? t("settings.toast.retryLater"),
+        variant: "error",
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleDelete(p: OAuthProviderView) {
+    const ok = await confirm({
+      title: t("settings.oauth.delete"),
+      description: t("settings.oauth.deleteConfirm", { name: p.name }),
+      confirmLabel: t("common.delete"),
+      cancelLabel: t("common.cancel"),
+      variant: "danger",
+    });
+    if (!ok) return;
+    try {
+      await api.deleteOAuthProvider(p.id);
+      setProviders((prev) => prev.filter((x) => x.id !== p.id));
+      toast({ title: t("settings.toast.deleted"), description: p.name, variant: "success" });
+    } catch (e: any) {
+      toast({
+        title: t("settings.toast.deleteFailed"),
+        description: e?.message ?? t("settings.toast.retryLater"),
+        variant: "error",
+      });
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-2">
+        <div>
+          <CardTitle className="flex items-center gap-2">
+            <KeyRound className="h-4 w-4 text-brand-600 dark:text-brand-400" />
+            {t("settings.oauth.title")}
+          </CardTitle>
+          <CardDescription className="mt-1">
+            {t("settings.oauth.subtitle")}
+          </CardDescription>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
+          <Plus className="h-3.5 w-3.5 mr-1.5" />
+          {t("settings.oauth.add")}
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {loading ? (
+          <div className="flex items-center justify-center py-8 text-zinc-500 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin mr-2" /> {t("common.loading")}
+          </div>
+        ) : providers.length === 0 ? (
+          <EmptyState
+            icon={<KeyRound className="h-8 w-8 text-zinc-600" />}
+            title={t("settings.oauth.empty")}
+            hint={t("settings.oauth.emptyHint")}
+          />
+        ) : (
+          providers.map((p) => (
+            <OAuthProviderRow
+              key={p.id}
+              provider={p}
+              onEdit={() => setEditing(p)}
+              onDelete={() => handleDelete(p)}
+              onUpdated={(updated) => {
+                setProviders((prev) =>
+                  prev.map((x) => (x.id === updated.id ? updated : x))
+                );
+              }}
+            />
+          ))
+        )}
+      </CardContent>
+
+      {(adding || editing) && (
+        <OAuthProviderDialog
+          provider={editing}
+          onClose={() => {
+            setAdding(false);
+            setEditing(null);
+          }}
+          onSaved={(saved) => {
+            if (editing) {
+              setProviders((prev) =>
+                prev.map((x) => (x.id === saved.id ? saved : x))
+              );
+            } else {
+              setProviders((prev) => [...prev, saved]);
+            }
+            setAdding(false);
+            setEditing(null);
+          }}
+        />
+      )}
+      {ConfirmRoot}
+    </Card>
+  );
+}
+
+function OAuthProviderRow({
+  provider,
+  onEdit,
+  onDelete,
+  onUpdated,
+}: {
+  provider: OAuthProviderView;
+  onEdit: () => void;
+  onDelete: () => void;
+  onUpdated: (p: OAuthProviderView) => void;
+}) {
+  const t = useT();
+  const toast = useToast();
+  const [toggling, setToggling] = useState(false);
+
+  async function handleToggle() {
+    setToggling(true);
+    try {
+      const updated = await api.updateOAuthProvider(provider.id, {
+        enabled: !provider.enabled,
+      });
+      onUpdated(updated);
+      toast({
+        title: updated.enabled
+          ? t("settings.oauth.enabled")
+          : t("settings.oauth.disabled"),
+        variant: "success",
+      });
+    } catch (e: any) {
+      toast({
+        title: t("settings.toast.updateFailed"),
+        description: e?.message ?? t("settings.toast.retryLater"),
+        variant: "error",
+      });
+    } finally {
+      setToggling(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-black/10 dark:border-white/10 bg-surface/40 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 flex items-start gap-3">
+          <div className="h-9 w-9 rounded-md border border-black/10 dark:border-white/10 overflow-hidden bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center shrink-0">
+            {provider.avatar_url ? (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img
+                src={provider.avatar_url}
+                alt=""
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <ImageIcon className="h-4 w-4 text-zinc-400" />
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              {provider.name}
+            </span>
+            {provider.enabled ? (
+              <Badge className="text-[10px] border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200">
+                {t("settings.oauth.enabled")}
+              </Badge>
+            ) : (
+              <Badge className="text-[10px] border-zinc-400/30 dark:border-zinc-700/50 bg-zinc-200/50 dark:bg-zinc-800/50 text-zinc-700 dark:text-zinc-400">
+                {t("settings.oauth.disabled")}
+              </Badge>
+            )}
+            {provider.client_id_configured ? (
+              <Badge className="text-[10px] border-brand-500/30 bg-brand-500/10 text-brand-700 dark:text-brand-200">
+                {t("settings.oauth.clientId")}
+              </Badge>
+            ) : (
+              <Badge className="text-[10px] border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200">
+                {t("settings.oauth.secretNotConfigured")}
+              </Badge>
+            )}
+            {provider.client_secret_configured ? (
+              <Badge className="text-[10px] border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200">
+                {t("settings.oauth.secretConfigured")}
+              </Badge>
+            ) : (
+              <Badge className="text-[10px] border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200">
+                {t("settings.oauth.secretNotConfigured")}
+              </Badge>
+            )}
+          </div>
+          <div className="mt-1 text-[11px] text-zinc-500 font-mono truncate">
+            {provider.authorize_url || "—"}
+          </div>
+          {provider.redirect_uri && (
+            <div className="mt-0.5 text-[10px] text-zinc-500 font-mono truncate">
+              {t("settings.oauth.redirectUri")}: {provider.redirect_uri}
+            </div>
+          )}
+          </div>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={handleToggle}
+            disabled={toggling}
+            title={
+              provider.enabled
+                ? t("settings.oauth.disabled")
+                : t("settings.oauth.enabled")
+            }
+          >
+            {toggling ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Power className="h-3.5 w-3.5" />
+            )}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={onEdit}
+            title={t("settings.oauth.edit")}
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 hover:text-red-600 dark:hover:text-red-300"
+            onClick={onDelete}
+            title={t("settings.oauth.delete")}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Resize an image file to a square data URL (cover-fit). Used for OAuth
+ * provider avatar uploads — keeps the payload small and avoids any backend
+ * image processing. Mirrors the helper in app/profile/page.tsx.
+ */
+async function resizeImageToDataUrl(
+  file: File,
+  size: number,
+  quality = 0.85
+): Promise<string> {
+  const bitmap = await createImageBitmap(file);
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas 2D context unavailable");
+  const scale = Math.max(size / bitmap.width, size / bitmap.height);
+  const scaledW = bitmap.width * scale;
+  const scaledH = bitmap.height * scale;
+  const dx = (size - scaledW) / 2;
+  const dy = (size - scaledH) / 2;
+  ctx.drawImage(bitmap, dx, dy, scaledW, scaledH);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+function OAuthProviderDialog({
+  provider,
+  onClose,
+  onSaved,
+}: {
+  provider: OAuthProviderView | null;
+  onClose: () => void;
+  onSaved: (p: OAuthProviderView) => void;
+}) {
+  const t = useT();
+  const toast = useToast();
+  const isEdit = !!provider;
+
+  // Detect preset from provider's authorize_url when editing.
+  const detectPreset = (p: OAuthProviderView | null): string => {
+    if (!p) return "github";
+    for (const [key, preset] of Object.entries(OAUTH_PRESETS)) {
+      if (key === "custom") continue;
+      if (p.authorize_url === preset.authorize_url) return key;
+    }
+    return "custom";
+  };
+
+  const [preset, setPreset] = useState<string>(() => detectPreset(provider));
+  const [form, setForm] = useState({
+    name: provider?.name ?? "",
+    client_id: provider?.client_id ?? "",
+    client_secret: "",
+    authorize_url: provider?.authorize_url ?? "",
+    token_url: provider?.token_url ?? "",
+    userinfo_url: provider?.userinfo_url ?? "",
+    scopes: provider?.scopes.join(" ") ?? "",
+    redirect_uri: provider?.redirect_uri ?? "",
+    enabled: provider?.enabled ?? true,
+    avatar_url: provider?.avatar_url ?? "",
+  });
+  const [showSecret, setShowSecret] = useState(false);
+  const [revealingSecret, setRevealingSecret] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+
+  function applyPreset(key: string) {
+    setPreset(key);
+    const p = OAUTH_PRESETS[key];
+    if (!p) return;
+    const allPresets = Object.values(OAUTH_PRESETS);
+    setForm((prev) => ({
+      ...prev,
+      name:
+        !prev.name.trim() || allPresets.some((x) => x.name === prev.name)
+          ? p.name
+          : prev.name,
+      authorize_url:
+        !prev.authorize_url.trim() ||
+        allPresets.some((x) => x.authorize_url === prev.authorize_url)
+          ? p.authorize_url
+          : prev.authorize_url,
+      token_url:
+        !prev.token_url.trim() ||
+        allPresets.some((x) => x.token_url === prev.token_url)
+          ? p.token_url
+          : prev.token_url,
+      userinfo_url:
+        !prev.userinfo_url.trim() ||
+        allPresets.some((x) => x.userinfo_url === prev.userinfo_url)
+          ? p.userinfo_url
+          : prev.userinfo_url,
+      scopes:
+        !prev.scopes.trim() ||
+        allPresets.some((x) => x.scopes.join(" ") === prev.scopes)
+          ? p.scopes.join(" ")
+          : prev.scopes,
+    }));
+  }
+
+  async function handleToggleSecret() {
+    if (
+      !showSecret &&
+      isEdit &&
+      provider?.client_secret_configured &&
+      !form.client_secret
+    ) {
+      setRevealingSecret(true);
+      try {
+        const r = await api.getOAuthProviderSecret(provider.id);
+        if (r.value) setForm((f) => ({ ...f, client_secret: r.value! }));
+      } catch (e: any) {
+        toast({
+          title: t("settings.oauth.fetchSecretFailed"),
+          description: e?.message,
+          variant: "error",
+        });
+      } finally {
+        setRevealingSecret(false);
+      }
+    }
+    setShowSecret((v) => !v);
+  }
+
+  async function handleAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: t("settings.oauth.avatar.invalidType"),
+        variant: "error",
+      });
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast({
+        title: t("settings.oauth.avatar.tooLarge"),
+        variant: "error",
+      });
+      return;
+    }
+    setAvatarBusy(true);
+    try {
+      const dataUrl = await resizeImageToDataUrl(file, 128, 128);
+      setForm((prev) => ({ ...prev, avatar_url: dataUrl }));
+    } catch (err: any) {
+      toast({
+        title: t("settings.oauth.avatar.invalidType"),
+        description: err?.message ?? "",
+        variant: "error",
+      });
+    } finally {
+      setAvatarBusy(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = "";
+    }
+  }
+
+  function handleAvatarRemove() {
+    setForm((prev) => ({ ...prev, avatar_url: "" }));
+  }
+
+  async function submit() {
+    if (!form.name.trim()) return;
+    setSaving(true);
+    try {
+      const scopes = form.scopes.trim()
+        ? form.scopes.trim().split(/\s+/)
+        : [];
+      if (isEdit && provider) {
+        const body: OAuthProviderUpdate = {
+          name: form.name.trim(),
+          authorize_url: form.authorize_url.trim(),
+          token_url: form.token_url.trim(),
+          userinfo_url: form.userinfo_url.trim(),
+          scopes,
+          redirect_uri: form.redirect_uri.trim(),
+          enabled: form.enabled,
+          client_id: form.client_id,
+          // null = leave unchanged, "" = clear
+          client_secret: form.client_secret || null,
+          avatar_url: form.avatar_url,
+        };
+        const updated = await api.updateOAuthProvider(provider.id, body);
+        onSaved(updated);
+        toast({ title: t("settings.toast.updated"), variant: "success" });
+      } else {
+        const body: OAuthProviderCreate = {
+          name: form.name.trim(),
+          client_id: form.client_id.trim(),
+          client_secret: form.client_secret.trim(),
+          authorize_url: form.authorize_url.trim(),
+          token_url: form.token_url.trim(),
+          userinfo_url: form.userinfo_url.trim(),
+          scopes,
+          redirect_uri: form.redirect_uri.trim(),
+          enabled: form.enabled,
+          avatar_url: form.avatar_url,
+        };
+        const created = await api.addOAuthProvider(body);
+        onSaved(created);
+        toast({
+          title: t("settings.toast.added"),
+          description: body.name,
+          variant: "success",
+        });
+      }
+    } catch (e: any) {
+      toast({
+        title: t("settings.toast.updateFailed"),
+        description: e?.message ?? t("settings.toast.retryLater"),
+        variant: "error",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Compute the redirect URI hint with the current origin.
+  const origin =
+    typeof window !== "undefined" ? window.location.origin : "";
+  const redirectHint = t("settings.oauth.redirectUriHint", { origin });
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>
+            {isEdit ? t("settings.oauth.edit") : t("settings.oauth.add")}
+          </DialogTitle>
+          <DialogDescription>{t("settings.oauth.addHint")}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          {/* Preset selector */}
+          <Field label={t("settings.oauth.preset.custom")}>
+            <Select value={preset} onValueChange={(v) => applyPreset(v)}>
+              <SelectTrigger className="h-9 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="github">
+                  {t("settings.oauth.preset.github")}
+                </SelectItem>
+                <SelectItem value="google">
+                  {t("settings.oauth.preset.google")}
+                </SelectItem>
+                <SelectItem value="gitlab">
+                  {t("settings.oauth.preset.gitlab")}
+                </SelectItem>
+                <SelectItem value="custom">
+                  {t("settings.oauth.preset.custom")}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+
+          {/* Avatar / logo upload */}
+          <Field label={t("settings.oauth.avatar.label")}>
+            <div className="flex items-center gap-3">
+              <div className="h-12 w-12 rounded-md border border-black/10 dark:border-white/10 overflow-hidden bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center shrink-0">
+                {form.avatar_url ? (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
+                    src={form.avatar_url}
+                    alt=""
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <ImageIcon className="h-5 w-5 text-zinc-400" />
+                )}
+              </div>
+              <input
+                ref={avatarInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleAvatarChange}
+                className="hidden"
+              />
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => avatarInputRef.current?.click()}
+                    disabled={avatarBusy}
+                  >
+                    {avatarBusy ? (
+                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    ) : (
+                      <Upload className="h-3 w-3 mr-1" />
+                    )}
+                    {t("settings.oauth.avatar.upload")}
+                  </Button>
+                  {form.avatar_url && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs hover:text-red-600 dark:hover:text-red-300"
+                      onClick={handleAvatarRemove}
+                      disabled={avatarBusy}
+                    >
+                      <X className="h-3 w-3 mr-1" />
+                      {t("settings.oauth.avatar.remove")}
+                    </Button>
+                  )}
+                </div>
+                <p className="text-[10px] text-zinc-500">
+                  {t("settings.oauth.avatar.hint")}
+                </p>
+              </div>
+            </div>
+          </Field>
+
+          <Field label={t("settings.oauth.name")}>
+            <Input
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder={t("settings.oauth.namePlaceholder")}
+              className="h-9 text-sm"
+              autoFocus
+            />
+          </Field>
+
+          <Field label={t("settings.oauth.clientId")}>
+            <Input
+              value={form.client_id}
+              onChange={(e) =>
+                setForm({ ...form, client_id: e.target.value })
+              }
+              placeholder="..."
+              className="h-9 text-sm font-mono"
+            />
+          </Field>
+
+          <Field
+            label={t("settings.oauth.clientSecret")}
+            hint={
+              isEdit && provider?.client_secret_configured
+                ? t("settings.oauth.secretHint")
+                : undefined
+            }
+          >
+            <div className="flex gap-2">
+              <Input
+                type={showSecret ? "text" : "password"}
+                value={form.client_secret}
+                onChange={(e) =>
+                  setForm({ ...form, client_secret: e.target.value })
+                }
+                placeholder={
+                  isEdit && provider?.client_secret_configured && !form.client_secret
+                    ? t("settings.oauth.secretConfigured")
+                    : "..."
+                }
+                autoComplete="off"
+                className="h-9 text-sm font-mono"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="h-9 w-9"
+                onClick={handleToggleSecret}
+                disabled={revealingSecret}
+                title={
+                  showSecret ? t("settings.oauth.hide") : t("settings.oauth.show")
+                }
+              >
+                {revealingSecret ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : showSecret ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+          </Field>
+
+          <Field label={t("settings.oauth.authorizeUrl")}>
+            <Input
+              value={form.authorize_url}
+              onChange={(e) =>
+                setForm({ ...form, authorize_url: e.target.value })
+              }
+              placeholder="https://github.com/login/oauth/authorize"
+              className="h-9 text-sm font-mono"
+            />
+          </Field>
+
+          <Field label={t("settings.oauth.tokenUrl")}>
+            <Input
+              value={form.token_url}
+              onChange={(e) =>
+                setForm({ ...form, token_url: e.target.value })
+              }
+              placeholder="https://github.com/login/oauth/access_token"
+              className="h-9 text-sm font-mono"
+            />
+          </Field>
+
+          <Field label={t("settings.oauth.userinfoUrl")}>
+            <Input
+              value={form.userinfo_url}
+              onChange={(e) =>
+                setForm({ ...form, userinfo_url: e.target.value })
+              }
+              placeholder="https://api.github.com/user"
+              className="h-9 text-sm font-mono"
+            />
+          </Field>
+
+          <Field
+            label={t("settings.oauth.scopes")}
+            hint={t("settings.oauth.scopesHint")}
+          >
+            <Input
+              value={form.scopes}
+              onChange={(e) => setForm({ ...form, scopes: e.target.value })}
+              placeholder={t("settings.oauth.scopesPlaceholder")}
+              className="h-9 text-sm font-mono"
+            />
+          </Field>
+
+          <Field
+            label={t("settings.oauth.redirectUri")}
+            hint={redirectHint}
+          >
+            <Input
+              value={form.redirect_uri}
+              onChange={(e) =>
+                setForm({ ...form, redirect_uri: e.target.value })
+              }
+              placeholder={`${origin}/auth/callback`}
+              className="h-9 text-sm font-mono"
+            />
+          </Field>
+
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={form.enabled}
+              onChange={(e) =>
+                setForm({ ...form, enabled: e.target.checked })
+              }
+              className="h-3.5 w-3.5 accent-brand-500"
+            />
+            <span className="text-xs text-zinc-700 dark:text-zinc-300">
+              {form.enabled
+                ? t("settings.oauth.enabled")
+                : t("settings.oauth.disabled")}
+            </span>
+          </label>
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline" size="sm" onClick={onClose}>
+              {t("common.cancel")}
+            </Button>
+          </DialogClose>
+          <Button
+            size="sm"
+            onClick={submit}
+            disabled={saving || !form.name.trim()}
+          >
+            {saving && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
+            {t("common.save")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

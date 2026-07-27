@@ -50,12 +50,16 @@ from app.core.tenant import CurrentUser, _apply_admin_override
 from app.db.postgres import get_db
 from app.db.redis import get_redis
 from app.llm.registry import (
+    get_disable_registration,
     get_email_verification_enabled,
     get_oauth_provider_by_id,
+    get_oauth_providers,
     get_public_auth_config,
+    get_service_address,
     get_smtp_config,
 )
 from app.models.user import UserProfile
+from app.models.user_oauth_link import UserOAuthLink
 from app.schemas.entities import UserProfileRead
 
 log = get_logger(__name__)
@@ -131,6 +135,22 @@ class RegisterWithCodeRequest(BaseModel):
     )
 
 
+class OAuthBindStartResponse(BaseModel):
+    """Authorize URL for binding an OAuth provider to the current account."""
+
+    authorize_url: str
+    state: str
+
+
+class OAuthBindingRead(BaseModel):
+    """A user's OAuth binding — provider_id + display metadata."""
+
+    provider_id: str
+    provider_name: str
+    external_sub: str
+    created_at: str
+
+
 # ---------- Helpers ----------
 
 def _make_token_pair(user: UserProfile) -> dict:
@@ -178,6 +198,10 @@ def _send_email(to_addr: str, subject: str, body: str) -> None:
 
     Raises on failure — callers should catch and convert to a friendly error.
     Uses the same strict TLS context as the SMTP test endpoint.
+
+    Deprecated: prefer ``_send_email_message`` with a pre-built HTML message
+    so the standard LifeTree email template is applied. This is kept for
+    backwards compatibility with any caller that only has plain text.
     """
     smtp = get_smtp_config()
     host = smtp["host"]
@@ -195,16 +219,48 @@ def _send_email(to_addr: str, subject: str, body: str) -> None:
     tls_ctx = ssl.create_default_context()
     tls_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
 
-    msg = MIMEText(body)
+    msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = subject
     msg["From"] = formataddr((sender_name, from_addr))
     msg["To"] = to_addr
 
+    _smtp_send(host, port, smtp_user, smtp_password, from_addr, to_addr,
+               msg, use_tls, use_ssl, tls_ctx)
+
+
+def _send_email_message(to_addr: str, msg) -> None:
+    """Send a pre-built email.message.Message via SMTP.
+
+    Used by callers that build their own HTML/plain multipart messages
+    (e.g. via ``app.services.email_template.build_html_message``).
+    """
+    smtp = get_smtp_config()
+    host = smtp["host"]
+    if not host:
+        raise ValueError("SMTP host is not configured")
+
+    port = smtp["port"] or 587
+    smtp_user = smtp["user"]
+    smtp_password = smtp["password"]
+    from_addr = smtp["from"] or "notify@lifetree.local"
+    use_tls = smtp["use_tls"] if smtp["use_tls"] is not None else True
+    use_ssl = smtp["use_ssl"] if smtp["use_ssl"] is not None else False
+
+    tls_ctx = ssl.create_default_context()
+    tls_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+
+    _smtp_send(host, port, smtp_user, smtp_password, from_addr, to_addr,
+               msg, use_tls, use_ssl, tls_ctx)
+
+
+def _smtp_send(host, port, user, password, from_addr, to_addr, msg,
+               use_tls, use_ssl, tls_ctx) -> None:
+    """Low-level SMTP send helper shared by _send_email and _send_email_message."""
     if use_ssl:
         with smtplib.SMTP_SSL(host, port, timeout=30, context=tls_ctx) as server:
             server.ehlo()
-            if smtp_user:
-                server.login(smtp_user, smtp_password)
+            if user:
+                server.login(user, password)
             server.sendmail(from_addr, [to_addr], msg.as_string())
     else:
         with smtplib.SMTP(host, port, timeout=30) as server:
@@ -212,8 +268,8 @@ def _send_email(to_addr: str, subject: str, body: str) -> None:
             if use_tls:
                 server.starttls(context=tls_ctx)
                 server.ehlo()
-            if smtp_user:
-                server.login(smtp_user, smtp_password)
+            if user:
+                server.login(user, password)
             server.sendmail(from_addr, [to_addr], msg.as_string())
 
 
@@ -226,6 +282,11 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> dict:
     When email verification is enabled, this endpoint refuses to register
     without a code — clients must use ``POST /auth/register-with-code`` instead.
     """
+    if get_disable_registration():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Registration is disabled. Contact the administrator.",
+        )
     if get_email_verification_enabled():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -323,34 +384,8 @@ def get_auth_config(db: Session = Depends(get_db)) -> PublicAuthConfig:
 
 # ---------- OAuth ----------
 
-@router.get("/oauth/{provider_id}/start", response_model=OAuthStartResponse)
-def oauth_start(provider_id: str) -> OAuthStartResponse:
-    """Return the authorize URL for an OAuth provider.
-
-    The frontend redirects the browser to ``authorize_url``. After the user
-    authorizes, the provider redirects back to ``redirect_uri`` which should
-    be a frontend route that calls
-    ``GET /auth/oauth/{provider_id}/callback?code=...&state=...``.
-    """
-    provider = get_oauth_provider_by_id(provider_id)
-    if provider is None or not provider.enabled:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OAuth provider not found")
-    if not provider.client_id or not provider.authorize_url:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="OAuth provider is misconfigured (missing client_id or authorize_url)",
-        )
-
-    # ``state`` prevents CSRF — the frontend should verify it matches on
-    # callback. We store it in Redis with a short TTL so the callback can
-    # validate it server-side too.
-    state = secrets.token_urlsafe(16)
-    try:
-        redis = get_redis()
-        redis.setex(f"oauth_state:{state}", 600, provider_id)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("auth.oauth_state_save_failed", error=str(exc))
-
+def _build_authorize_url(provider, state: str) -> str:
+    """Build the provider authorize URL with the standard params."""
     params = {
         "client_id": provider.client_id,
         "redirect_uri": provider.redirect_uri,
@@ -360,45 +395,14 @@ def oauth_start(provider_id: str) -> OAuthStartResponse:
     if provider.scopes:
         params["scope"] = " ".join(provider.scopes)
     separator = "&" if "?" in provider.authorize_url else "?"
-    authorize_url = f"{provider.authorize_url}{separator}{urlencode(params)}"
-    return OAuthStartResponse(authorize_url=authorize_url, state=state)
+    return f"{provider.authorize_url}{separator}{urlencode(params)}"
 
 
-@router.get("/oauth/{provider_id}/callback", response_model=AuthTokenResponse)
-def oauth_callback(
-    provider_id: str,
-    code: str,
-    state: str | None = None,
-    db: Session = Depends(get_db),
-) -> dict:
-    """OAuth callback: exchange code for tokens, fetch user info, log in.
+def _exchange_code_for_userinfo(provider, code: str) -> dict:
+    """Exchange an OAuth code for an access token + fetch userinfo.
 
-    The frontend calls this with the ``code`` and ``state`` query params
-    received from the provider. We:
-      1. Validate ``state`` (CSRF protection).
-      2. Exchange ``code`` for an access token at ``token_url``.
-      3. Fetch user info from ``userinfo_url``.
-      4. Find or create a local user keyed by email (fallback: provider+sub).
-      5. Return a JWT pair so the frontend can store it and redirect.
+    Returns the userinfo dict. Raises HTTPException on any failure.
     """
-    provider = get_oauth_provider_by_id(provider_id)
-    if provider is None or not provider.enabled:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OAuth provider not found")
-
-    # ---------- Validate state (CSRF) ----------
-    if state:
-        try:
-            redis = get_redis()
-            stored_provider = redis.get(f"oauth_state:{state}")
-            if stored_provider and stored_provider != provider_id:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OAuth state")
-            redis.delete(f"oauth_state:{state}")
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            log.warning("auth.oauth_state_check_failed", error=str(exc))
-
-    # ---------- Exchange code for access token ----------
     token_payload = {
         "client_id": provider.client_id,
         "client_secret": provider.client_secret,
@@ -416,7 +420,7 @@ def oauth_callback(
             token_resp.raise_for_status()
             token_data = token_resp.json()
     except httpx.HTTPError as exc:
-        log.warning("auth.oauth_token_exchange_failed", provider=provider_id, error=str(exc))
+        log.warning("auth.oauth_token_exchange_failed", provider=provider.id, error=str(exc))
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to exchange OAuth code: {exc}",
@@ -429,7 +433,6 @@ def oauth_callback(
             detail=f"OAuth token endpoint returned no access_token: {token_data}",
         )
 
-    # ---------- Fetch user info ----------
     try:
         with httpx.Client(timeout=15) as client:
             userinfo_resp = client.get(
@@ -439,11 +442,219 @@ def oauth_callback(
             userinfo_resp.raise_for_status()
             userinfo = userinfo_resp.json()
     except httpx.HTTPError as exc:
-        log.warning("auth.oauth_userinfo_failed", provider=provider_id, error=str(exc))
+        log.warning("auth.oauth_userinfo_failed", provider=provider.id, error=str(exc))
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to fetch user info from OAuth provider: {exc}",
         )
+    return userinfo
+
+
+@router.get("/oauth/{provider_id}/start", response_model=OAuthStartResponse)
+def oauth_start(
+    provider_id: str,
+    mode: Literal["login", "register"] = "login",
+) -> OAuthStartResponse:
+    """Return the authorize URL for an OAuth provider (login or register flow).
+
+    The frontend redirects the browser to ``authorize_url``. After the user
+    authorizes, the provider redirects back to ``redirect_uri`` which should
+    be a frontend route that calls
+    ``GET /auth/oauth/{provider_id}/callback?code=...&state=...``.
+
+    ``mode``:
+      - ``"login"`` (default): callback will find-or-create the user.
+      - ``"register"``: callback will create a new user explicitly; fails
+        with 409 if the email/external_id is already registered, and 403
+        if ``disable_registration`` is True.
+    """
+    provider = get_oauth_provider_by_id(provider_id)
+    if provider is None or not provider.enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OAuth provider not found")
+    if not provider.client_id or not provider.authorize_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OAuth provider is misconfigured (missing client_id or authorize_url)",
+        )
+    if mode == "register" and get_disable_registration():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Registration is disabled",
+        )
+
+    # ``state`` prevents CSRF — the frontend should verify it matches on
+    # callback. We store it in Redis with a short TTL so the callback can
+    # validate it server-side too. Value encodes the mode:
+    #   ``login:<provider_id>``    — login flow (find-or-create)
+    #   ``register:<provider_id>`` — register flow (must create new)
+    #   ``bind:<user_id>``         — bind flow (link to existing user)
+    state = secrets.token_urlsafe(16)
+    try:
+        redis = get_redis()
+        redis.setex(f"oauth_state:{state}", 600, f"{mode}:{provider_id}")
+    except Exception as exc:  # noqa: BLE001
+        log.error("auth.oauth_state_save_failed", error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="OAuth state store unavailable — please retry",
+        )
+
+    return OAuthStartResponse(
+        authorize_url=_build_authorize_url(provider, state),
+        state=state,
+    )
+
+
+@router.get("/oauth/{provider_id}/bind-start", response_model=OAuthBindStartResponse)
+def oauth_bind_start(
+    provider_id: str,
+    user: CurrentUser,
+    db: Session = Depends(get_db),
+) -> OAuthBindStartResponse:
+    """Return the authorize URL for binding an OAuth provider to the current
+    account.
+
+    Same as ``oauth_start`` but the state is tagged with ``bind:<user_id>``
+    so the callback knows to link the provider's external account to the
+    authenticated user instead of creating / logging in.
+    """
+    provider = get_oauth_provider_by_id(provider_id)
+    if provider is None or not provider.enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OAuth provider not found")
+    if not provider.client_id or not provider.authorize_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OAuth provider is misconfigured (missing client_id or authorize_url)",
+        )
+
+    # Check that the user doesn't already have this provider bound.
+    existing = db.scalars(
+        select(UserOAuthLink).where(
+            UserOAuthLink.user_id == user.id,
+            UserOAuthLink.provider_id == provider_id,
+        )
+    ).first()
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This OAuth provider is already bound to your account",
+        )
+
+    state = secrets.token_urlsafe(16)
+    try:
+        redis = get_redis()
+        redis.setex(f"oauth_state:{state}", 600, f"bind:{user.id}")
+    except Exception as exc:  # noqa: BLE001
+        log.error("auth.oauth_state_save_failed", error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="OAuth state store unavailable — please retry",
+        )
+
+    return OAuthBindStartResponse(
+        authorize_url=_build_authorize_url(provider, state),
+        state=state,
+    )
+
+
+@router.get("/oauth/{provider_id}/callback", response_model=AuthTokenResponse)
+def oauth_callback(
+    provider_id: str,
+    code: str,
+    state: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """OAuth callback: exchange code for tokens, fetch user info, then either
+    log in, register, or bind to an existing account based on the state.
+
+    The frontend calls this with the ``code`` and ``state`` query params
+    received from the provider. We:
+      1. Validate ``state`` (CSRF protection). The state value also tells
+         us which flow this is:
+           ``login:<provider_id>``    — find-or-create the user
+           ``register:<provider_id>`` — create a new user (409 if exists)
+           ``bind:<user_id>``         — link provider to the given user
+         For backward compatibility, a stored value with no prefix is
+         treated as ``login``.
+      2. Exchange ``code`` for an access token at ``token_url``.
+      3. Fetch user info from ``userinfo_url``.
+      4. Login flow: find or create a local user keyed by email
+         (fallback: provider+sub) and return a JWT pair.
+      5. Register flow: same as login, but 409 if email/external_id already
+         exists. Respects ``disable_registration``.
+      6. Bind flow: link the provider's external_sub to the user encoded
+         in the state, then return that user's JWT pair.
+    """
+    provider = get_oauth_provider_by_id(provider_id)
+    if provider is None or not provider.enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OAuth provider not found")
+
+    # ---------- Validate state (CSRF) + detect mode ----------
+    # Strict validation: state must be present and must match a Redis entry.
+    if not state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing OAuth state — possible CSRF attack",
+        )
+    oauth_mode = "login"  # default for backward-compat
+    bind_user_id: str | None = None
+    try:
+        redis = get_redis()
+        stored = redis.get(f"oauth_state:{state}")
+    except Exception as exc:  # noqa: BLE001
+        log.error("auth.oauth_state_check_failed", error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="OAuth state store unavailable — please retry",
+        )
+    if not stored:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired OAuth state",
+        )
+    # Decode the stored value: "<mode>:<rest>" or legacy bare provider_id.
+    if isinstance(stored, bytes):
+        stored = stored.decode("utf-8", errors="ignore")
+    if stored.startswith("bind:"):
+        oauth_mode = "bind"
+        bind_user_id = stored[len("bind:"):]
+        if not bind_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid OAuth state (empty bind user)",
+            )
+    elif stored.startswith("register:"):
+        oauth_mode = "register"
+        stored_provider = stored[len("register:"):]
+        if stored_provider != provider_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OAuth state provider mismatch",
+            )
+    elif stored.startswith("login:"):
+        oauth_mode = "login"
+        stored_provider = stored[len("login:"):]
+        if stored_provider != provider_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OAuth state provider mismatch",
+            )
+    else:
+        # Legacy bare provider_id (no prefix) — treat as login.
+        oauth_mode = "login"
+        if stored != provider_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid OAuth state (provider mismatch)",
+            )
+    # Consume the state (one-shot).
+    try:
+        redis.delete(f"oauth_state:{state}")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("auth.oauth_state_delete_failed", error=str(exc))
+
+    # ---------- Exchange code + fetch userinfo ----------
+    userinfo = _exchange_code_for_userinfo(provider, code)
 
     # Common fields across providers (GitHub, Google, GitLab, …).
     email = userinfo.get("email") or userinfo.get("emailAddress") or ""
@@ -462,7 +673,65 @@ def oauth_callback(
             detail="OAuth provider returned neither email nor id — cannot identify user",
         )
 
-    # ---------- Find or create local user ----------
+    # ---------- Bind flow ----------
+    if oauth_mode == "bind":
+        target = db.get(UserProfile, bind_user_id)
+        if target is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found for OAuth bind")
+        if not external_sub:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="OAuth provider returned no id — cannot bind",
+            )
+        # Check that this provider account isn't already bound to anyone.
+        existing_link = db.scalars(
+            select(UserOAuthLink).where(
+                UserOAuthLink.provider_id == provider_id,
+                UserOAuthLink.external_sub == external_sub,
+            )
+        ).first()
+        if existing_link is not None and existing_link.user_id != target.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This OAuth account is already bound to another user",
+            )
+        # Check the user doesn't already have this provider bound.
+        existing_self = db.scalars(
+            select(UserOAuthLink).where(
+                UserOAuthLink.user_id == target.id,
+                UserOAuthLink.provider_id == provider_id,
+            )
+        ).first()
+        if existing_self is not None:
+            # Update the external_sub in case it changed (e.g. re-binding
+            # after the provider rotated the user id).
+            existing_self.external_sub = external_sub
+            db.commit()
+            db.refresh(existing_self)
+        else:
+            link = UserOAuthLink(
+                user_id=target.id,
+                provider_id=provider_id,
+                external_sub=external_sub,
+            )
+            db.add(link)
+            # Also update avatar / external_id on the user for backwards
+            # compat with the legacy external_id column.
+            if not target.external_id:
+                target.external_id = f"{provider_id}:{external_sub}"
+            avatar = userinfo.get("avatar_url") or userinfo.get("picture")
+            if avatar and not target.avatar_url:
+                target.avatar_url = avatar
+            db.commit()
+            db.refresh(link)
+
+        log.info("auth.oauth_bound", user_id=target.id, provider=provider_id, sub=external_sub)
+        target = _apply_admin_override(target)
+        return _make_token_pair(target)
+
+    # ---------- Login / Register flow ----------
+    # Try to find an existing user keyed by email, then external_id, then
+    # oauth link row. In register mode, finding an existing user is a 409.
     user: UserProfile | None = None
     if email:
         user = db.scalars(
@@ -470,15 +739,60 @@ def oauth_callback(
         ).first()
 
     if user is None and external_sub:
-        # Fallback: look up by external_id (provider-unique sub).
+        # Fallback: look up by external_id (provider-unique sub) or by
+        # an explicit oauth link row.
         external_id = f"{provider_id}:{external_sub}"
         user = db.scalars(
             select(UserProfile).where(UserProfile.external_id == external_id)
         ).first()
+        if user is None:
+            # Also check user_oauth_links for a prior bind.
+            link = db.scalars(
+                select(UserOAuthLink).where(
+                    UserOAuthLink.provider_id == provider_id,
+                    UserOAuthLink.external_sub == external_sub,
+                )
+            ).first()
+            if link is not None:
+                user = db.get(UserProfile, link.user_id)
 
-    if user is None:
-        # Create a new user. OAuth users have no password — they can only
-        # log in via OAuth. They can set a password later if they want.
+    if user is not None:
+        if oauth_mode == "register":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Email or OAuth identity already registered — log in instead",
+            )
+        # Update avatar + external_id on each login (keeps them fresh).
+        if not user.external_id and external_sub:
+            user.external_id = f"{provider_id}:{external_sub}"
+        avatar = userinfo.get("avatar_url") or userinfo.get("picture")
+        if avatar and user.avatar_url != avatar:
+            user.avatar_url = avatar
+        if user.display_name != display_name and display_name:
+            user.display_name = str(display_name)[:128]
+        # Make sure a link row exists (backfill for users created before
+        # the user_oauth_links table existed).
+        if external_sub:
+            existing_link = db.scalars(
+                select(UserOAuthLink).where(
+                    UserOAuthLink.user_id == user.id,
+                    UserOAuthLink.provider_id == provider_id,
+                )
+            ).first()
+            if existing_link is None:
+                db.add(UserOAuthLink(
+                    user_id=user.id,
+                    provider_id=provider_id,
+                    external_sub=external_sub,
+                ))
+            elif existing_link.external_sub != external_sub:
+                existing_link.external_sub = external_sub
+        db.commit()
+        db.refresh(user)
+    else:
+        # No existing user — create one. In login mode this is "first-time
+        # OAuth login auto-creates the account" (same as before); in
+        # register mode this is the explicit registration.
         if not email:
             # No email — synthesize a private one so the unique constraint
             # doesn't trip. The user can update it later.
@@ -496,25 +810,78 @@ def oauth_callback(
         db.add(user)
         db.commit()
         db.refresh(user)
-        log.info("auth.oauth_user_created", user_id=user.id, provider=provider_id, email=user.email, first_admin=is_first_admin)
-    else:
-        # Update avatar + external_id on each login (keeps them fresh).
-        if not user.external_id and external_sub:
-            user.external_id = f"{provider_id}:{external_sub}"
-        avatar = userinfo.get("avatar_url") or userinfo.get("picture")
-        if avatar and user.avatar_url != avatar:
-            user.avatar_url = avatar
-        if user.display_name != display_name and display_name:
-            user.display_name = str(display_name)[:128]
-        db.commit()
-        db.refresh(user)
+        # Also create an oauth link row for the new user.
+        if external_sub:
+            link = UserOAuthLink(
+                user_id=user.id,
+                provider_id=provider_id,
+                external_sub=external_sub,
+            )
+            db.add(link)
+            db.commit()
+        log.info(
+            "auth.oauth_user_created",
+            user_id=user.id, provider=provider_id, email=user.email,
+            first_admin=is_first_admin, mode=oauth_mode,
+        )
 
     if not user.is_enabled:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
 
     user = _apply_admin_override(user)
-    log.info("auth.oauth_login", user_id=user.id, provider=provider_id, email=user.email)
+    log.info("auth.oauth_login", user_id=user.id, provider=provider_id, email=user.email, mode=oauth_mode)
     return _make_token_pair(user)
+
+
+# ---------- OAuth bindings (current user) ----------
+
+@router.get("/oauth/bindings", response_model=list[OAuthBindingRead])
+def list_oauth_bindings(user: CurrentUser, db: Session = Depends(get_db)) -> list[OAuthBindingRead]:
+    """List the current user's OAuth bindings.
+
+    Returns one entry per bound provider, including the provider's display
+    name (looked up from app_config) so the UI doesn't need a second
+    request to render the binding list.
+    """
+    links = db.scalars(
+        select(UserOAuthLink).where(UserOAuthLink.user_id == user.id)
+    ).all()
+    # Build a provider_id → name map for the response.
+    providers = {p.id: p.name for p in get_oauth_providers()}
+    return [
+        OAuthBindingRead(
+            provider_id=link.provider_id,
+            provider_name=providers.get(link.provider_id, link.provider_id),
+            external_sub=link.external_sub,
+            created_at=link.created_at.isoformat() if link.created_at else "",
+        )
+        for link in links
+    ]
+
+
+@router.delete("/oauth/bindings/{provider_id}")
+def unbind_oauth_provider(
+    provider_id: str, user: CurrentUser, db: Session = Depends(get_db)
+) -> dict:
+    """Remove an OAuth binding from the current user's account.
+
+    The user can always unbind — even if they have no password and no
+    other OAuth bindings, they'd just lose the ability to log in (which
+    they can recover via the "forgot password" / admin-reset flow). The
+    frontend warns them about this before confirming.
+    """
+    link = db.scalars(
+        select(UserOAuthLink).where(
+            UserOAuthLink.user_id == user.id,
+            UserOAuthLink.provider_id == provider_id,
+        )
+    ).first()
+    if link is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OAuth provider is not bound to your account")
+    db.delete(link)
+    db.commit()
+    log.info("auth.oauth_unbound", user_id=user.id, provider=provider_id)
+    return {"ok": True}
 
 
 # ---------- Email verification code ----------
@@ -569,13 +936,25 @@ def send_code(payload: SendCodeRequest, db: Session = Depends(get_db)) -> SendCo
     redis.setex(rate_key, 60, "1")
 
     try:
-        _send_email(
-            email,
-            "[LifeTree] Your verification code",
-            f"Your LifeTree verification code is: {code}\n\n"
-            f"This code expires in 10 minutes.\n\n"
-            f"If you didn't request this, you can safely ignore this email.",
+        # Build an HTML verification-code email and send via SMTP.
+        from app.services.email_template import (
+            build_html_message,
+            render_verification_code_email,
         )
+
+        subject, html_body = render_verification_code_email(code, expires_in_minutes=10)
+        plain_fallback = (
+            f"Your LifeTree verification code is: {code}\n"
+            f"This code expires in 10 minutes.\n"
+            f"If you didn't request this, you can safely ignore this email.\n"
+        )
+        msg = build_html_message(
+            to_addr=email,
+            subject=subject,
+            html_body=html_body,
+            plain_text_fallback=plain_fallback,
+        )
+        _send_email_message(email, msg)
     except Exception as exc:  # noqa: BLE001
         log.error("auth.send_code_email_failed", email=email, error=str(exc))
         # Don't leak SMTP internals to the client — return a generic error.
@@ -601,6 +980,11 @@ def register_with_code(
     ``POST /auth/login``. When omitted, the user can only log in via OAuth
     (if they later link an OAuth account) or by requesting a new code.
     """
+    if get_disable_registration():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Registration is disabled. Contact the administrator.",
+        )
     if not get_email_verification_enabled():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

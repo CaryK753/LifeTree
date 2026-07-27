@@ -59,7 +59,7 @@ export function GoalEditDialog({
   open: boolean;
   onOpenChange: (v: boolean) => void;
   goal: GoalEditState | null;
-  onSaved?: () => void;
+  onSaved?: (newStatus?: string) => void;
   onDeleted?: () => void;
 }) {
   const t = useT();
@@ -93,7 +93,7 @@ export function GoalEditDialog({
         status: form.status,
       });
       toast({ title: t("goals.toast.updated"), variant: "success" });
-      onSaved?.();
+      onSaved?.(form.status);
       onOpenChange(false);
     } catch (e: any) {
       toast({

@@ -108,7 +108,7 @@ class StructuringService:
             self.db.commit()
             return source, None
 
-        self._persist_extraction(source, extraction)
+        self._persist_extraction(source, extraction, user_id=user_id)
         self.db.commit()
         return source, extraction
 
@@ -143,7 +143,11 @@ class StructuringService:
         return extraction
 
     def _persist_extraction(
-        self, source: InformationSource, extraction: StructuredExtraction
+        self,
+        source: InformationSource,
+        extraction: StructuredExtraction,
+        *,
+        user_id: str | None = None,
     ) -> int:
         """Write extracted atoms to PG (events/metrics/assertions/relationships)."""
         notifications_triggered = 0

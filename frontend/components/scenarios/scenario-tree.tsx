@@ -64,6 +64,10 @@ export interface ScenarioNodeData {
   key_risk_factors?: Array<{ name: string; level: string; contribution: number }>;
   assumptions?: Record<string, unknown>;
   computed_at?: string | null;
+  // §5 透明化 — populated from latest ScenarioRun.result by the API layer.
+  survival_curve?: Array<{ month?: number; t?: number; p?: number; [k: string]: unknown }>;
+  key_risk_times?: Array<{ month?: number; risk?: number; label?: string; [k: string]: unknown }>;
+  median_time_months?: number | null;
   isRoot?: boolean;
   [key: string]: unknown;
 }

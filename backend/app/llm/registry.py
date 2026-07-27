@@ -856,6 +856,8 @@ def get_smtp_config() -> dict[str, Any]:
 
 _KEY_OAUTH_PROVIDERS = "oauth_providers"
 _KEY_EMAIL_VERIFICATION_ENABLED = "email_verification_enabled"
+_KEY_DISABLE_REGISTRATION = "disable_registration"
+_KEY_SERVICE_ADDRESS = "service_address"
 _KEY_USE_MODE = "use_mode"
 
 
@@ -872,6 +874,10 @@ class OAuthProvider(BaseModel):
     scopes: list[str] = Field(default_factory=list)
     redirect_uri: str = ""
     enabled: bool = True
+    # Provider icon/avatar — either a data URL (base64-encoded image uploaded
+    # by the admin) or an external URL (e.g. https://github.com/favicon.ico).
+    # Shown in the login/registration dialog and on the binding card.
+    avatar_url: str = ""
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
@@ -889,6 +895,7 @@ class OAuthProviderView(BaseModel):
     scopes: list[str]
     redirect_uri: str
     enabled: bool
+    avatar_url: str = ""
     created_at: str
 
 
@@ -896,11 +903,13 @@ class OAuthProviderPublic(BaseModel):
     """Public info exposed to unauthenticated clients (login dialog).
 
     Only what the login UI needs to render the button — no URLs beyond
-    what's required, no secrets, no client_id.
+    what's required, no secrets, no client_id. ``avatar_url`` is included
+    so the login dialog can render the provider icon.
     """
 
     id: str
     name: str
+    avatar_url: str = ""
 
 
 def _oauth_provider_to_view(p: OAuthProvider) -> OAuthProviderView:
@@ -916,6 +925,7 @@ def _oauth_provider_to_view(p: OAuthProvider) -> OAuthProviderView:
         scopes=list(p.scopes),
         redirect_uri=p.redirect_uri,
         enabled=p.enabled,
+        avatar_url=p.avatar_url,
         created_at=p.created_at,
     )
 
@@ -960,6 +970,7 @@ def add_oauth_provider(
     scopes: list[str] | None = None,
     redirect_uri: str = "",
     enabled: bool = True,
+    avatar_url: str = "",
 ) -> OAuthProvider:
     """Add a new OAuth provider and persist it. Returns the new provider."""
     providers = get_oauth_providers()
@@ -974,6 +985,7 @@ def add_oauth_provider(
         scopes=list(scopes) if scopes else [],
         redirect_uri=redirect_uri.strip(),
         enabled=enabled,
+        avatar_url=avatar_url,
     )
     providers.append(p)
     set_oauth_providers(providers)
@@ -992,9 +1004,10 @@ def update_oauth_provider(
     scopes: list[str] | None = None,
     redirect_uri: str | None = None,
     enabled: bool | None = None,
+    avatar_url: str | None = None,
 ) -> OAuthProvider | None:
     """Update an OAuth provider. None leaves a field unchanged; empty string
-    clears client_secret/client_id. Returns the updated provider or None."""
+    clears client_secret/client_id/avatar_url. Returns the updated provider or None."""
     providers = get_oauth_providers()
     target = next((p for p in providers if p.id == provider_id), None)
     if target is None:
@@ -1017,6 +1030,8 @@ def update_oauth_provider(
         target.redirect_uri = redirect_uri.strip()
     if enabled is not None:
         target.enabled = bool(enabled)
+    if avatar_url is not None:
+        target.avatar_url = avatar_url  # "" clears, data URL or external URL sets
     set_oauth_providers(providers)
     return target
 
@@ -1045,6 +1060,43 @@ def set_email_verification_enabled(enabled: bool) -> None:
     """Enable or disable email verification for registration."""
     with _db_session() as session:
         _set_app_config(session, _KEY_EMAIL_VERIFICATION_ENABLED, bool(enabled))
+
+
+def get_disable_registration() -> bool:
+    """Return whether new-user registration is disabled (admin-only logins)."""
+    with _db_session() as session:
+        row = session.get(AppConfig, _KEY_DISABLE_REGISTRATION)
+        if row is None:
+            return False
+        val = _decode_value(row.value, False)
+        return bool(val) if isinstance(val, bool) else False
+
+
+def set_disable_registration(disabled: bool) -> None:
+    """Disable or re-enable new-user registration."""
+    with _db_session() as session:
+        _set_app_config(session, _KEY_DISABLE_REGISTRATION, bool(disabled))
+
+
+def get_service_address() -> str:
+    """Return the public address of this LifeTree instance.
+
+    Used to build absolute URLs in emails and notifications. Falls back
+    to an empty string when unset, in which case callers should fall back
+    to request.base_url or a sensible default.
+    """
+    with _db_session() as session:
+        row = session.get(AppConfig, _KEY_SERVICE_ADDRESS)
+        if row is None:
+            return ""
+        val = _decode_value(row.value, "")
+        return val if isinstance(val, str) else ""
+
+
+def set_service_address(address: str) -> None:
+    """Set the public service address (e.g. ``https://lifetree.example.com``)."""
+    with _db_session() as session:
+        _set_app_config(session, _KEY_SERVICE_ADDRESS, address.strip())
 
 
 def get_use_mode() -> str:
@@ -1088,6 +1140,8 @@ def get_public_auth_config() -> dict[str, Any]:
     Exposes:
       - ``oauth_providers``: list of {id, name} for enabled providers only
       - ``email_verification_enabled``: bool
+      - ``disable_registration``: bool — when True, the login dialog hides
+        the register tab so only existing users can log in.
       - ``multi_user_mode``: True when ``use_mode == "multi"``. The login
         dialog is then not dismissible — the user must authenticate.
 
@@ -1095,8 +1149,12 @@ def get_public_auth_config() -> dict[str, Any]:
     """
     providers = [p for p in get_oauth_providers() if p.enabled]
     return {
-        "oauth_providers": [OAuthProviderPublic(id=p.id, name=p.name).model_dump() for p in providers],
+        "oauth_providers": [
+            OAuthProviderPublic(id=p.id, name=p.name, avatar_url=p.avatar_url).model_dump()
+            for p in providers
+        ],
         "email_verification_enabled": get_email_verification_enabled(),
+        "disable_registration": get_disable_registration(),
         "multi_user_mode": get_use_mode() == "multi",
         "use_mode": get_use_mode(),
     }
@@ -1149,10 +1207,12 @@ __all__ = [
     "delete_oauth_provider",
     "delete_provider",
     "get_email_verification_enabled",
+    "get_disable_registration",
     "get_mineru_config",
     "get_oauth_provider_by_id",
     "get_oauth_providers",
     "get_public_auth_config",
+    "get_service_address",
     "get_smtp_config",
     "get_tavily_key",
     "get_use_mode",
@@ -1160,7 +1220,9 @@ __all__ = [
     "resolve_role",
     "save_config",
     "set_email_verification_enabled",
+    "set_disable_registration",
     "set_mineru_key",
+    "set_service_address",
     "set_use_mode",
     "set_oauth_providers",
     "set_role_assignment",

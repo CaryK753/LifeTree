@@ -202,10 +202,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  oauthStart: (providerId: string) =>
-    request<OAuthStartResponse>(
-      `/auth/oauth/${encodeURIComponent(providerId)}/start`
-    ),
+  oauthStart: (providerId: string, mode?: "login" | "register") => {
+    const qs = mode && mode !== "login" ? `?mode=${mode}` : "";
+    return request<OAuthStartResponse>(
+      `/auth/oauth/${encodeURIComponent(providerId)}/start${qs}`
+    );
+  },
   oauthCallback: (providerId: string, code: string, state?: string) => {
     const qs = new URLSearchParams({ code });
     if (state) qs.set("state", state);
@@ -213,6 +215,41 @@ export const api = {
       `/auth/oauth/${encodeURIComponent(providerId)}/callback?${qs.toString()}`
     );
   },
+
+  // OAuth binding (current user) — link/unlink an OAuth provider to your account
+  oauthBindStart: (providerId: string) =>
+    request<OAuthStartResponse>(
+      `/auth/oauth/${encodeURIComponent(providerId)}/bind-start`
+    ),
+  listOAuthBindings: () =>
+    request<OAuthBindingRead[]>(`/auth/oauth/bindings`),
+  unbindOAuth: (providerId: string) =>
+    request<{ ok: boolean }>(
+      `/auth/oauth/bindings/${encodeURIComponent(providerId)}`,
+      { method: "DELETE" }
+    ),
+
+  // Admin OAuth provider CRUD (admin-only)
+  listOAuthProviders: () =>
+    request<OAuthProviderView[]>(`/settings/oauth`),
+  addOAuthProvider: (body: OAuthProviderCreate) =>
+    request<OAuthProviderView>(`/settings/oauth`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateOAuthProvider: (id: string, body: OAuthProviderUpdate) =>
+    request<OAuthProviderView>(`/settings/oauth/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteOAuthProvider: (id: string) =>
+    request<{ ok: boolean }>(`/settings/oauth/${id}`, {
+      method: "DELETE",
+    }),
+  getOAuthProviderSecret: (id: string) =>
+    request<{ value: string | null; configured: boolean }>(
+      `/settings/oauth/${id}/secret`
+    ),
 
   // Admin
   adminListUsers: () => request<AdminUserRead[]>(`/admin/users`),
@@ -510,6 +547,33 @@ export const api = {
       body: JSON.stringify({ mode }),
     }),
 
+  // Email verification toggle (admin)
+  getEmailVerification: () =>
+    request<{ enabled: boolean }>(`/settings/email-verification`),
+  setEmailVerification: (enabled: boolean) =>
+    request<{ enabled: boolean }>(`/settings/email-verification`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+
+  // Disable registration toggle (admin)
+  getDisableRegistration: () =>
+    request<{ enabled: boolean }>(`/settings/disable-registration`),
+  setDisableRegistration: (enabled: boolean) =>
+    request<{ enabled: boolean }>(`/settings/disable-registration`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+
+  // Service address (admin) — public URL used in emails/notifications
+  getServiceAddress: () =>
+    request<{ address: string }>(`/settings/service-address`),
+  setServiceAddress: (address: string) =>
+    request<{ address: string }>(`/settings/service-address`, {
+      method: "PUT",
+      body: JSON.stringify({ address }),
+    }),
+
   testRole: (role: Role) =>
     request<TestResult>(`/settings/test/${role}`, { method: "POST" }),
 
@@ -698,11 +762,13 @@ export interface AdminStats {
 export interface OAuthProviderPublic {
   id: string;
   name: string;
+  avatar_url?: string;
 }
 
 export interface PublicAuthConfig {
   oauth_providers: OAuthProviderPublic[];
   email_verification_enabled: boolean;
+  disable_registration: boolean;
   multi_user_mode: boolean;
   use_mode: "single" | "multi";
   /** False when no real users exist → frontend shows first-admin setup. */
@@ -725,6 +791,59 @@ export interface RegisterWithCodeRequest {
 export interface OAuthStartResponse {
   authorize_url: string;
   state: string;
+}
+
+// ---------- OAuth provider (admin-configured) ----------
+
+export interface OAuthProviderView {
+  id: string;
+  name: string;
+  client_id: string;
+  client_id_configured: boolean;
+  client_secret_configured: boolean;
+  authorize_url: string;
+  token_url: string;
+  userinfo_url: string;
+  scopes: string[];
+  redirect_uri: string;
+  enabled: boolean;
+  avatar_url: string;
+  created_at: string;
+}
+
+export interface OAuthProviderCreate {
+  name: string;
+  client_id?: string;
+  client_secret?: string;
+  authorize_url?: string;
+  token_url?: string;
+  userinfo_url?: string;
+  scopes?: string[];
+  redirect_uri?: string;
+  enabled?: boolean;
+  avatar_url?: string;
+}
+
+export interface OAuthProviderUpdate {
+  name?: string;
+  client_id?: string | null;
+  client_secret?: string | null;
+  authorize_url?: string | null;
+  token_url?: string | null;
+  userinfo_url?: string | null;
+  scopes?: string[] | null;
+  redirect_uri?: string | null;
+  enabled?: boolean | null;
+  avatar_url?: string | null;
+}
+
+// ---------- OAuth binding (current user) ----------
+
+export interface OAuthBindingRead {
+  provider_id: string;
+  provider_name: string;
+  external_sub: string;
+  created_at: string;
 }
 
 // ---------- User memory types ----------

@@ -45,6 +45,7 @@ from app.models.user import (
     UserProfile,
     UserUpload,
 )
+from app.models.user_oauth_link import UserOAuthLink
 from app.models.user_plugin import UserPlugin
 
 __all__ = [
@@ -74,6 +75,7 @@ __all__ = [
     "RiskTolerance",
     "UserMemory",
     "UserPlugin",
+    "UserOAuthLink",
     # Notifications / risk
     "NotificationLog",
     "NotificationChannel",

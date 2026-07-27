@@ -58,17 +58,27 @@ def create_scenario(
 @router.get("", response_model=list[ScenarioRead])
 def list_scenarios(
     goal_id: str, user: CurrentUser, db: Session = Depends(get_db)
-) -> list[ScenarioRead]:
+) -> list[dict]:
+    """List scenarios for a goal.
+
+    Includes ``survival_curve`` / ``key_risk_times`` / ``median_time_months``
+    from each scenario's latest reasoning run, so the frontend
+    scenario-comparison overlay view can render every branch's probability
+    curve in a single request (no N+1 follow-up calls).
+    """
     _verify_goal_owner(goal_id, user, db)
-    return ScenarioService(db).list_for_goal(goal_id)
+    svc = ScenarioService(db)
+    return [svc.to_read_with_curve(s) for s in svc.list_for_goal(goal_id)]
 
 
 @router.get("/{scenario_id}", response_model=ScenarioRead)
 def get_scenario(
     scenario_id: str, user: CurrentUser, db: Session = Depends(get_db)
-) -> ScenarioRead:
+) -> dict:
     _verify_scenario_owner(scenario_id, user, db)
-    return ScenarioService(db).get(scenario_id)
+    return ScenarioService(db).to_read_with_curve(
+        ScenarioService(db).get(scenario_id)
+    )
 
 
 @router.patch("/{scenario_id}", response_model=ScenarioRead)

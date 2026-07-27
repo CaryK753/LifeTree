@@ -12,6 +12,7 @@ import {
   GoalEditDialog,
   type GoalEditState,
 } from "@/components/goals/goal-edit-dialog";
+import { GoalCelebration } from "@/components/goals/goal-celebration";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,11 @@ export default function GoalDetailPage({
   const { data: requirements } = useRequirements(activePathway ?? (pathways as any)?.[0]?.id);
   const [editOpen, setEditOpen] = useState(false);
   const [quickBusy, setQuickBusy] = useState(false);
+  // Celebration overlay — shown when goal moves to a terminal state.
+  const [celebration, setCelebration] = useState<
+    | { status: "achieved" | "abandoned" }
+    | null
+  >(null);
 
   const statusLabel = (s?: string) => (s ? t(`status.${s}`) : "—");
   const gapLabel = (g?: string) => (g ? t(`gap.${g}`) : "—");
@@ -73,6 +79,10 @@ export default function GoalDetailPage({
       // Refresh dashboard + the goals list cache.
       mutateDashboard();
       mutate("goals");
+      // Trigger celebration overlay for terminal states.
+      if (status === "achieved" || status === "abandoned") {
+        setCelebration({ status });
+      }
     } catch (e: any) {
       toast({
         title: t("goals.toast.updateFailed"),
@@ -164,9 +174,13 @@ export default function GoalDetailPage({
         open={editOpen}
         onOpenChange={setEditOpen}
         goal={editState}
-        onSaved={() => {
+        onSaved={(newStatus) => {
           mutateDashboard();
           mutate("goals");
+          // Trigger celebration overlay for terminal states.
+          if (newStatus === "achieved" || newStatus === "abandoned") {
+            setCelebration({ status: newStatus });
+          }
         }}
       />
 
@@ -279,6 +293,17 @@ export default function GoalDetailPage({
           <ScenarioComparison scenarios={(scenarios as any[]) ?? []} onRerun={rerunScenarios} />
         </TabsContent>
       </Tabs>
+
+      {/* Celebration overlay — shown when goal is achieved or abandoned. */}
+      {celebration && (
+        <GoalCelebration
+          onClose={() => setCelebration(null)}
+          goalTitle={goalTitle}
+          status={celebration.status}
+          milestones={milestones}
+          scenarioCount={(scenarios as any[])?.length ?? 0}
+        />
+      )}
     </div>
   );
 }

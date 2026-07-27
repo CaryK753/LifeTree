@@ -5,6 +5,7 @@ import { useAuth, useAuthConfig, useSettings, useSystemComponents } from "@/lib/
 import {
   api,
   type AboutInfo,
+  type OAuthBindingRead,
   type SystemComponentView,
   type UpdateCheck,
   ALL_ROLES,
@@ -48,11 +49,14 @@ import {
   Globe,
   HardDrive,
   Info,
+  KeyRound,
   Layers,
+  Link2,
   Loader2,
   Network,
   RefreshCw,
   Sparkles,
+  Unlink,
   UserCog,
   Zap,
 } from "lucide-react";
@@ -67,6 +71,8 @@ export default function SettingsPage() {
   const { data: settings } = useSettings();
   const t = useT();
   const { isAdmin } = useAuth();
+  const { data: authConfig } = useAuthConfig();
+  const isMultiUser = (authConfig?.use_mode ?? "single") === "multi";
 
   const rolesConfigured = useMemo(() => {
     if (!settings) return 0;
@@ -105,6 +111,9 @@ export default function SettingsPage() {
 
       {/* ---------- Use Mode (single / multi-user) ---------- */}
       <UseModeCard />
+
+      {/* ---------- OAuth account binding (multi-user mode only) ---------- */}
+      {isMultiUser && <OAuthBindingCard />}
 
       {/* ---------- Theme ---------- */}
       <ThemeCard />
@@ -458,6 +467,221 @@ function UseModeCard() {
   );
 }
 
+// ============== OAuth Account Binding Card ==============
+
+/**
+ * OAuthBindingCard: lets the current user bind/unbind admin-configured OAuth
+ * providers to their account. Visible to all users in multi-user mode.
+ *
+ * Bind flow:
+ *   1. User clicks "Bind" → call /auth/oauth/{id}/bind-start (requires auth)
+ *   2. Backend returns authorize_url with state=bind:<user_id>
+ *   3. We set a sessionStorage flag so /auth/callback knows it's a bind
+ *      callback (and can redirect back to /settings instead of /)
+ *   4. Redirect browser to authorize_url
+ *   5. Provider redirects to /auth/callback?provider=...&code=...&state=...
+ *   6. /auth/callback calls /auth/oauth/{id}/callback which detects bind
+ *      mode from state, links external_sub to user, returns JWT pair
+ *   7. /auth/callback sees bind flag → redirects to /settings
+ */
+function OAuthBindingCard() {
+  const t = useT();
+  const toast = useToast();
+  const { confirm, ConfirmRoot } = useConfirm();
+  const { data: authConfig } = useAuthConfig();
+  const [bindings, setBindings] = useState<OAuthBindingRead[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [bindingId, setBindingId] = useState<string | null>(null);
+  const [unbindingId, setUnbindingId] = useState<string | null>(null);
+
+  const providers = authConfig?.oauth_providers ?? [];
+
+  async function refreshBindings() {
+    try {
+      const list = await api.listOAuthBindings();
+      setBindings(list);
+    } catch (e: any) {
+      // Silently ignore — the card just shows the empty state.
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refreshBindings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleBind(providerId: string) {
+    setBindingId(providerId);
+    try {
+      const { authorize_url } = await api.oauthBindStart(providerId);
+      // Mark this as a bind flow so /auth/callback redirects back to /settings
+      // after the OAuth round-trip.
+      try {
+        sessionStorage.setItem("lifetree.oauth.bind", providerId);
+      } catch {
+        // sessionStorage might be unavailable (private mode) — non-fatal.
+      }
+      // Full-page redirect to the provider's authorize URL.
+      window.location.href = authorize_url;
+    } catch (e: any) {
+      const detail =
+        (e as { details?: { detail?: string } })?.details?.detail ||
+        (e as Error)?.message ||
+        t("settings.oauthBinding.bindFailed");
+      toast({
+        title: t("settings.oauthBinding.bindFailed"),
+        description: detail,
+        variant: "error",
+      });
+      setBindingId(null);
+    }
+  }
+
+  async function handleUnbind(providerId: string, providerName: string) {
+    const ok = await confirm({
+      title: t("settings.oauthBinding.unbind"),
+      description: t("settings.oauthBinding.unbindConfirm", { name: providerName }),
+      confirmLabel: t("settings.oauthBinding.unbind"),
+      cancelLabel: t("common.cancel"),
+      variant: "danger",
+    });
+    if (!ok) return;
+    setUnbindingId(providerId);
+    try {
+      await api.unbindOAuth(providerId);
+      setBindings((prev) => prev.filter((b) => b.provider_id !== providerId));
+      toast({ title: t("settings.oauthBinding.unbind"), variant: "success" });
+    } catch (e: any) {
+      const detail =
+        (e as { details?: { detail?: string } })?.details?.detail ||
+        (e as Error)?.message ||
+        t("settings.oauthBinding.unbindFailed");
+      toast({
+        title: t("settings.oauthBinding.unbindFailed"),
+        description: detail,
+        variant: "error",
+      });
+    } finally {
+      setUnbindingId(null);
+    }
+  }
+
+  // Build a provider_id → binding map for quick lookup.
+  const bindingMap = new Map(bindings.map((b) => [b.provider_id, b]));
+
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle className="flex items-center gap-2">
+            <KeyRound className="h-4 w-4 text-brand-600 dark:text-brand-400" />
+            {t("settings.oauthBinding.title")}
+          </CardTitle>
+          <CardDescription className="mt-1">
+            {t("settings.oauthBinding.subtitle")}
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {loading ? (
+          <div className="flex items-center justify-center py-8 text-zinc-500 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin mr-2" /> {t("common.loading")}
+          </div>
+        ) : providers.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center">
+            <KeyRound className="h-8 w-8 text-zinc-600 mb-3" />
+            <div className="text-sm text-zinc-800 dark:text-zinc-300">
+              {t("settings.oauthBinding.empty")}
+            </div>
+          </div>
+        ) : (
+          providers.map((p) => {
+            const binding = bindingMap.get(p.id);
+            const isBound = !!binding;
+            return (
+              <div
+                key={p.id}
+                className="flex items-center justify-between gap-3 p-3 rounded-lg border border-black/5 dark:border-white/5 bg-surface/30"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {p.avatar_url ? (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
+                        src={p.avatar_url}
+                        alt=""
+                        className="h-5 w-5 rounded-sm object-cover"
+                      />
+                    ) : null}
+                    <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                      {p.name}
+                    </span>
+                    {isBound ? (
+                      <Badge className="text-[10px] border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200">
+                        <CheckCircle2 className="h-2.5 w-2.5 mr-0.5" />
+                        {t("settings.oauthBinding.bound")}
+                      </Badge>
+                    ) : (
+                      <Badge className="text-[10px] border-zinc-400/30 dark:border-zinc-700/50 bg-zinc-200/50 dark:bg-zinc-800/50 text-zinc-700 dark:text-zinc-400">
+                        {t("settings.oauthBinding.notConfigured")}
+                      </Badge>
+                    )}
+                  </div>
+                  {isBound && binding?.created_at && (
+                    <div className="mt-1 text-[10px] text-zinc-500">
+                      {t("settings.oauthBinding.boundAt", {
+                        date: new Date(binding.created_at).toLocaleString(),
+                      })}
+                    </div>
+                  )}
+                </div>
+                <div className="shrink-0">
+                  {isBound ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs hover:text-red-600 dark:hover:text-red-300"
+                      onClick={() => handleUnbind(p.id, p.name)}
+                      disabled={unbindingId !== null}
+                    >
+                      {unbindingId === p.id ? (
+                        <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                      ) : (
+                        <Unlink className="h-3 w-3 mr-1.5" />
+                      )}
+                      {t("settings.oauthBinding.unbind")}
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs"
+                      onClick={() => handleBind(p.id)}
+                      disabled={bindingId !== null}
+                    >
+                      {bindingId === p.id ? (
+                        <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                      ) : (
+                        <Link2 className="h-3 w-3 mr-1.5" />
+                      )}
+                      {bindingId === p.id
+                        ? t("settings.oauthBinding.processing")
+                        : t("settings.oauthBinding.bind")}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </CardContent>
+      {ConfirmRoot}
+    </Card>
+  );
+}
+
 // ============== Language Card ==============
 
 function LanguageCard() {
@@ -550,8 +774,6 @@ function AboutCard() {
     }
   }
 
-  const name = about?.name ?? "LifeTree";
-  const description = about?.description ?? t("settings.about.description");
   const version = about?.version ?? "—";
   const license = about?.license ?? "AGPL-3.0";
   const githubUrl = about?.github_url ?? "https://github.com/lifetree/lifetree";
@@ -564,21 +786,9 @@ function AboutCard() {
             <Info className="h-4 w-4 text-brand-600 dark:text-brand-400" />
             {t("settings.about.title")}
           </CardTitle>
-          <CardDescription className="mt-1">
-            {t("settings.about.description")}
-          </CardDescription>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div>
-          <div className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-            {name}
-          </div>
-          <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-snug mt-1">
-            {description}
-          </p>
-        </div>
-
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
           <div className="flex items-center gap-1.5">
             <span className="text-zinc-500 dark:text-zinc-400">

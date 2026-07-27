@@ -94,6 +94,13 @@ class ScenarioRead(ScenarioBase, ORMModel):
     computed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    # §5 透明化 — survival curve + key risk times are needed for the
+    # scenario comparison overlay view. Populated from the latest
+    # ScenarioRun.result by the API layer (not stored on the Scenario
+    # itself to avoid duplicating large JSON blobs).
+    survival_curve: list[dict[str, Any]] = []
+    key_risk_times: list[dict[str, Any]] = []
+    median_time_months: float | None = None
 
 
 class ScenarioUpdate(BaseModel):

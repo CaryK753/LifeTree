@@ -19,14 +19,15 @@ import {
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog";
-import { Loader2, Plus, X, GitBranch, Network, ListTree } from "lucide-react";
+import { Loader2, Plus, X, GitBranch, Network, ListTree, LineChart } from "lucide-react";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { useT } from "@/lib/i18n/provider";
 import { cn } from "@/lib/utils";
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
+import { ScenarioCurveOverlay } from "@/components/scenarios/scenario-curve-overlay";
 
-type ViewMode = "tree" | "grid";
+type ViewMode = "tree" | "grid" | "compare";
 
 export default function ScenariosPage() {
   const t = useT();
@@ -160,6 +161,22 @@ export default function ScenariosPage() {
                 {t("scenarioTree.viewGrid")}
               </span>
             </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("compare")}
+              className={cn(
+                "inline-flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors",
+                viewMode === "compare"
+                  ? "bg-brand-500/20 text-brand-700 dark:text-brand-300"
+                  : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100"
+              )}
+              title={t("scenarioTree.viewCompare")}
+            >
+              <LineChart className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">
+                {t("scenarioTree.viewCompare")}
+              </span>
+            </button>
           </div>
 
           {selected && (
@@ -242,6 +259,85 @@ export default function ScenariosPage() {
             </CardDescription>
           </CardHeader>
         </Card>
+      ) : viewMode === "compare" ? (
+        /* Compare view — overlays survival curves from every scenario on a
+           single chart so the user can visually contrast how each branch's
+           probability of success evolves over time. §5 情景对比面板. */
+        <div className="space-y-4">
+          <ScenarioCurveOverlay scenarios={scenariosList} />
+
+          {/* Per-scenario summary table — P10/P50/P90 + top risk factor */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <GitBranch className="h-4 w-4 text-brand-600 dark:text-brand-400" />
+                {t("scenarioComparison.summaryTable")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-zinc-500 dark:text-zinc-400 border-b border-black/5 dark:border-white/5">
+                    <th className="py-2 pr-3 font-medium">{t("scenarioComparison.colScenario")}</th>
+                    <th className="py-2 px-3 font-medium">{t("scenarioComparison.colStatus")}</th>
+                    <th className="py-2 px-3 font-medium text-right">P10</th>
+                    <th className="py-2 px-3 font-medium text-right">P50</th>
+                    <th className="py-2 px-3 font-medium text-right">P90</th>
+                    <th className="py-2 px-3 font-medium">{t("scenarioComparison.colTopRisk")}</th>
+                    <th className="py-2 pl-3 font-medium text-right">{t("scenarioComparison.colMedian")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scenariosList.map((s) => {
+                    const p10 = s.success_probability?.p10;
+                    const p50 = s.success_probability?.p50;
+                    const p90 = s.success_probability?.p90;
+                    const topRisk = s.key_risk_factors?.[0];
+                    return (
+                      <tr
+                        key={s.id}
+                        className="border-b border-black/5 dark:border-white/5 last:border-0"
+                      >
+                        <td className="py-2 pr-3 font-medium text-zinc-800 dark:text-zinc-200 truncate max-w-[200px]">
+                          {s.name}
+                        </td>
+                        <td className="py-2 px-3">
+                          <span
+                            className={cn(
+                              "inline-block px-1.5 py-0.5 rounded text-[10px] font-medium",
+                              s.status === "active"
+                                ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                                : s.status === "draft"
+                                ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                                : "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400"
+                            )}
+                          >
+                            {s.status}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-right tabular-nums text-zinc-700 dark:text-zinc-300">
+                          {p10 != null ? `${Math.round(p10 * 100)}%` : "—"}
+                        </td>
+                        <td className="py-2 px-3 text-right tabular-nums font-semibold text-brand-700 dark:text-brand-300">
+                          {p50 != null ? `${Math.round(p50 * 100)}%` : "—"}
+                        </td>
+                        <td className="py-2 px-3 text-right tabular-nums text-zinc-700 dark:text-zinc-300">
+                          {p90 != null ? `${Math.round(p90 * 100)}%` : "—"}
+                        </td>
+                        <td className="py-2 px-3 text-zinc-600 dark:text-zinc-400 truncate max-w-[180px]">
+                          {topRisk ? `${topRisk.name} (${Math.round(topRisk.contribution * 100)}%)` : "—"}
+                        </td>
+                        <td className="py-2 pl-3 text-right tabular-nums text-zinc-600 dark:text-zinc-400">
+                          {s.median_time_months != null ? `${s.median_time_months}m` : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </CardContent>
+          </Card>
+        </div>
       ) : viewMode === "tree" ? (
         /* Tree view — React Flow canvas fills the area; detail panel floats
            above the canvas (absolute) and only appears when a node is selected.

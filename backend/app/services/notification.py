@@ -195,6 +195,10 @@ class NotificationService:
         Falls back to legacy env-var settings (``Settings.smtp_*``) only if
         the LLMConfig SMTP block is empty — this preserves backward
         compatibility for deployments that already configured SMTP via .env.
+
+        Renders an HTML email using the shared LifeTree template; links
+        point to the admin-configured "service address" so they resolve to
+        the public URL rather than an internal Docker hostname.
         """
         if not user.email:
             raise RuntimeError("user has no email address")
@@ -222,8 +226,38 @@ class NotificationService:
             smtp.get("sender_name", "LifeTree") if smtp["host"] else "LifeTree"
         ) or "LifeTree"
 
-        msg = MIMEText(body)
-        msg["Subject"] = f"[LifeTree] {title}"
+        # Build an HTML risk-warning email using the shared template. The
+        # severity is mapped from the record's channel/severity if available.
+        from app.services.email_template import (
+            build_html_message,
+            render_risk_warning_email,
+        )
+
+        # Try to extract severity from the most recent record for this user,
+        # falling back to "warning" when unknown.
+        severity = "warning"
+        try:
+            recent = self.redis.get(f"notif:last_severity:{user.id}")
+            if recent and isinstance(recent, str):
+                severity = recent
+        except Exception:  # noqa: BLE001
+            pass
+
+        subject, html_body = render_risk_warning_email(
+            user_display_name=user.display_name or user.email,
+            title=title,
+            body_text=body,
+            severity=severity,
+        )
+        msg = build_html_message(
+            to_addr=user.email,
+            subject=subject,
+            html_body=html_body,
+            plain_text_fallback=f"{title}\n\n{body}\n",
+        )
+        # Override From/To from the legacy SMTP config when the admin
+        # block is empty (the template uses the admin-configured values
+        # already, but legacy env settings may differ).
         msg["From"] = formataddr((sender_name, from_addr))
         msg["To"] = user.email
 

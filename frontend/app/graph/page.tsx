@@ -28,12 +28,12 @@ export default function GraphPage() {
     <div className="p-4 sm:p-6 lg:p-8 space-y-6 animate-fade-in">
       <header className="flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold text-zinc-100 flex items-center gap-2">
+          <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
             <SidebarToggleButton />
-            <Network className="h-6 w-6 text-brand-400" />
+            <Network className="h-6 w-6 text-brand-600 dark:text-brand-400" />
             {t("graph.title")}
           </h1>
-          <p className="text-sm text-zinc-500 mt-1">{t("graph.subtitle")}</p>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">{t("graph.subtitle")}</p>
         </div>
         <div className="flex items-center gap-2">
           <Select value={selectedGoal ?? ""} onValueChange={(v) => setGoalId(v || undefined)}>
@@ -71,7 +71,7 @@ export default function GraphPage() {
         <CardHeader>
           <div>
             <CardTitle className="flex items-center gap-2 text-base">
-              <Layers className="h-4 w-4 text-brand-400" />
+              <Layers className="h-4 w-4 text-brand-600 dark:text-brand-400" />
               {t("graph.view")}
             </CardTitle>
             <CardDescription className="mt-1">
@@ -83,10 +83,10 @@ export default function GraphPage() {
           </div>
         </CardHeader>
         <CardContent>
-          <div className="h-[70vh] rounded-lg overflow-hidden border border-white/5 bg-surface-2/40">
-            {isLoading && <div className="text-xs text-zinc-500 p-4">{t("common.loading")}</div>}
+          <div className="h-[70vh] rounded-lg overflow-hidden border border-black/5 dark:border-white/5 bg-surface-2/40">
+            {isLoading && <div className="text-xs text-zinc-500 dark:text-zinc-400 p-4">{t("common.loading")}</div>}
             {!isLoading && !graph && (
-              <div className="h-full flex flex-col items-center justify-center gap-2 text-sm text-zinc-500">
+              <div className="h-full flex flex-col items-center justify-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
                 <Network className="h-8 w-8 opacity-40" />
                 <p>{selectedGoal ? t("graph.noData") : t("graph.selectGoalHint")}</p>
               </div>
@@ -95,13 +95,16 @@ export default function GraphPage() {
               <KnowledgeGraph nodes={graph.nodes as any[]} edges={graph.edges as any[]} />
             )}
           </div>
-          <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-zinc-400">
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-zinc-500 dark:text-zinc-400">
             <Legend color="#3b8d61" label={t("graph.legend.goal")} />
             <Legend color="#5eab7f" label={t("graph.legend.pathway")} />
             <Legend color="#8fcaa6" label={t("graph.legend.requirement")} />
             <Legend color="#ef4444" label={t("graph.legend.riskFactor")} />
             <Legend color="#f59e0b" label={t("graph.legend.event")} />
             <Legend color="#94a3b8" label={t("graph.legend.source")} />
+            <span className="text-zinc-400 dark:text-zinc-500 italic">
+              {t("graph.clickHint")}
+            </span>
           </div>
         </CardContent>
       </Card>
@@ -111,7 +114,7 @@ export default function GraphPage() {
 
 function Legend({ color, label }: { color: string; label: string }) {
   return (
-    <div className="flex items-center gap-1.5 text-zinc-400">
+    <div className="flex items-center gap-1.5 text-zinc-500 dark:text-zinc-400">
       <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: color }} />
       <span>{label}</span>
     </div>

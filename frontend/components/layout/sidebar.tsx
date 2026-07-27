@@ -23,6 +23,8 @@ import {
   Sun,
   Moon,
   Monitor,
+  PanelLeftClose,
+  PanelLeftOpen,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -59,7 +61,7 @@ const ADMIN_NAV: NavItem[] = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { collapsed } = useSidebarCollapsed();
+  const { collapsed, toggle: toggleCollapsed } = useSidebarCollapsed();
   const drawerMode = useSidebarDrawerMode();
   const { open: drawerOpen, setOpen: setDrawerOpen } = usePwaSidebarDrawer();
 
@@ -132,8 +134,8 @@ export function Sidebar() {
   }
 
   // ---------- Non-PWA mode: persistent rail ----------
-  // The rail is always visible; ``SidebarToggleButton`` toggles
-  // collapse/expand (w-16 ↔ w-60).
+  // The rail is always visible; the collapse toggle in the top-right of
+  // the brand row switches between wide (w-60) and compact (w-16).
   // The ``sidebar-rail`` class is a CSS hook so ``html.pwa .sidebar-rail``
   // can hide the rail as a fallback even if the React branch hasn't
   // switched to the drawer yet.
@@ -147,7 +149,11 @@ export function Sidebar() {
       )}
       data-collapsed={collapsed}
     >
-      <SidebarContent collapsed={collapsed} pathname={pathname} />
+      <SidebarContent
+        collapsed={collapsed}
+        pathname={pathname}
+        onToggle={toggleCollapsed}
+      />
     </aside>
   );
 }
@@ -158,10 +164,12 @@ function SidebarContent({
   collapsed,
   pathname,
   onClose,
+  onToggle,
 }: {
   collapsed: boolean;
   pathname: string;
   onClose?: () => void;
+  onToggle?: () => void;
 }) {
   const t = useT();
   const compact = collapsed;
@@ -186,15 +194,14 @@ function SidebarContent({
 
   return (
     <>
-      {/* Brand row — logo links to home. The collapse/expand toggle now
-          lives in each page's heading (``SidebarToggleButton``), so the
-          brand row is just the logo + wordmark. When collapsed, only the
-          logo is shown (centered). In PWA drawer mode (``onClose`` set),
-          a close button is rendered on the right. */}
+      {/* Brand row — logo links to home.
+          - Drawer mode (onClose set): close button on the right.
+          - Persistent rail (onToggle set): collapse/expand button on the
+            right. When collapsed, only the logo + toggle are shown. */}
       <div
         className={cn(
           "flex h-16 items-center border-b border-white/5",
-          compact && !onClose ? "justify-center px-2" : "gap-2 px-3"
+          compact && !onClose && !onToggle ? "justify-center px-2" : "gap-2 px-3"
         )}
       >
         <Link
@@ -225,6 +232,20 @@ function SidebarContent({
             aria-label="Close sidebar"
           >
             <X className="h-4 w-4" />
+          </button>
+        )}
+        {onToggle && (
+          <button
+            onClick={onToggle}
+            className="shrink-0 flex items-center justify-center rounded-md text-zinc-500 hover:bg-white/5 hover:text-zinc-200 h-8 w-8"
+            aria-label={compact ? "Expand sidebar" : "Collapse sidebar"}
+            title={compact ? t("sidebar.expand") : t("sidebar.collapse")}
+          >
+            {compact ? (
+              <PanelLeftOpen className="h-4 w-4" />
+            ) : (
+              <PanelLeftClose className="h-4 w-4" />
+            )}
           </button>
         )}
       </div>

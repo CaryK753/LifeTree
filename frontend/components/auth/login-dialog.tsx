@@ -71,6 +71,7 @@ export function LoginDialog({
   const cooldownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const emailVerificationEnabled = !!authConfig?.email_verification_enabled;
+  const disableRegistration = !!authConfig?.disable_registration && !firstAdminSetup;
   const oauthProviders = authConfig?.oauth_providers ?? [];
 
   // Reset form when dialog closes.
@@ -90,9 +91,11 @@ export function LoginDialog({
   }, [open]);
 
   // When firstAdminSetup is active, ensure we're always in register mode.
+  // When registration is disabled, force login mode.
   useEffect(() => {
     if (firstAdminSetup) setMode("register");
-  }, [firstAdminSetup]);
+    else if (disableRegistration) setMode("login");
+  }, [firstAdminSetup, disableRegistration]);
 
   // Clean up cooldown timer on unmount.
   useEffect(() => {
@@ -212,10 +215,19 @@ export function LoginDialog({
     }
   }
 
-  async function handleOAuth(providerId: string) {
+  async function handleOAuth(providerId: string, oauthMode: "login" | "register" = "login") {
     setOauthLoadingId(providerId);
     try {
-      const { authorize_url } = await api.oauthStart(providerId);
+      const { authorize_url } = await api.oauthStart(providerId, oauthMode);
+      // Mark the register flow via sessionStorage so /auth/callback can
+      // show the right success message and pick the right redirect target.
+      if (oauthMode === "register") {
+        try {
+          sessionStorage.setItem("lifetree.oauth.register", providerId);
+        } catch {
+          // sessionStorage may be unavailable — non-fatal.
+        }
+      }
       // Full-page redirect to the provider's authorize URL.
       window.location.href = authorize_url;
     } catch (err: unknown) {
@@ -282,8 +294,9 @@ export function LoginDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {/* Tabs — hidden in first-admin setup mode (register only). */}
-        {!firstAdminSetup && (
+        {/* Tabs — hidden in first-admin setup mode (register only) and
+            when registration is disabled by admin (login only). */}
+        {!firstAdminSetup && !disableRegistration && (
         <div className="flex gap-1 p-1 rounded-md bg-black/[0.04] dark:bg-white/[0.04]">
           <button
             type="button"
@@ -439,8 +452,10 @@ export function LoginDialog({
           </div>
         )}
 
-        {/* OAuth section — only render when at least one provider is configured. */}
-        {oauthProviders.length > 0 && (
+        {/* OAuth section — only render when at least one provider is configured
+            and registration is not disabled (register tab) or always (login tab). */}
+        {oauthProviders.length > 0 &&
+          !(effectiveMode === "register" && disableRegistration) && (
           <div className="space-y-2">
             <div className="relative">
               <div className="absolute inset-0 flex items-center">
@@ -458,16 +473,25 @@ export function LoginDialog({
                   key={p.id}
                   type="button"
                   variant="outline"
-                  onClick={() => handleOAuth(p.id)}
+                  onClick={() => handleOAuth(p.id, effectiveMode)}
                   disabled={oauthLoadingId !== null}
                   className="w-full h-9"
                 >
                   {oauthLoadingId === p.id ? (
                     <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                  ) : p.avatar_url ? (
+                    /* eslint-disable-next-line @next/next/no-img-element */
+                    <img
+                      src={p.avatar_url}
+                      alt=""
+                      className="h-4 w-4 mr-1.5 rounded-sm object-cover"
+                    />
                   ) : (
                     <Mail className="h-4 w-4 mr-1.5" />
                   )}
-                  {t("auth.oauth.loginWith", { provider: p.name })}
+                  {effectiveMode === "register"
+                    ? t("auth.oauth.registerWith", { provider: p.name })
+                    : t("auth.oauth.loginWith", { provider: p.name })}
                 </Button>
               ))}
             </div>

@@ -177,6 +177,11 @@ input[type="range"]:focus {
   .text-zinc-400 { color: rgb(82 82 91) !important; }       /* zinc-600 */
   /* zinc-500/600 stay the same — they work in both themes */
 
+  /* Brand-300/400 are too light to read on white — remap to brand-600/700 */
+  .text-brand-300 { color: rgb(42 113 77) !important; }     /* brand-600 #2a714d */
+  .text-brand-400 { color: rgb(34 90 63) !important; }      /* brand-700 #225a3f */
+  /* brand-500 (#3b8d61) is readable in both themes — leave as-is */
+
   /* White borders → dark borders */
   .border-white\/5  { border-color: rgb(0 0 0 / 0.08) !important; }
   .border-white\/10 { border-color: rgb(0 0 0 / 0.12) !important; }
@@ -245,6 +250,42 @@ html.drawer-mode .sidebar-rail { display: none !important; }
   animation: lifetree-fade-in 220ms ease-out both;
 }
 
+/* ---------- Celebration confetti ----------
+   Pure-CSS confetti burst — no external deps. Used by the goal-achievement
+   celebration overlay. Each piece is a small rotated rect that falls from
+   the top with a horizontal drift. Six colors, five durations, five delays
+   → 30 unique combinations via nth-child. */
+@keyframes lifetree-confetti-fall {
+  0%   { transform: translateY(-10vh) rotate(0deg);   opacity: 1; }
+  80%  { opacity: 1; }
+  100% { transform: translateY(100vh) rotate(720deg);  opacity: 0; }
+}
+.confetti-piece {
+  position: fixed;
+  top: 0;
+  width: 8px;
+  height: 14px;
+  pointer-events: none;
+  z-index: 9999;
+  animation: lifetree-confetti-fall 3s ease-in forwards;
+}
+.confetti-piece:nth-child(6n+1) { left: 5%;  background: #3b8d61; animation-duration: 2.8s; animation-delay: 0s;   }
+.confetti-piece:nth-child(6n+2) { left: 20%; background: #f59e0b; animation-duration: 3.2s; animation-delay: 0.2s; }
+.confetti-piece:nth-child(6n+3) { left: 38%; background: #8fcaa6; animation-duration: 2.5s; animation-delay: 0.1s; }
+.confetti-piece:nth-child(6n+4) { left: 55%; background: #ef4444; animation-duration: 3.5s; animation-delay: 0.3s; }
+.confetti-piece:nth-child(6n+5) { left: 72%; background: #3b8d61; animation-duration: 3.0s; animation-delay: 0.15s;}
+.confetti-piece:nth-child(6n+6) { left: 88%; background: #f59e0b; animation-duration: 2.7s; animation-delay: 0.25s;}
+
+/* Celebration overlay scale-in — the dialog body grows from 80% to 100%. */
+@keyframes lifetree-celebrate-pop {
+  0%   { transform: scale(0.8); opacity: 0; }
+  60%  { transform: scale(1.05); }
+  100% { transform: scale(1);   opacity: 1; }
+}
+.animate-celebrate-pop {
+  animation: lifetree-celebrate-pop 400ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
 /* Subtle pulse used for newly-arrived notification rows (SSE revalidation).
    Runs once on mount of a fresh row so the user notices the new entry
    without being distracted by a perpetual animation. Uses the brand-500
@@ -261,6 +302,25 @@ html.drawer-mode .sidebar-rail { display: none !important; }
 /* On small screens, slim down the default page padding. */
 @media (max-width: 640px) {
   .animate-fade-in { animation-duration: 160ms; }
+}
+
+/* Accessibility — respect reduced-motion preference.
+   Disables all LifeTree-bundled animations for users with vestibular
+   disorders, per WCAG 2.3.3 (Animation from Interactions). Also covers
+   transition utilities used across components. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .animate-fade-in,
+  .animate-row-pulse {
+    animation: none !important;
+  }
 }
 
 /* Prevent iOS rubber-band scroll leak when drawer is open. */

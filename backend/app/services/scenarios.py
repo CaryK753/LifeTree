@@ -55,6 +55,46 @@ class ScenarioService:
             )
         )
 
+    def latest_run(self, scenario_id: str) -> ScenarioRun | None:
+        """Return the most recent completed ScenarioRun, or None."""
+        return self.db.scalars(
+            select(ScenarioRun)
+            .where(ScenarioRun.scenario_id == scenario_id)
+            .order_by(ScenarioRun.created_at.desc())
+            .limit(1)
+        ).first()
+
+    def to_read_with_curve(self, scenario: Scenario) -> dict:
+        """Build a ScenarioRead dict with survival_curve / key_risk_times
+        populated from the latest run.
+
+        Used by the list/get endpoints so the frontend scenario-comparison
+        overlay view can render all branches' curves in a single request
+        without N+1 follow-up calls.
+        """
+        run = self.latest_run(scenario.id)
+        result = run.result if run and run.result else {}
+        return {
+            "id": scenario.id,
+            "goal_id": scenario.goal_id,
+            "name": scenario.name,
+            "description": scenario.description,
+            "status": scenario.status,
+            "parent_scenario_id": scenario.parent_scenario_id,
+            "assumptions": scenario.assumptions or {},
+            "impact_threshold": scenario.impact_threshold,
+            "success_probability": scenario.success_probability or {},
+            "risk_score": scenario.risk_score,
+            "key_risk_factors": scenario.key_risk_factors or [],
+            "milestones": scenario.milestones or [],
+            "computed_at": scenario.computed_at,
+            "created_at": scenario.created_at,
+            "updated_at": scenario.updated_at,
+            "survival_curve": result.get("survival_curve", []) or [],
+            "key_risk_times": result.get("key_risk_times", []) or [],
+            "median_time_months": result.get("median_time_months"),
+        }
+
     def update(self, scenario_id: str, **fields) -> Scenario:
         scenario = self.get(scenario_id)
         for k, v in fields.items():

@@ -878,9 +878,6 @@ export default function ProfilePage() {
         </DialogContent>
       </Dialog>
 
-      <p className="text-xs text-zinc-600 pt-2">
-        {t("profile.footer")}
-      </p>
       {ConfirmRoot}
     </div>
   );
