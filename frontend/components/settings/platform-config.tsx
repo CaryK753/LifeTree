@@ -2854,7 +2854,7 @@ function OAuthProviderDialog({
               onChange={(e) =>
                 setForm({ ...form, redirect_uri: e.target.value })
               }
-              placeholder={`${origin}/auth/callback`}
+              placeholder={`${origin}/auth/callback/${provider?.id ?? "provider_id"}`}
               className="h-9 text-sm font-mono"
             />
           </Field>
