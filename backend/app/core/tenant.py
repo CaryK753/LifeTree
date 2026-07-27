@@ -8,12 +8,19 @@ Two resolution modes:
   1. **Authenticated** — FastAPI dependency ``get_current_user()`` reads
      ``Authorization: Bearer <jwt>``, decodes the JWT, fetches the
      ``UserProfile`` from DB, and applies env-admin overrides.
-     Falls back to default user when ``auth_allow_default_user_fallback=True``
-     and no Authorization header is present (legacy single-user mode).
 
-  2. **Legacy default user** — ``get_default_user()`` still returns the
-     fixed UUID ``00000000-...-000000000001`` user. Used by Celery tasks
-     and other non-request code that has no request context.
+  2. **Legacy default user (single-user mode only)** — when the runtime
+     ``use_mode == "single"`` AND no Authorization header is present,
+     the request is treated as coming from the default user. This is the
+     legacy single-user deployment mode where no login is required.
+
+     In ``use_mode == "multi"`` the absence of a valid token ALWAYS
+     results in 401 — there is no default-user fallback. This is the
+     security boundary that prevents unauthenticated access to user
+     data in multi-user deployments.
+
+  3. ``get_default_user()`` is also used by Celery tasks and other
+     non-request code that has no request context.
 """
 from __future__ import annotations
 
@@ -47,6 +54,11 @@ def get_default_user(db: Session) -> UserProfile:
       1. ``UserProfile`` with id == ``DEFAULT_USER_ID``
       2. The first ``UserProfile`` row (legacy seed data without pinned ID)
       3. Create a new row with ``DEFAULT_USER_ID``
+
+    The default user has ``role="user"``; admin rights are granted at
+    request time via ``_apply_admin_override`` (env-driven) so that
+    fallback in single-user mode still gets admin powers without the
+    default-user row itself being privileged.
     """
     user = db.get(UserProfile, DEFAULT_USER_ID)
     if user is not None:
@@ -62,7 +74,7 @@ def get_default_user(db: Session) -> UserProfile:
         display_name=DEFAULT_DISPLAY_NAME,
         email=DEFAULT_EMAIL,
         risk_tolerance="medium",
-        role="admin",
+        role="user",
     )
     db.add(user)
     db.commit()
@@ -83,26 +95,48 @@ def _apply_admin_override(user: UserProfile) -> UserProfile:
     return user
 
 
+def _allow_default_user_fallback() -> bool:
+    """Return True iff unauthenticated requests may fall back to the default user.
+
+    Security-critical: this is the boundary that protects multi-user
+    deployments. Returns True only when ALL of the following hold:
+      - Runtime ``use_mode == "single"`` (DB-stored, admin-configurable)
+      - OR legacy env override ``AUTH_ALLOW_DEFAULT_USER_FALLBACK=true`` AND
+        use_mode is not explicitly "multi"
+
+    In ``use_mode == "multi"`` this ALWAYS returns False, regardless of
+    the env var — otherwise unauthenticated requests could read any
+    user's data by exploiting the default-user fallback.
+    """
+    # Local import to avoid circular dependency (registry imports from
+    # app.models which transitively imports tenant).
+    from app.llm.registry import get_use_mode
+
+    mode = get_use_mode()
+    if mode == "multi":
+        return False
+    if mode == "single":
+        return True
+    # mode is None (not yet configured) — fall back to env default for
+    # bootstrapping a fresh install.
+    return get_settings().auth_allow_default_user_fallback
+
+
 def get_current_user(
     db: Annotated[Session, Depends(get_db)],
     authorization: Annotated[str | None, Header()] = None,
 ) -> UserProfile:
     """FastAPI dependency: resolve the current user from a Bearer JWT.
 
-    Falls back to the default user when:
-      - No ``Authorization`` header is sent, AND
-      - ``auth_allow_default_user_fallback`` is True (legacy single-user mode).
-
-    Returns 401 if:
-      - No header + fallback disabled, OR
-      - Token is invalid/expired, OR
-      - User doesn't exist or is disabled.
+    Returns 401 when:
+      - No ``Authorization`` header AND default-user fallback is disabled
+        (i.e. multi-user mode, or single-user mode with the env override off)
+      - Token is invalid/expired
+      - User doesn't exist or is disabled
     """
-    settings = get_settings()
-
     # ---------- No Authorization header → maybe default-user fallback ----------
     if not authorization or not authorization.lower().startswith("bearer "):
-        if settings.auth_allow_default_user_fallback:
+        if _allow_default_user_fallback():
             return _apply_admin_override(get_default_user(db))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

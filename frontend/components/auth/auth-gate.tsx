@@ -51,11 +51,11 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   // The dialog is dismissible only when:
   //   - in single-user mode (anonymous access allowed), OR
-  //   - real users already exist (not first-run setup)
-  // In multi mode + first-run setup, the dialog is non-dismissible — the
-  // user must either register the first admin or switch to single mode
-  // via the link on the dialog.
-  const dismissible = !multiUserMode || !needsFirstAdmin;
+  //   - first-run setup (admin can dismiss to switch to single mode)
+  // In multi mode with existing users, the dialog is NOT dismissible —
+  // the user must authenticate. Closing it would otherwise expose
+  // unauthenticated API requests to the default-user fallback.
+  const dismissible = !multiUserMode || needsFirstAdmin;
 
   // Auto-open login dialog when:
   //   1. First-run setup (no users yet) — must create admin account, OR
@@ -97,9 +97,20 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     }
   }
 
+  // In multi-user mode, hide the children entirely when the user is not
+  // authenticated. This prevents SWR hooks in protected pages from firing
+  // API requests that the backend would 401 anyway, and avoids any chance
+  // of stale default-user data leaking into the DOM while the login
+  // dialog is showing.
+  //
+  // Single-user mode always renders children (default-user fallback is
+  // intended behaviour there). First-run setup also renders children so
+  // the user can switch to single mode via the dialog link if they prefer.
+  const renderChildren = !multiUserMode || isAuthenticated || needsFirstAdmin;
+
   return (
     <>
-      {children}
+      {renderChildren ? children : null}
       <LoginDialog
         open={showLogin}
         onOpenChange={handleOpenChange}
