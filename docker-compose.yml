@@ -175,14 +175,21 @@ services:
     build:
       context: ./frontend
       args:
-        - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-http://localhost:18000}
+        # Empty default: browser cannot reach localhost:18000 in cloud
+        # deployments. SSE falls back to same-origin /api/v1/* proxy.
+        # Local dev sets this via frontend/.env.local instead.
+        - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-}
     container_name: lifetree-frontend
     ports:
       - "${APP_FRONTEND_PORT:-13000}:13000"
     depends_on:
       - backend
     environment:
-      - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-http://localhost:18000}
+      # NEXT_PUBLIC_API_BASE_URL is a build-time var (baked into the client
+      # bundle). Setting it at runtime has no effect on the client, but
+      # next.config.mjs rewrites read it as a fallback when BACKEND_URL is
+      # absent. We leave it empty so rewrites always use BACKEND_URL.
+      - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-}
       # Server-side only: used by next.config.mjs rewrites to proxy /api/v1/*
       # to the backend container. Uses the docker-compose service name.
       - BACKEND_URL=http://backend:18000

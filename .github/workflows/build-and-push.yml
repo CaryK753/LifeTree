@@ -87,5 +87,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # NEXT_PUBLIC_API_BASE_URL intentionally empty: in cloud/Docker
+          # deployments the browser cannot reach `localhost:18000` (that
+          # resolves to the browser's own host, not the server). Leaving it
+          # empty makes STREAM_BASE_URL in lib/api.ts fall back to the
+          # same-origin `/api/v1/*` proxy, which Next.js rewrites route to
+          # the backend container via BACKEND_URL.
+          # Local dev overrides this via frontend/.env.local.
           build-args: |
-            NEXT_PUBLIC_API_BASE_URL=http://localhost:18000
+            NEXT_PUBLIC_API_BASE_URL=

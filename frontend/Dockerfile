@@ -19,7 +19,10 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # Build-time env (NEXT_PUBLIC_* must be present at build time).
-ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:18000
+# Empty default: in cloud/Docker the browser cannot reach localhost:18000.
+# SSE (STREAM_BASE_URL in lib/api.ts) then falls back to the same-origin
+# /api/v1/* proxy. Local dev sets this via frontend/.env.local.
+ARG NEXT_PUBLIC_API_BASE_URL=
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL \
     NEXT_TELEMETRY_DISABLED=1
 
