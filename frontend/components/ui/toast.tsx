@@ -97,8 +97,16 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           but on smaller screens the composer / input area lives at the bottom —
           toasts there would overlap and get dismissed by stray clicks. Top-right
           keeps them visible and out of the way of typing.
+
+          In PWA mode (viewport-fit: cover) the top-right corner may sit
+          under the status bar / notch on iOS. The ``--toast-top`` CSS var
+          is overridden in globals.css under ``html.pwa`` to respect
+          safe-area-inset-top.
         */}
-        <ToastPrimitive.Viewport className="fixed top-4 right-4 z-[100] flex max-h-screen w-full flex-col gap-2 p-4 sm:w-96" />
+        <ToastPrimitive.Viewport
+          className="fixed right-4 z-[100] flex max-h-screen w-full flex-col gap-2 p-4 sm:w-96"
+          style={{ top: "var(--toast-top, 1rem)" }}
+        />
       </ToastProviderContext>
     </ToastCtx.Provider>
   );

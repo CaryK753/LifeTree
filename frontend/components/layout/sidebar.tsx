@@ -119,6 +119,7 @@ export function Sidebar() {
             "fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw]",
             "flex flex-col bg-[#0d1015] border-r border-white/5 shadow-2xl",
             "transition-transform duration-300 ease-out",
+            "safe-top safe-bottom",
             drawerOpen ? "translate-x-0" : "-translate-x-full"
           )}
           data-drawer-open={drawerOpen}

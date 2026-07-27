@@ -947,9 +947,27 @@ def get_oauth_providers() -> list[OAuthProvider]:
 
 
 def get_oauth_provider_by_id(provider_id: str) -> OAuthProvider | None:
-    """Return a single OAuth provider by id, or None."""
-    for p in get_oauth_providers():
+    """Return a single OAuth provider by id, or None.
+
+    Also supports lookup by name (case-insensitive) as a fallback — this
+    is needed because the OAuth ``redirect_uri`` typically encodes the
+    provider name (e.g. ``/auth/callback/github``) rather than the
+    internal id (e.g. ``o_c029be02c5d8``). The frontend callback route
+    ``/auth/callback/[provider]`` therefore receives the name, not the id,
+    and passes it to the backend callback endpoint.
+    """
+    if not provider_id:
+        return None
+    providers = get_oauth_providers()
+    # 1. Exact id match (fast path).
+    for p in providers:
         if p.id == provider_id:
+            return p
+    # 2. Fallback: match by name (case-insensitive). This handles the
+    #    redirect_uri-encodes-name case described above.
+    target = provider_id.lower().strip()
+    for p in providers:
+        if p.name and p.name.lower().strip() == target:
             return p
     return None
 

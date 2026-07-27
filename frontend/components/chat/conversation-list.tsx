@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Plus,
   Search,
@@ -278,6 +279,27 @@ function ConversationRow({
       ? t("chat.tool.called")
       : "");
 
+  // Ref + layout state for the dropdown menu. In PWA drawer mode the
+  // conversation list lives inside a fixed-position drawer with
+  // overflow-y-auto, so an absolute-positioned menu would be clipped.
+  // We render the menu via portal to document.body and compute its
+  // position from the trigger button's bounding rect.
+  const menuBtnRef = useRef<HTMLButtonElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!menuOpen || !menuBtnRef.current) {
+      setMenuPos(null);
+      return;
+    }
+    const rect = menuBtnRef.current.getBoundingClientRect();
+    // Align the menu's right edge with the button's right edge, place
+    // it just below the button. Clamp to viewport so it never overflows.
+    const menuW = 128; // w-32
+    const left = Math.max(8, Math.min(rect.right - menuW, window.innerWidth - menuW - 8));
+    const top = Math.min(rect.bottom + 4, window.innerHeight - 100);
+    setMenuPos({ top, left });
+  }, [menuOpen]);
+
   if (renaming) {
     return (
       <div className="px-2 py-1.5 mx-1.5 rounded-md bg-white/[0.04] border border-brand-500/30">
@@ -349,6 +371,7 @@ function ConversationRow({
         </div>
         {/* Action menu trigger */}
         <button
+          ref={menuBtnRef}
           type="button"
           onClick={(e) => {
             e.stopPropagation();
@@ -366,8 +389,10 @@ function ConversationRow({
         </button>
       </div>
 
-      {/* Dropdown menu */}
-      {menuOpen && (
+      {/* Dropdown menu — rendered via portal to document.body so it
+          escapes the PWA drawer's overflow-y-auto clipping. Position
+          is computed from the trigger button's bounding rect. */}
+      {menuOpen && menuPos && createPortal(
         <>
           {/* Click-away catcher + ESC handler. The catcher div closes
               the menu on outside click; the useEffect below closes it
@@ -375,12 +400,16 @@ function ConversationRow({
           <DropdownEscCloser onClose={onMenuToggle} />
           <div
             className="fixed inset-0 z-30"
+            data-conv-menu="true"
             onClick={(e) => {
               e.stopPropagation();
               onMenuToggle();
             }}
           />
-          <div className="absolute right-2 top-8 z-40 w-32 rounded-md border border-white/10 bg-surface shadow-lg shadow-black/40 py-1 text-xs">
+          <div
+            className="fixed z-[70] w-32 rounded-md border border-white/10 bg-surface shadow-lg shadow-black/40 py-1 text-xs"
+            style={{ top: menuPos.top, left: menuPos.left }}
+          >
             <button
               type="button"
               onClick={(e) => {
@@ -404,7 +433,8 @@ function ConversationRow({
               {t("chat.history.delete")}
             </button>
           </div>
-        </>
+        </>,
+        document.body
       )}
     </div>
   );

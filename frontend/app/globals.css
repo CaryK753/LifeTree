@@ -241,6 +241,21 @@ html.pwa .safe-bottom { padding-bottom: max(env(safe-area-inset-bottom), 0.5rem)
 html.pwa .sidebar-rail { display: none !important; }
 html.drawer-mode .sidebar-rail { display: none !important; }
 
+/* PWA safe-area adjustments for overlay components.
+   ``viewport-fit: cover`` lets content extend under the status bar /
+   notch / home indicator. These rules push overlay UI (toasts, dialogs,
+   drawers) away from system chrome so they remain visible and tappable. */
+html.pwa {
+  --toast-top: max(env(safe-area-inset-top), 1rem);
+}
+html.pwa [role="dialog"][data-state="open"] > div:first-child {
+  /* Radix Dialog Content — add safe-area padding so the close button
+     and content don't sit under the notch in landscape mode. */
+  padding-top: max(env(safe-area-inset-top), 0.75rem);
+  padding-left: max(env(safe-area-inset-left), 0px);
+  padding-right: max(env(safe-area-inset-right), 0px);
+}
+
 /* Fade-in animation used by page roots for a soft PWA-like transition. */
 @keyframes lifetree-fade-in {
   from { opacity: 0; transform: translateY(4px); }

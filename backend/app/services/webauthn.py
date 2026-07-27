@@ -148,7 +148,7 @@ def generate_registration_options(
     from webauthn import generate_registration_options as gen_opts
     from webauthn.helpers import bytes_to_base64url
     from webauthn.helpers.structs import (
-        AuthenticatorSelection,
+        AuthenticatorSelectionCriteria,
         ResidentKeyRequirement,
         UserVerificationRequirement,
     )
@@ -158,7 +158,7 @@ def generate_registration_options(
         rp_name=_rp_name(),
         user_id=user_id.encode("utf-8"),
         user_name=user_display_name or "user",
-        authenticator_selection=AuthenticatorSelection(
+        authenticator_selection=AuthenticatorSelectionCriteria(
             resident_key=ResidentKeyRequirement.PREFERRED,
             user_verification=UserVerificationRequirement.PREFERRED,
         ),
@@ -183,9 +183,11 @@ def generate_registration_options(
         "user_id": user_id,
     })
 
-    # Serialize to JSON-able dict. The webauthn library exposes a
-    # ``to_json`` helper on the options object.
-    return json.loads(options.to_json())
+    # Serialize to JSON-able dict via the library helper. The options
+    # object contains bytes fields (challenge, user.id) that need to be
+    # base64url-encoded for JSON transport.
+    from webauthn.helpers import options_to_json_dict
+    return options_to_json_dict(options)
 
 
 def verify_registration_response(
@@ -238,8 +240,11 @@ def verify_registration_response(
         "sign_count": verification.sign_count or 0,
         "transports": list(credential.get("response", {}).get("transports", []) or []),
         "aaguid": str(verification.aaguid),
-        "device_type": str(verification.device_type),
-        "backed_up": bool(verification.backed_up),
+        # webauthn 3.0.0 renamed these fields:
+        #   device_type → credential_device_type
+        #   backed_up   → credential_backed_up
+        "device_type": str(verification.credential_device_type),
+        "backed_up": bool(verification.credential_backed_up),
         "nickname": nickname.strip()[:128] if nickname else "",
     }
 
@@ -271,7 +276,8 @@ def generate_authentication_options(
         "type": "authentication",
     })
 
-    return json.loads(options.to_json())
+    from webauthn.helpers import options_to_json_dict
+    return options_to_json_dict(options)
 
 
 def verify_authentication_response(
