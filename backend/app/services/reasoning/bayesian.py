@@ -10,12 +10,14 @@ attribution for explainability.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
 from app.core.logging import get_logger
 from app.models.goal import Goal, Pathway, Requirement, RiskFactor
 from app.models.scenario import Scenario
+from app.services.reasoning.factor_model import MODEL_VERSION, aggregate_success
 
 log = get_logger(__name__)
 
@@ -23,12 +25,14 @@ log = get_logger(__name__)
 @dataclass(slots=True)
 class BayesianResult:
     p_success: float
-    factor_contributions: list[dict[str, float]]
+    factor_contributions: list[dict[str, Any]]
     explanation: str
+    evidence_quality: float
+    model_version: str = MODEL_VERSION
 
 
 class BayesianEstimator:
-    """Lightweight Beta-Binomial factor model with noise-OR aggregation."""
+    """Explainable requirement-readiness and risk-survival estimator."""
 
     def estimate(
         self,
@@ -37,65 +41,82 @@ class BayesianEstimator:
         requirements: list[Requirement],
         risk_factors: list[RiskFactor],
         scenario: Scenario | None = None,
+        evidence_scores: dict[str, float] | None = None,
     ) -> BayesianResult:
-        # ---------- Per-requirement success probability ----------
-        contribs: list[dict[str, float]] = []
+        evidence_scores = evidence_scores or {}
+        contribs: list[dict[str, Any]] = []
+        requirement_probs: list[float] = []
+        requirement_weights: list[float] = []
+        risk_survivals: list[float] = []
+
         for req in requirements:
-            p = self._req_success_prob(req)
+            probability = self._req_success_prob(req)
+            weight = max(0.05, min(2.0, float(req.weight or 1.0)))
+            requirement_probs.append(probability)
+            requirement_weights.append(weight)
             contribs.append(
                 {
                     "factor_id": req.id,
                     "name": req.name,
                     "type": "requirement",
-                    "p": p,
-                    "contribution": 1.0 - p,  # contribution to failure
+                    "p": probability,
+                    "contribution": (1.0 - probability) * weight,
+                    "evidence_quality": evidence_scores.get(req.id, 0.0),
                 }
             )
 
-        # ---------- Per-risk-factor impact ----------
-        for rf in risk_factors:
-            p_failure = self._risk_failure_prob(rf, scenario)
+        for risk in risk_factors:
+            failure_probability = self._risk_failure_prob(risk, scenario)
+            risk_survivals.append(1.0 - failure_probability)
             contribs.append(
                 {
-                    "factor_id": rf.id,
-                    "name": rf.name,
+                    "factor_id": risk.id,
+                    "name": risk.name,
                     "type": "risk_factor",
-                    "p": 1.0 - p_failure,
-                    "contribution": p_failure,
+                    "p": 1.0 - failure_probability,
+                    "contribution": failure_probability,
+                    "evidence_quality": evidence_scores.get(risk.id, 0.0),
                 }
             )
 
-        # ---------- Noise-OR aggregation: P(success) = Π p_i ----------
         if not contribs:
             return BayesianResult(
                 p_success=0.5,
                 factor_contributions=[],
-                explanation="No requirements or risks registered; defaulting to 0.5.",
+                explanation="No structured factors are available; using an uninformative 0.5 prior.",
+                evidence_quality=0.0,
             )
 
-        ps = np.array([c["p"] for c in contribs], dtype=float)
-        ps = np.clip(ps, 1e-3, 1 - 1e-3)
-        p_success = float(np.prod(ps))
-
-        # Sort contributions by impact (descending)
-        contribs.sort(key=lambda c: c["contribution"], reverse=True)
-
+        p_success = float(
+            aggregate_success(
+                np.asarray(requirement_probs, dtype=float),
+                requirement_weights,
+                np.asarray(risk_survivals, dtype=float),
+            )
+        )
+        contribs.sort(key=lambda item: item["contribution"], reverse=True)
+        evidence_quality = float(
+            np.mean([item["evidence_quality"] for item in contribs])
+        )
         top = contribs[0]
         explanation = (
-            f"Bayesian noise-OR over {len(contribs)} factors gives "
-            f"P(success)={p_success:.3f}. Largest drag: "
-            f"{top['name']} (Δ={top['contribution']:.3f})."
+            f"{MODEL_VERSION} combines {len(requirements)} jointly-needed "
+            f"requirements with {len(risk_factors)} risk hazards. "
+            f"P(success)={p_success:.3f}; largest modeled drag: "
+            f"{top['name']} ({top['contribution']:.3f})."
         )
         log.info(
             "bayesian.estimate",
             goal_id=goal.id,
             p_success=p_success,
             n_factors=len(contribs),
+            model_version=MODEL_VERSION,
         )
         return BayesianResult(
             p_success=p_success,
             factor_contributions=contribs,
             explanation=explanation,
+            evidence_quality=evidence_quality,
         )
 
     # ---------------- Helpers ----------------
@@ -108,10 +129,15 @@ class BayesianEstimator:
             "missing": 0.20,
             "unknown": 0.50,
         }.get(req.gap_status, 0.5)
-        # Weight: less important requirements should drag less
-        weight = max(0.0, min(1.5, float(req.weight or 1.0)))
-        # Pull slightly toward 1.0 for low-weight requirements
-        return float(base + (1 - base) * (1 - weight) * 0.2)
+        # Weight: high-weight requirements matter more, so a missing
+        # high-weight one should pull success prob down more. We blend
+        # the base prob toward its "failure complement" proportional to
+        # weight: weight=0 → no change (unimportant), weight=1 → full
+        # effect, weight>1 → capped at 1.0 (no inversion).
+        weight = max(0.0, min(1.0, float(req.weight or 1.0)))
+        # Pull base toward 1.0 for low-weight requirements (they drag
+        # less), and toward base itself for high-weight ones.
+        return float(base + (1.0 - base) * (1.0 - weight) * 0.2)
 
     def _risk_failure_prob(
         self, rf: RiskFactor, scenario: Scenario | None

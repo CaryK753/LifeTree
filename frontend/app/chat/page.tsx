@@ -5,6 +5,7 @@ import { History, Sparkles, Plus } from "lucide-react";
 import { ChatPanel, EditableTitle } from "@/components/chat/chat-panel";
 import { ConversationList } from "@/components/chat/conversation-list";
 import { useGoals, useScenarios } from "@/lib/hooks";
+import { useRuntimeCatalog } from "@/lib/hooks";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -24,6 +25,7 @@ import {
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 import { useSidebarDrawerMode } from "@/lib/use-sidebar-drawer-mode";
 import { useChatShortcuts } from "@/lib/use-chat-shortcuts";
+import { ChatModelSelector } from "@/components/chat/chat-model-selector";
 
 const SIDEBAR_KEY = "lifetree.chat.sidebarCollapsed";
 
@@ -33,6 +35,30 @@ export default function ChatPage() {
   const [goalId, setGoalId] = useState<string | undefined>();
   const [scenarioId, setScenarioId] = useState<string | undefined>();
   const { data: scenarios } = useScenarios(goalId);
+  const { data: runtimeCatalog } = useRuntimeCatalog();
+  const [modelId, setModelId] = useState<string | undefined>();
+
+  // Auto-bind the primary goal on first load — if the user hasn't picked
+  // one yet (no localStorage override, no URL param), default to the first
+  // goal in the list. Same for the scenario: when a goal is bound and
+  // scenarios are loaded, auto-select the first active scenario as the
+  // "default scenario" so the intelligent assistant has context to work with.
+  // The user can still switch or clear via the selectors.
+  useEffect(() => {
+    if (goalId || !goals) return;
+    const list = goals as any[];
+    if (list.length === 0) return;
+    setGoalId(list[0].id);
+  }, [goals, goalId]);
+
+  useEffect(() => {
+    if (scenarioId || !goalId || !scenarios) return;
+    const list = scenarios as any[];
+    if (list.length === 0) return;
+    // Prefer the first active scenario as the "default"
+    const active = list.find((s) => s.status === "active") ?? list[0];
+    setScenarioId(active.id);
+  }, [scenarios, goalId, scenarioId]);
 
   // Subscribe to the chat store so the title bar re-renders when the
   // active conversation changes (new conversation selected, first message
@@ -40,12 +66,30 @@ export default function ChatPage() {
   const state = useChatStore();
   const activeConv = getActiveConversation();
 
+  useEffect(() => {
+    if (!runtimeCatalog || modelId) return;
+    const saved = activeConv?.id
+      ? window.localStorage.getItem(`lifetree.chat.model.${activeConv.id}`)
+      : null;
+    setModelId(saved || runtimeCatalog.role_assignments.chat);
+  }, [activeConv?.id, modelId, runtimeCatalog]);
+
+  const handleModelChange = useCallback((nextModelId: string) => {
+    setModelId(nextModelId);
+    if (activeConv?.id) {
+      window.localStorage.setItem(`lifetree.chat.model.${activeConv.id}`, nextModelId);
+    }
+  }, [activeConv?.id]);
+
   // Ref to the conversation-list search input — used by the ⌘K shortcut
   // to focus the search box without requiring a mouse click.
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Sidebar collapse — persisted across reloads. Completely collapses (not minibar).
-  const [collapsed, setCollapsed] = useState(false);
+  // Sidebar collapse — persisted across reloads. Defaults to collapsed
+  // (hidden) so the chat area gets maximum space on first visit. The
+  // user can expand it via the History button; their choice is then
+  // remembered across reloads.
+  const [collapsed, setCollapsed] = useState(true);
   const drawerMode = useSidebarDrawerMode();
   // In drawer mode (PWA or narrow viewport) the conversation history
   // sidebar is a drawer (hidden by default, opened via the History
@@ -81,8 +125,10 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    // Only un-collapse if the user explicitly set it to "0" in a
+    // previous session. Default (no stored value) stays collapsed.
     const v = window.localStorage.getItem(SIDEBAR_KEY);
-    if (v === "1") setCollapsed(true);
+    if (v === "0") setCollapsed(false);
   }, []);
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -185,6 +231,11 @@ export default function ChatPage() {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            <ChatModelSelector
+              catalog={runtimeCatalog}
+              value={modelId}
+              onValueChange={handleModelChange}
+            />
             <Select
               value={goalId ?? "__none__"}
               onValueChange={(v) => {
@@ -244,6 +295,7 @@ export default function ChatPage() {
           <ChatPanel
             goalId={goalId}
             scenarioId={scenarioId}
+            modelId={modelId}
           />
         </div>
       </div>

@@ -24,6 +24,8 @@ from app.api.system import router as system_router
 from app.api.users import router as users_router
 from app.api.auth import router as auth_router
 from app.api.admin import router as admin_router
+from app.api.user_runtime import router as user_runtime_router
+from app.api.user_skills import router as user_skills_router
 
 api_router = APIRouter()
 
@@ -47,6 +49,8 @@ api_router.include_router(plugins_router)
 api_router.include_router(memories_router)
 api_router.include_router(system_router)
 api_router.include_router(lifecycle_router)
+api_router.include_router(user_runtime_router)
+api_router.include_router(user_skills_router)
 
 
 @api_router.get("/_meta", tags=["meta"])
@@ -59,7 +63,7 @@ async def about() -> dict[str, str]:
     """Return project metadata for the Settings → About panel."""
     return {
         "name": "LifeTree",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "description": "知识图谱驱动的决策支持系统",
         "github_url": "https://github.com/CaryK753/LifeTree",
         "license": "AGPL-3.0",
@@ -85,7 +89,7 @@ async def check_update() -> dict[str, str | bool | None]:
             return {"has_update": False, "latest_version": None, "release_url": None}
         data = resp.json()
         latest = (data.get("tag_name") or "").lstrip("v")
-        current = "0.1.0"
+        current = "0.2.0"
         # Simple semver compare (major.minor.patch).
         def _parse(v: str):
             parts = []

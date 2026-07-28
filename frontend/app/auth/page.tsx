@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +24,8 @@ import { useAuth, useAuthConfig } from "@/lib/hooks";
 import { api, setTokens } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { AsciiTreeBackground } from "@/components/auth/ascii-tree-bg";
+import { LegalConsent } from "@/components/auth/legal-consent";
+import { currentLegalConsent } from "@/lib/legal";
 
 async function switchToSingleMode() {
   try {
@@ -69,7 +72,9 @@ function AuthPageInner() {
   const searchParams = useSearchParams();
   const t = useT();
   const toast = useToast();
-  const { login, register, registerWithCode, user, isAuthenticated } = useAuth();
+  const { login, register, registerWithCode, user, isAuthenticated } = useAuth({
+    loadAnonymousUser: false,
+  });
   const { data: authConfig } = useAuthConfig();
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
@@ -79,6 +84,7 @@ function AuthPageInner() {
   const [loading, setLoading] = useState(false);
   const [oauthLoadingId, setOauthLoadingId] = useState<string | null>(null);
   const [passkeyLoading, setPasskeyLoading] = useState(false);
+  const [legalAccepted, setLegalAccepted] = useState(false);
   const [form, setForm] = useState({
     displayName: "",
     email: "",
@@ -183,6 +189,10 @@ function AuthPageInner() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (effectiveMode === "register" && !legalAccepted) {
+      toast({ title: t("auth.legal.required"), variant: "error" });
+      return;
+    }
     setLoading(true);
     try {
       if (effectiveMode === "login") {
@@ -203,12 +213,14 @@ function AuthPageInner() {
             email: form.email.trim(),
             code: form.code.trim(),
             password: form.password ? form.password : undefined,
+            ...currentLegalConsent(),
           });
         } else {
           await register(
             form.displayName.trim(),
             form.email.trim(),
-            form.password
+            form.password,
+            currentLegalConsent()
           );
         }
         toast({ title: t("auth.registerSuccess"), variant: "success" });
@@ -234,9 +246,17 @@ function AuthPageInner() {
     providerId: string,
     oauthMode: "login" | "register" = "login"
   ) {
+    if (oauthMode === "register" && !legalAccepted) {
+      toast({ title: t("auth.legal.required"), variant: "error" });
+      return;
+    }
     setOauthLoadingId(providerId);
     try {
-      const { authorize_url } = await api.oauthStart(providerId, oauthMode);
+      const { authorize_url } = await api.oauthStart(
+        providerId,
+        oauthMode,
+        oauthMode === "register" && legalAccepted
+      );
       if (oauthMode === "register") {
         try {
           sessionStorage.setItem("lifetree.oauth.register", providerId);
@@ -337,14 +357,14 @@ function AuthPageInner() {
   const passwordRequired = effectiveMode === "login" || !emailVerificationEnabled;
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-zinc-50 dark:bg-[#0b0d12]">
+    <div className="relative min-h-dvh overflow-x-hidden overflow-y-auto bg-zinc-50 dark:bg-[#0b0d12]">
       {/* ASCII 动态树林 + 流星背景 */}
       <div className="absolute inset-0">
         <AsciiTreeBackground />
       </div>
 
       {/* 右上角主题切换按钮 */}
-      <div className="absolute right-4 top-4 z-10 safe-top">
+      <div className="absolute right-4 top-4 z-30 safe-top">
         <ThemeToggleButton
           theme={theme as "light" | "dark" | "system"}
           setTheme={setTheme}
@@ -354,7 +374,7 @@ function AuthPageInner() {
       </div>
 
       {/* 居中登录卡片 */}
-      <div className="relative z-10 flex min-h-screen items-center justify-center p-4 safe-top safe-bottom">
+      <div className="relative z-10 flex min-h-dvh items-start justify-center px-3 py-16 safe-top safe-bottom sm:items-center sm:p-6">
         <div className="w-full max-w-md rounded-xl border border-zinc-200/80 bg-white/80 p-6 shadow-2xl backdrop-blur-md dark:border-white/10 dark:bg-[#13161c]/85 sm:p-7">
           {/* 标题 */}
           <div className="mb-5">
@@ -497,6 +517,13 @@ function AuthPageInner() {
               </Field>
             )}
 
+            {effectiveMode === "register" && (
+              <LegalConsent
+                checked={legalAccepted}
+                onCheckedChange={setLegalAccepted}
+              />
+            )}
+
             <Button type="submit" disabled={loading} className="h-9 w-full">
               {loading ? (
                 <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
@@ -585,11 +612,8 @@ function AuthPageInner() {
               </div>
             )}
 
-          {/* Switch-to-single-mode link — shown in first-admin setup when the
-              current mode is "multi". Lets the user skip registration and use
-              the app in single mode instead (the default-user fallback has
-              admin rights). This breaks the circular dependency where multi
-              mode + no users = stuck on the auth page. */}
+          {/* First-run deployment mode switch. Registration is still required
+              after switching to single mode; the first account becomes admin. */}
           {firstAdminSetup && useMode === "multi" && (
             <div className="mt-4 text-center">
               <button
@@ -601,6 +625,16 @@ function AuthPageInner() {
               </button>
             </div>
           )}
+
+          <div className="mt-5 flex items-center justify-center gap-3 border-t border-zinc-200/80 pt-4 text-xs text-zinc-500 dark:border-white/10 dark:text-zinc-400">
+            <Link href="/terms" className="hover:text-zinc-900 hover:underline dark:hover:text-zinc-100">
+              {t("legal.terms")}
+            </Link>
+            <span aria-hidden="true">·</span>
+            <Link href="/privacy" className="hover:text-zinc-900 hover:underline dark:hover:text-zinc-100">
+              {t("legal.privacy")}
+            </Link>
+          </div>
         </div>
       </div>
     </div>

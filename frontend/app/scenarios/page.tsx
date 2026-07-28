@@ -20,15 +20,16 @@ import {
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog";
-import { Loader2, Plus, X, GitBranch, Network, ListTree, LineChart, AlertTriangle, Moon } from "lucide-react";
+import { Loader2, Plus, X, GitBranch, Network, ListTree, LineChart, AlertTriangle, Moon, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { useT } from "@/lib/i18n/provider";
 import { cn } from "@/lib/utils";
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 import { ScenarioCurveOverlay } from "@/components/scenarios/scenario-curve-overlay";
+import { ScenarioEvolution } from "@/components/scenarios/scenario-evolution";
 
-type ViewMode = "tree" | "grid" | "compare";
+type ViewMode = "tree" | "grid" | "compare" | "evolve";
 
 export default function ScenariosPage() {
   const t = useT();
@@ -70,7 +71,7 @@ export default function ScenariosPage() {
         toast({
           title: "已自动休眠超限分支",
           description: "最多同时支持 3 个活跃对比分支，超出部分已自动设为休眠。",
-          variant: "info",
+          variant: "default",
         });
         mutate();
       });
@@ -142,7 +143,7 @@ export default function ScenariosPage() {
         <div className="flex items-center gap-2">
           {selected && (
             <Badge
-              variant="outline"
+              variant="default"
               className={cn(
                 "gap-1 text-xs px-2.5 py-1 font-medium transition-colors",
                 activeCount >= 3
@@ -216,6 +217,22 @@ export default function ScenariosPage() {
               <LineChart className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">
                 {t("scenarioTree.viewCompare")}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("evolve")}
+              className={cn(
+                "inline-flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors",
+                viewMode === "evolve"
+                  ? "bg-brand-500/20 text-brand-700 dark:text-brand-300"
+                  : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100"
+              )}
+              title={t("scenarioTree.viewEvolution")}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">
+                {t("scenarioTree.viewEvolution")}
               </span>
             </button>
           </div>
@@ -420,7 +437,7 @@ export default function ScenariosPage() {
 
            Canvas height is sized to fill nearly the full viewport below
            the header so the tree has room to breathe. */
-        <div className="relative rounded-xl border border-black/5 dark:border-white/5 bg-surface/30 overflow-hidden h-[calc(100vh-100px)] min-h-[600px]">
+        <div className="relative rounded-xl border border-black/5 dark:border-white/5 bg-surface overflow-hidden h-[calc(100vh-100px)] min-h-[600px]">
           <ScenarioTree
             scenarios={scenariosList}
             onSelect={setSelectedScenario}
@@ -436,8 +453,32 @@ export default function ScenariosPage() {
                 onClose={() => setSelectedScenario(null)}
                 onRerun={mutate}
                 onBranched={mutate}
+                onEvolve={() => setViewMode("evolve")}
               />
             </aside>
+          )}
+        </div>
+      ) : viewMode === "evolve" ? (
+        /* Evolution view — LLM-driven timeline projection of future events.
+           The user picks a scenario in the tree view first; switching here
+           shows the ScenarioEvolution component which calls
+           POST /scenarios/{id}/evolve to invoke the chat-role LLM with a
+           structured-output schema. The returned events are rendered as
+           timeline nodes color-coded by type (milestone/risk/opportunity/
+           decision), with a probability trajectory derived from the events. */
+        <div className="rounded-xl border border-black/5 dark:border-white/5 bg-surface overflow-hidden h-[calc(100vh-100px)] min-h-[600px]">
+          {selectedScenario ? (
+            <ScenarioEvolution
+              scenarioId={selectedScenario.id}
+              scenarioName={selectedScenario.name}
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full gap-3 text-center p-8">
+              <Sparkles className="h-10 w-10 text-brand-600 dark:text-brand-400 opacity-60" />
+              <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-sm">
+                {t("scenarioEvolution.selectScenario")}
+              </p>
+            </div>
           )}
         </div>
       ) : (

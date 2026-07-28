@@ -18,6 +18,8 @@ from app.models.event import Event, InformationSource, Relationship
 from app.models.goal import Pathway, Requirement, RiskFactor
 from app.models.scenario import Scenario, ScenarioRun
 from app.services.reasoning.bayesian import BayesianEstimator
+from app.services.reasoning.evidence import build_decision_evidence
+from app.services.reasoning.factor_model import MODEL_VERSION
 from app.services.reasoning.monte_carlo import MonteCarloSimulator
 from app.services.reasoning.risk_propagation import RiskPropagationEngine
 from app.services.reasoning.survival import SurvivalEstimator
@@ -59,14 +61,29 @@ class ReasoningEngine:
             if goal is None:
                 raise RuntimeError("scenario has no associated goal/pathway")
 
+            evidence = build_decision_evidence(
+                self.db,
+                {factor.id for factor in [*requirements, *risk_factors]},
+            )
+
             # 1. Bayesian point estimate
             bayes = self.bayesian.estimate(
-                goal, pathway, requirements, risk_factors, scenario
+                goal,
+                pathway,
+                requirements,
+                risk_factors,
+                scenario,
+                evidence_scores=evidence.scores,
             )
 
             # 2. Monte Carlo distribution
             mc = self.monte_carlo.simulate(
-                goal, pathway, requirements, risk_factors, scenario
+                goal,
+                pathway,
+                requirements,
+                risk_factors,
+                scenario,
+                evidence_scores=evidence.scores,
             )
 
             # 3. Survival curve
@@ -83,6 +100,17 @@ class ReasoningEngine:
             enriched_contribs = self._enrich_with_sources(
                 bayes.factor_contributions, risk_factors, requirements
             )
+            for contribution in enriched_contribs:
+                paths = evidence.paths_by_factor.get(
+                    contribution.get("factor_id", ""), []
+                )
+                contribution["graph_paths"] = paths
+                contribution["evidence_count"] = len(paths)
+                contribution["why_it_matters"] = (
+                    "This factor is connected to source-backed ontology edges."
+                    if paths
+                    else "No source-backed ontology edge is recorded yet."
+                )
 
             # Compute Risk Controllability Grade to avoid raw win-rate anxiety
             p50 = mc.p50
@@ -112,6 +140,19 @@ class ReasoningEngine:
                 "optimal_action_sequence": mc.optimal_action_sequence,
                 "explanation": bayes.explanation,
                 "iterations": mc.iterations,
+                "model_version": MODEL_VERSION,
+                "assumptions": [
+                    "Requirements are jointly needed and use weighted geometric readiness.",
+                    "Risk hazards are partially correlated rather than fully independent.",
+                    "Evidence quality controls uncertainty, not the direction of an estimate.",
+                    "Outputs compare scenarios and are not calibrated guarantees.",
+                ],
+                "evidence_summary": evidence.summary,
+                "graph_paths": [
+                    path
+                    for paths in evidence.paths_by_factor.values()
+                    for path in paths
+                ],
             }
 
             run.status = "completed"
@@ -168,8 +209,18 @@ class ReasoningEngine:
                 )
             )
 
+        # Load risk factors — filter by region when the pathway has one,
+        # so that a Canada FSW scenario doesn't pick up Australia/UK risks.
+        # RiskFactors with no region (global risks like "Policy Shift") are
+        # always included.
+        rf_stmt = select(RiskFactor)
+        if pathway is not None and pathway.region:
+            rf_stmt = rf_stmt.where(
+                (RiskFactor.region == pathway.region)
+                | (RiskFactor.region.is_(None))
+            )
         risk_factors = list(
-            self.db.scalars(select(RiskFactor).order_by(RiskFactor.level.desc()))
+            self.db.scalars(rf_stmt.order_by(RiskFactor.level.desc()))
         )
 
         return pathway, requirements, risk_factors

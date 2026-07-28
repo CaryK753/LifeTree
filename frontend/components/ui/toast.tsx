@@ -17,7 +17,7 @@ const ToastProviderContext = ToastPrimitive.Provider;
  * etc. was near-invisible on the pale light-mode tinted backgrounds.
  */
 export const toastVariants = cva(
-  "group pointer-events-auto relative flex w-full items-start justify-between gap-3 rounded-lg border p-4 pr-8 shadow-lg backdrop-blur-md transition-all " +
+  "group pointer-events-auto relative flex w-full min-w-0 items-start justify-between gap-3 rounded-lg border p-3 pr-8 shadow-lg backdrop-blur-md transition-all sm:p-4 sm:pr-8 " +
     // Open: slide down from top + fade in (the toast "drops in" from the
     // top edge of the viewport, where the Viewport is anchored).
     "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-4 " +
@@ -62,7 +62,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
   const toast = React.useCallback<ToastFn>((t) => {
     const id = Math.random().toString(36).slice(2);
-    setToasts((prev) => [...prev, { id, ...t }]);
+    setToasts((prev) => [...prev, { id, ...t }].slice(-4));
     setTimeout(() => {
       setToasts((prev) => prev.filter((x) => x.id !== id));
     }, 4500);
@@ -77,8 +77,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             key={t.id}
             className={cn(toastVariants({ variant: t.variant }))}
           >
-            <div className="flex-1 select-text">
-              <ToastPrimitive.Title className="text-sm font-semibold select-text">
+            <div className="min-w-0 flex-1 select-text">
+              <ToastPrimitive.Title className="break-words text-sm font-semibold select-text">
                 {t.title}
               </ToastPrimitive.Title>
               {t.description && (
@@ -104,7 +104,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           safe-area-inset-top.
         */}
         <ToastPrimitive.Viewport
-          className="fixed right-4 z-[100] flex max-h-screen w-full flex-col gap-2 p-4 sm:w-96"
+          className="fixed left-2 right-2 z-[100] flex max-h-[calc(100dvh-1rem)] w-auto flex-col gap-2 overflow-hidden sm:left-auto sm:right-4 sm:w-96"
           style={{ top: "var(--toast-top, 1rem)" }}
         />
       </ToastProviderContext>

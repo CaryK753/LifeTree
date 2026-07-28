@@ -82,6 +82,11 @@ function protocolOptions(t: TFunc): { value: Protocol; label: string; hint: stri
       hint: t("settings.protocol.openai.hint"),
     },
     {
+      value: "ollama",
+      label: t("settings.protocol.ollama.label"),
+      hint: t("settings.protocol.ollama.hint"),
+    },
+    {
       value: "anthropic",
       label: t("settings.protocol.anthropic.label"),
       hint: t("settings.protocol.anthropic.hint"),
@@ -122,6 +127,10 @@ const VENDOR_PRESETS: Record<Protocol, { name: string; baseUrl: string }> = {
   openai_compatible: {
     name: "OpenAI",
     baseUrl: "https://api.openai.com/v1",
+  },
+  ollama: {
+    name: "Ollama",
+    baseUrl: "http://127.0.0.1:11434/v1",
   },
   anthropic: {
     name: "Anthropic",

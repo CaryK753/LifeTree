@@ -9,13 +9,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { formatDate } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n/provider";
 import { useToast } from "@/components/ui/toast";
-import { Loader2, ThumbsUp, ThumbsDown, Upload, Trash2 } from "lucide-react";
+import { Loader2, ThumbsUp, ThumbsDown, Upload, Trash2, Clock } from "lucide-react";
 import Link from "next/link";
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
+import { SourceScheduleDialog } from "@/components/sources/source-schedule-dialog";
 
 // Credibility enum values returned by the backend. Rendered via i18n
 // so users see localized labels instead of snake_case identifiers.
@@ -66,6 +67,8 @@ export default function SourcesPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   // Credibility filter for the source list.
   const [credFilter, setCredFilter] = useState<CredibilityFilter>("all");
+  // Source whose schedule dialog is open (null = closed).
+  const [scheduleSource, setScheduleSource] = useState<any | null>(null);
 
   const allSources = (sources as any[]) ?? [];
   const pendingSources = allSources.filter(
@@ -289,7 +292,7 @@ export default function SourcesPage() {
               </div>
             ) : (
               visibleSources.map((s) => (
-                <div key={s.id} className="grid grid-cols-[1fr_auto_auto_auto] gap-3 items-start py-3 border-b border-black/5 dark:border-white/5 last:border-0">
+                <div key={s.id} className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 items-start py-3 border-b border-black/5 dark:border-white/5 last:border-0">
                   <div className="min-w-0">
                     <div className="text-sm text-zinc-800 dark:text-zinc-200 truncate">{s.title}</div>
                     <div className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-0.5">
@@ -300,6 +303,17 @@ export default function SourcesPage() {
                         className="text-[10px] text-brand-600 dark:text-brand-400 hover:underline">
                         {s.url}
                       </a>
+                    )}
+                    {s.auto_refresh && (
+                      <span className="inline-flex items-center gap-0.5 mt-0.5 text-[9px] text-brand-600 dark:text-brand-400">
+                        <Clock className="h-2.5 w-2.5" />
+                        {t("sources.schedule.autoRefreshOn")}
+                        {s.refresh_interval_minutes >= 1440
+                          ? ` ${Math.round(s.refresh_interval_minutes / 1440)}d`
+                          : s.refresh_interval_minutes >= 60
+                            ? ` ${Math.round(s.refresh_interval_minutes / 60)}h`
+                            : ` ${s.refresh_interval_minutes}m`}
+                      </span>
                     )}
                   </div>
                   <Badge variant="risk" riskLevel={
@@ -333,6 +347,20 @@ export default function SourcesPage() {
                       {t("sources.mark.questionable")}
                     </Button>
                   </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className={cn(
+                      "h-7 w-7 p-0",
+                      s.auto_refresh
+                        ? "text-brand-600 dark:text-brand-400"
+                        : "text-zinc-500 hover:text-brand-600 dark:hover:text-brand-300"
+                    )}
+                    onClick={() => setScheduleSource(s)}
+                    title={t("sources.schedule.title")}
+                  >
+                    <Clock className="h-3.5 w-3.5" />
+                  </Button>
                   <Button
                     size="sm"
                     variant="ghost"

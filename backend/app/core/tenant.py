@@ -1,7 +1,7 @@
 """Tenant / current-user resolution.
 
-This module bridges the legacy single-user ``get_default_user()`` helper
-and the new multi-user auth flow.
+All interactive API requests require a real registered account. The legacy
+default-user helper remains only for non-request migration/background code.
 
 Two resolution modes:
 
@@ -9,15 +9,7 @@ Two resolution modes:
      ``Authorization: Bearer <jwt>``, decodes the JWT, fetches the
      ``UserProfile`` from DB, and applies env-admin overrides.
 
-  2. **Legacy default user (single-user mode only)** — when the runtime
-     ``use_mode == "single"`` AND no Authorization header is present,
-     the request is treated as coming from the default user. This is the
-     legacy single-user deployment mode where no login is required.
-
-     In ``use_mode == "multi"`` the absence of a valid token ALWAYS
-     results in 401 — there is no default-user fallback. This is the
-     security boundary that prevents unauthenticated access to user
-     data in multi-user deployments.
+  2. **Anonymous request** — always rejected with 401 in both runtime modes.
 
   3. ``get_default_user()`` is also used by Celery tasks and other
      non-request code that has no request context.
@@ -32,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.core.security import decode_token, TOKEN_TYPE_ACCESS
+from app.core.security import TOKEN_TYPE_ACCESS, decode_token
 from app.db.postgres import get_db
 from app.models.user import UserProfile
 
@@ -96,30 +88,8 @@ def _apply_admin_override(user: UserProfile) -> UserProfile:
 
 
 def _allow_default_user_fallback() -> bool:
-    """Return True iff unauthenticated requests may fall back to the default user.
-
-    Security-critical: this is the boundary that protects multi-user
-    deployments. Returns True only when ALL of the following hold:
-      - Runtime ``use_mode == "single"`` (DB-stored, admin-configurable)
-      - OR legacy env override ``AUTH_ALLOW_DEFAULT_USER_FALLBACK=true`` AND
-        use_mode is not explicitly "multi"
-
-    In ``use_mode == "multi"`` this ALWAYS returns False, regardless of
-    the env var — otherwise unauthenticated requests could read any
-    user's data by exploiting the default-user fallback.
-    """
-    # Local import to avoid circular dependency (registry imports from
-    # app.models which transitively imports tenant).
-    from app.llm.registry import get_use_mode
-
-    mode = get_use_mode()
-    if mode == "multi":
-        return False
-    if mode == "single":
-        return True
-    # mode is None (not yet configured) — fall back to env default for
-    # bootstrapping a fresh install.
-    return get_settings().auth_allow_default_user_fallback
+    """Interactive requests never use the legacy default account."""
+    return False
 
 
 def get_current_user(
@@ -129,15 +99,12 @@ def get_current_user(
     """FastAPI dependency: resolve the current user from a Bearer JWT.
 
     Returns 401 when:
-      - No ``Authorization`` header AND default-user fallback is disabled
-        (i.e. multi-user mode, or single-user mode with the env override off)
+      - No ``Authorization`` header
       - Token is invalid/expired
       - User doesn't exist or is disabled
     """
-    # ---------- No Authorization header → maybe default-user fallback ----------
+    # ---------- No Authorization header ----------
     if not authorization or not authorization.lower().startswith("bearer "):
-        if _allow_default_user_fallback():
-            return _apply_admin_override(get_default_user(db))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing Authorization header",
@@ -167,6 +134,16 @@ def get_current_user(
     return _apply_admin_override(user)
 
 
+def get_optional_current_user(
+    db: Annotated[Session, Depends(get_db)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> UserProfile | None:
+    """Resolve a user when present, without rejecting an anonymous multi-user request."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    return get_current_user(db, authorization)
+
+
 def get_admin_user(
     user: Annotated[UserProfile, Depends(get_current_user)],
 ) -> UserProfile:
@@ -181,4 +158,5 @@ def get_admin_user(
 
 # Convenience type alias for handlers.
 CurrentUser = Annotated[UserProfile, Depends(get_current_user)]
+OptionalCurrentUser = Annotated[UserProfile | None, Depends(get_optional_current_user)]
 AdminUser = Annotated[UserProfile, Depends(get_admin_user)]

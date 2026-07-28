@@ -26,24 +26,25 @@ from __future__ import annotations
 import secrets
 import smtplib
 import ssl
+from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from email.utils import formataddr
 from typing import Literal
 from urllib.parse import urlencode
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
+from app.core.legal import PRIVACY_VERSION, TERMS_VERSION, is_current_consent
 from app.core.security import (
+    TOKEN_TYPE_REFRESH,
     create_access_token,
     create_refresh_token,
     decode_token,
     hash_password,
-    TOKEN_TYPE_REFRESH,
     verify_password,
 )
 from app.core.tenant import CurrentUser, _apply_admin_override
@@ -55,12 +56,13 @@ from app.llm.registry import (
     get_oauth_provider_by_id,
     get_oauth_providers,
     get_public_auth_config,
-    get_service_address,
     get_smtp_config,
+    get_use_mode,
 )
 from app.models.user import UserProfile
 from app.models.user_oauth_link import UserOAuthLink
 from app.schemas.entities import UserProfileRead
+from app.services.oauth_identity import OAuthIdentityError, exchange_oauth_identity
 
 log = get_logger(__name__)
 
@@ -69,7 +71,13 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 # ---------- Schemas ----------
 
-class RegisterRequest(BaseModel):
+class LegalConsentRequest(BaseModel):
+    accepted_terms: bool
+    terms_version: str = Field(..., max_length=32)
+    privacy_version: str = Field(..., max_length=32)
+
+
+class RegisterRequest(LegalConsentRequest):
     display_name: str = Field(..., min_length=1, max_length=128)
     email: EmailStr
     password: str = Field(..., min_length=6, max_length=128)
@@ -130,7 +138,7 @@ class SendCodeResponse(BaseModel):
     expires_in: int = 600
 
 
-class RegisterWithCodeRequest(BaseModel):
+class RegisterWithCodeRequest(LegalConsentRequest):
     display_name: str = Field(..., min_length=1, max_length=128)
     email: EmailStr
     code: str = Field(..., min_length=4, max_length=8)
@@ -167,6 +175,26 @@ def _make_token_pair(user: UserProfile) -> dict:
     }
 
 
+def _require_current_legal_consent(payload: LegalConsentRequest) -> None:
+    if not is_current_consent(
+        payload.accepted_terms,
+        payload.terms_version,
+        payload.privacy_version,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You must accept the current Terms of Service and Privacy Policy.",
+        )
+
+
+def _legal_audit_fields() -> dict:
+    return {
+        "accepted_terms_at": datetime.now(timezone.utc),
+        "terms_version": TERMS_VERSION,
+        "privacy_version": PRIVACY_VERSION,
+    }
+
+
 def _should_promote_first_admin(db: Session) -> bool:
     """Return True if no real users exist yet (first-admin promotion needed).
 
@@ -190,6 +218,13 @@ def _should_promote_first_admin(db: Session) -> bool:
         .where(UserProfile.id != DEFAULT_USER_ID)
     )
     return (count or 0) == 0
+
+
+def _registration_disabled(db: Session) -> bool:
+    """Apply the platform toggle plus single-mode's one-account invariant."""
+    if get_disable_registration():
+        return True
+    return get_use_mode() == "single" and not _should_promote_first_admin(db)
 
 
 def _redis_code_key(email: str) -> str:
@@ -286,7 +321,8 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> dict:
     When email verification is enabled, this endpoint refuses to register
     without a code — clients must use ``POST /auth/register-with-code`` instead.
     """
-    if get_disable_registration():
+    _require_current_legal_consent(payload)
+    if _registration_disabled(db):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Registration is disabled. Contact the administrator.",
@@ -303,7 +339,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> dict:
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
-    # The first real user (excluding the default-user fallback) is
+    # The first real user (excluding a possible legacy seeded row) is
     # auto-promoted to admin so the system is bootstrappable.
     is_first_admin = _should_promote_first_admin(db)
     user = UserProfile(
@@ -312,6 +348,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> dict:
         password_hash=hash_password(payload.password),
         risk_tolerance="medium",
         role="admin" if is_first_admin else "user",
+        **_legal_audit_fields(),
     )
     db.add(user)
     db.commit()
@@ -383,6 +420,7 @@ def get_auth_config(db: Session = Depends(get_db)) -> PublicAuthConfig:
     """
     cfg = get_public_auth_config()
     has_users = not _should_promote_first_admin(db)
+    cfg["disable_registration"] = _registration_disabled(db)
     return PublicAuthConfig(**cfg, has_users=has_users)
 
 
@@ -402,62 +440,12 @@ def _build_authorize_url(provider, state: str) -> str:
     return f"{provider.authorize_url}{separator}{urlencode(params)}"
 
 
-def _exchange_code_for_userinfo(provider, code: str) -> dict:
-    """Exchange an OAuth code for an access token + fetch userinfo.
-
-    Returns the userinfo dict. Raises HTTPException on any failure.
-    """
-    token_payload = {
-        "client_id": provider.client_id,
-        "client_secret": provider.client_secret,
-        "code": code,
-        "redirect_uri": provider.redirect_uri,
-        "grant_type": "authorization_code",
-    }
-    try:
-        with httpx.Client(timeout=15) as client:
-            token_resp = client.post(
-                provider.token_url,
-                data=token_payload,
-                headers={"Accept": "application/json"},
-            )
-            token_resp.raise_for_status()
-            token_data = token_resp.json()
-    except httpx.HTTPError as exc:
-        log.warning("auth.oauth_token_exchange_failed", provider=provider.id, error=str(exc))
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to exchange OAuth code: {exc}",
-        )
-
-    access_token = token_data.get("access_token")
-    if not access_token:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"OAuth token endpoint returned no access_token: {token_data}",
-        )
-
-    try:
-        with httpx.Client(timeout=15) as client:
-            userinfo_resp = client.get(
-                provider.userinfo_url,
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-            userinfo_resp.raise_for_status()
-            userinfo = userinfo_resp.json()
-    except httpx.HTTPError as exc:
-        log.warning("auth.oauth_userinfo_failed", provider=provider.id, error=str(exc))
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch user info from OAuth provider: {exc}",
-        )
-    return userinfo
-
-
 @router.get("/oauth/{provider_id}/start", response_model=OAuthStartResponse)
 def oauth_start(
     provider_id: str,
     mode: Literal["login", "register"] = "login",
+    accepted_terms: bool = False,
+    db: Session = Depends(get_db),
 ) -> OAuthStartResponse:
     """Return the authorize URL for an OAuth provider (login or register flow).
 
@@ -480,10 +468,15 @@ def oauth_start(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="OAuth provider is misconfigured (missing client_id or authorize_url)",
         )
-    if mode == "register" and get_disable_registration():
+    if mode == "register" and _registration_disabled(db):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Registration is disabled",
+        )
+    if mode == "register" and not accepted_terms:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You must accept the current Terms of Service and Privacy Policy.",
         )
 
     # ``state`` prevents CSRF — the frontend should verify it matches on
@@ -495,7 +488,10 @@ def oauth_start(
     state = secrets.token_urlsafe(16)
     try:
         redis = get_redis()
-        redis.setex(f"oauth_state:{state}", 600, f"{mode}:{provider_id}")
+        state_value = f"{mode}:{provider_id}"
+        if mode == "register":
+            state_value += f"|{TERMS_VERSION}|{PRIVACY_VERSION}"
+        redis.setex(f"oauth_state:{state}", 600, state_value)
     except Exception as exc:  # noqa: BLE001
         log.error("auth.oauth_state_save_failed", error=str(exc))
         raise HTTPException(
@@ -531,11 +527,12 @@ def oauth_bind_start(
             detail="OAuth provider is misconfigured (missing client_id or authorize_url)",
         )
 
-    # Check that the user doesn't already have this provider bound.
+    provider_aliases = {provider.id, provider.name, provider.name.lower().strip(), provider_id}
+    # Check both canonical IDs and legacy name-based bindings.
     existing = db.scalars(
         select(UserOAuthLink).where(
             UserOAuthLink.user_id == user.id,
-            UserOAuthLink.provider_id == provider_id,
+            UserOAuthLink.provider_id.in_(provider_aliases),
         )
     ).first()
     if existing is not None:
@@ -547,7 +544,7 @@ def oauth_bind_start(
     state = secrets.token_urlsafe(16)
     try:
         redis = get_redis()
-        redis.setex(f"oauth_state:{state}", 600, f"bind:{user.id}")
+        redis.setex(f"oauth_state:{state}", 600, f"bind:{user.id}:{provider.id}")
     except Exception as exc:  # noqa: BLE001
         log.error("auth.oauth_state_save_failed", error=str(exc))
         raise HTTPException(
@@ -592,6 +589,10 @@ def oauth_callback(
     provider = get_oauth_provider_by_id(provider_id)
     if provider is None or not provider.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OAuth provider not found")
+    requested_provider_id = provider_id
+    provider_id = provider.id
+    provider_aliases = {provider.id, provider.name, requested_provider_id}
+    provider_aliases.add(provider.name.lower().strip())
 
     # ---------- Validate state (CSRF) + detect mode ----------
     # Strict validation: state must be present and must match a Redis entry.
@@ -602,6 +603,8 @@ def oauth_callback(
         )
     oauth_mode = "login"  # default for backward-compat
     bind_user_id: str | None = None
+    oauth_terms_version: str | None = None
+    oauth_privacy_version: str | None = None
     try:
         redis = get_redis()
         stored = redis.get(f"oauth_state:{state}")
@@ -621,28 +624,47 @@ def oauth_callback(
         stored = stored.decode("utf-8", errors="ignore")
     if stored.startswith("bind:"):
         oauth_mode = "bind"
-        bind_user_id = stored[len("bind:"):]
+        bind_data = stored[len("bind:"):]
+        bind_user_id, separator, stored_provider = bind_data.partition(":")
         if not bind_user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid OAuth state (empty bind user)",
             )
-    elif stored.startswith("register:"):
-        oauth_mode = "register"
-        stored_provider = stored[len("register:"):]
-        # The callback may receive either the provider id (e.g.
-        # "o_c029be02c5d8") or the provider name (e.g. "github") in the
-        # URL path — the redirect_uri encodes the name. Compare against
-        # the resolved provider.id so both forms are accepted.
-        if stored_provider != provider_id and stored_provider != provider.id:
+        if separator and stored_provider not in provider_aliases:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="OAuth state provider mismatch",
             )
+    elif stored.startswith("register:"):
+        oauth_mode = "register"
+        registration_state = stored[len("register:"):]
+        state_parts = registration_state.split("|")
+        stored_provider = state_parts[0]
+        if len(state_parts) == 3:
+            oauth_terms_version, oauth_privacy_version = state_parts[1:]
+        # The callback may receive either the provider id (e.g.
+        # "o_c029be02c5d8") or the provider name (e.g. "github") in the
+        # URL path — the redirect_uri encodes the name. Compare against
+        # the resolved provider.id so both forms are accepted.
+        if stored_provider not in provider_aliases:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OAuth state provider mismatch",
+            )
+        if not is_current_consent(
+            True,
+            oauth_terms_version or "",
+            oauth_privacy_version or "",
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Legal consent expired or missing. Restart registration.",
+            )
     elif stored.startswith("login:"):
         oauth_mode = "login"
         stored_provider = stored[len("login:"):]
-        if stored_provider != provider_id and stored_provider != provider.id:
+        if stored_provider not in provider_aliases:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="OAuth state provider mismatch",
@@ -650,7 +672,7 @@ def oauth_callback(
     else:
         # Legacy bare provider_id (no prefix) — treat as login.
         oauth_mode = "login"
-        if stored != provider_id and stored != provider.id:
+        if stored not in provider_aliases:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid OAuth state (provider mismatch)",
@@ -661,19 +683,25 @@ def oauth_callback(
     except Exception as exc:  # noqa: BLE001
         log.warning("auth.oauth_state_delete_failed", error=str(exc))
 
-    # ---------- Exchange code + fetch userinfo ----------
-    userinfo = _exchange_code_for_userinfo(provider, code)
+    if oauth_mode == "register" and _registration_disabled(db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Registration is disabled",
+        )
 
-    # Common fields across providers (GitHub, Google, GitLab, …).
-    email = userinfo.get("email") or userinfo.get("emailAddress") or ""
-    # Fallback unique id when email isn't available (private GitHub accounts).
-    external_sub = str(userinfo.get("id") or userinfo.get("sub") or "")
-    display_name = (
-        userinfo.get("name")
-        or userinfo.get("login")
-        or userinfo.get("nickname")
-        or (email.split("@")[0] if email else "user")
-    )
+    # ---------- Exchange code + fetch userinfo ----------
+    try:
+        identity = exchange_oauth_identity(provider, code)
+    except OAuthIdentityError as exc:
+        log.warning("auth.oauth_identity_failed", provider=provider.id, error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch OAuth identity: {exc}",
+        ) from exc
+
+    email = identity.email
+    external_sub = identity.external_sub
+    display_name = identity.display_name
 
     if not email and not external_sub:
         raise HTTPException(
@@ -694,7 +722,7 @@ def oauth_callback(
         # Check that this provider account isn't already bound to anyone.
         existing_link = db.scalars(
             select(UserOAuthLink).where(
-                UserOAuthLink.provider_id == provider_id,
+                UserOAuthLink.provider_id.in_(provider_aliases),
                 UserOAuthLink.external_sub == external_sub,
             )
         ).first()
@@ -707,13 +735,14 @@ def oauth_callback(
         existing_self = db.scalars(
             select(UserOAuthLink).where(
                 UserOAuthLink.user_id == target.id,
-                UserOAuthLink.provider_id == provider_id,
+                UserOAuthLink.provider_id.in_(provider_aliases),
             )
         ).first()
         if existing_self is not None:
             # Update the external_sub in case it changed (e.g. re-binding
             # after the provider rotated the user id).
             existing_self.external_sub = external_sub
+            existing_self.provider_id = provider_id
             db.commit()
             db.refresh(existing_self)
         else:
@@ -727,12 +756,15 @@ def oauth_callback(
             # compat with the legacy external_id column.
             if not target.external_id:
                 target.external_id = f"{provider_id}:{external_sub}"
-            avatar = userinfo.get("avatar_url") or userinfo.get("picture")
-            if avatar and not target.avatar_url:
-                target.avatar_url = avatar
             db.commit()
             db.refresh(link)
 
+        if identity.avatar_url and not target.avatar_url:
+            target.avatar_url = identity.avatar_url
+        if email and (not target.email or target.email.endswith("@lifetree.local")):
+            target.email = email
+        db.commit()
+        db.refresh(target)
         log.info("auth.oauth_bound", user_id=target.id, provider=provider_id, sub=external_sub)
         target = _apply_admin_override(target)
         return _make_token_pair(target)
@@ -749,15 +781,15 @@ def oauth_callback(
     if user is None and external_sub:
         # Fallback: look up by external_id (provider-unique sub) or by
         # an explicit oauth link row.
-        external_id = f"{provider_id}:{external_sub}"
+        external_ids = {f"{alias}:{external_sub}" for alias in provider_aliases}
         user = db.scalars(
-            select(UserProfile).where(UserProfile.external_id == external_id)
+            select(UserProfile).where(UserProfile.external_id.in_(external_ids))
         ).first()
         if user is None:
             # Also check user_oauth_links for a prior bind.
             link = db.scalars(
                 select(UserOAuthLink).where(
-                    UserOAuthLink.provider_id == provider_id,
+                    UserOAuthLink.provider_id.in_(provider_aliases),
                     UserOAuthLink.external_sub == external_sub,
                 )
             ).first()
@@ -777,9 +809,10 @@ def oauth_callback(
         # that never set a custom avatar/name).
         if not user.external_id and external_sub:
             user.external_id = f"{provider_id}:{external_sub}"
-        avatar = userinfo.get("avatar_url") or userinfo.get("picture")
-        if avatar and not user.avatar_url:
-            user.avatar_url = avatar
+        if identity.avatar_url and not user.avatar_url:
+            user.avatar_url = identity.avatar_url
+        if email and (not user.email or user.email.endswith("@lifetree.local")):
+            user.email = email
         if display_name and not user.display_name:
             user.display_name = str(display_name)[:128]
         # Make sure a link row exists (backfill for users created before
@@ -788,7 +821,7 @@ def oauth_callback(
             existing_link = db.scalars(
                 select(UserOAuthLink).where(
                     UserOAuthLink.user_id == user.id,
-                    UserOAuthLink.provider_id == provider_id,
+                    UserOAuthLink.provider_id.in_(provider_aliases),
                 )
             ).first()
             if existing_link is None:
@@ -799,12 +832,19 @@ def oauth_callback(
                 ))
             elif existing_link.external_sub != external_sub:
                 existing_link.external_sub = external_sub
+            if existing_link is not None:
+                existing_link.provider_id = provider_id
         db.commit()
         db.refresh(user)
     else:
         # No existing user — create one. In login mode this is "first-time
         # OAuth login auto-creates the account" (same as before); in
         # register mode this is the explicit registration.
+        if oauth_mode != "register":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No account is linked to this OAuth identity. Register first.",
+            )
         if not email:
             # No email — synthesize a private one so the unique constraint
             # doesn't trip. The user can update it later.
@@ -815,9 +855,10 @@ def oauth_callback(
             display_name=str(display_name)[:128],
             email=email.lower().strip(),
             external_id=external_id_val,
-            avatar_url=userinfo.get("avatar_url") or userinfo.get("picture"),
+            avatar_url=identity.avatar_url,
             risk_tolerance="medium",
             role="admin" if is_first_admin else "user",
+            **_legal_audit_fields(),
         )
         db.add(user)
         db.commit()
@@ -858,16 +899,22 @@ def list_oauth_bindings(user: CurrentUser, db: Session = Depends(get_db)) -> lis
     links = db.scalars(
         select(UserOAuthLink).where(UserOAuthLink.user_id == user.id)
     ).all()
-    # Build a provider_id → name map for the response.
-    providers = {p.id: p.name for p in get_oauth_providers()}
+    providers = get_oauth_providers()
+    provider_by_alias = {
+        alias.lower().strip(): provider
+        for provider in providers
+        for alias in (provider.id, provider.name)
+        if alias
+    }
     return [
         OAuthBindingRead(
-            provider_id=link.provider_id,
-            provider_name=providers.get(link.provider_id, link.provider_id),
+            provider_id=provider.id if provider else link.provider_id,
+            provider_name=provider.name if provider else link.provider_id,
             external_sub=link.external_sub,
             created_at=link.created_at.isoformat() if link.created_at else "",
         )
         for link in links
+        for provider in [provider_by_alias.get(link.provider_id.lower().strip())]
     ]
 
 
@@ -882,10 +929,14 @@ def unbind_oauth_provider(
     they can recover via the "forgot password" / admin-reset flow). The
     frontend warns them about this before confirming.
     """
+    provider = get_oauth_provider_by_id(provider_id)
+    aliases = {provider_id}
+    if provider is not None:
+        aliases.update((provider.id, provider.name, provider.name.lower().strip()))
     link = db.scalars(
         select(UserOAuthLink).where(
             UserOAuthLink.user_id == user.id,
-            UserOAuthLink.provider_id == provider_id,
+            UserOAuthLink.provider_id.in_(aliases),
         )
     ).first()
     if link is None:
@@ -908,6 +959,11 @@ def send_code(payload: SendCodeRequest, db: Session = Depends(get_db)) -> SendCo
 
     Rate limiting: one send per 60 seconds per email (best-effort via Redis).
     """
+    if _registration_disabled(db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Registration is disabled. Contact the administrator.",
+        )
     if not get_email_verification_enabled():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -992,7 +1048,8 @@ def register_with_code(
     ``POST /auth/login``. When omitted, the user can only log in via OAuth
     (if they later link an OAuth account) or by requesting a new code.
     """
-    if get_disable_registration():
+    _require_current_legal_consent(payload)
+    if _registration_disabled(db):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Registration is disabled. Contact the administrator.",
@@ -1034,6 +1091,7 @@ def register_with_code(
         password_hash=password_hash,
         risk_tolerance="medium",
         role="admin" if is_first_admin else "user",
+        **_legal_audit_fields(),
     )
     db.add(user)
     db.commit()

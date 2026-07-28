@@ -1,4 +1,4 @@
-"""AI advisor chat endpoint with SSE streaming + LangGraph tool dispatch.
+"""intelligent assistant chat endpoint with SSE streaming + LangGraph tool dispatch.
 
 Per project plan §5 + §7.3. The endpoint builds a per-request LangGraph
 ReAct agent (``create_react_agent``) with tools bound to the request's DB
@@ -23,11 +23,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import LLMNotConfiguredError
 from app.core.logging import get_logger
 from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
-from app.llm.client import get_chat_model
 from app.models.goal import Goal, Pathway, Requirement, RiskFactor
 from app.models.memory import UserMemory
 from app.models.scenario import Scenario
@@ -38,6 +36,8 @@ from app.services.advisor import (
     build_advisor_tools,
     messages_to_langchain,
 )
+from app.services.user_extensions import build_mcp_tools, skill_context
+from app.services.user_runtime import resolve_user_model
 
 log = get_logger(__name__)
 
@@ -355,14 +355,13 @@ async def chat_stream(
     advisor agent. Each SSE event is ``data: {json}\n\n``; the stream ends
     with ``data: [DONE]\n\n``.
     """
-    # Verify the chat role is configured before streaming; raises
-    # LLMNotConfiguredError (-> 503) if no chat model is assigned.
-    get_chat_model()
-
     # Use the authenticated user, ignoring any client-supplied user_id to
     # prevent cross-user memory/profile exfiltration. In single-user mode
     # CurrentUser falls back to the default user, so behavior is unchanged.
     user = current_user
+    resolved_model = resolve_user_model(db, user.id, "chat", payload.model_id)
+    if resolved_model is None:
+        raise HTTPException(400, "Selected model is unavailable or cannot serve chat")
 
     goal = db.get(Goal, payload.goal_id) if payload.goal_id else None
     # Verify goal ownership (admin can read any goal).
@@ -379,15 +378,24 @@ async def chat_stream(
             raise HTTPException(403, "You do not have access to this scenario")
 
     context_block = _build_context_block(db, user, goal, scenario)
+    user_skills = skill_context(db, user.id)
+    if user_skills:
+        context_block = f"{context_block}\n\n{user_skills}"
 
     # Build per-request tools + graph. The tools close over `db` so the agent
     # can read the latest ontology state on every tool call.
     tools = build_advisor_tools(
         db,
+        user_id=user.id,
         goal_id=payload.goal_id,
         scenario_id=payload.scenario_id,
     )
-    graph = build_advisor_graph(tools=tools, context_block=context_block)
+    tools.extend(build_mcp_tools(db, user.id))
+    graph = build_advisor_graph(
+        tools=tools,
+        context_block=context_block,
+        resolved_model=resolved_model,
+    )
 
     # Convert OpenAI-style message history to langchain messages. The system
     # prompt is owned by the graph (via ``prompt=``), so we drop any system

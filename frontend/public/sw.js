@@ -5,15 +5,18 @@
  *  - Precache the app shell + icons on install.
  *  - Navigation requests: network-first, fall back to cached shell (offline support).
  *  - Static assets (_next/static, media): cache-first with background revalidation.
- *  - API calls (/api/v1/*): network-first, fall back to cache (stale-while-revalidate-ish).
+ *  - API calls (/api/v1/*): network-only so authenticated data never crosses users.
  *  - LLM streaming (chat/stream): bypass cache entirely.
  *
  * Versioned via SW_VERSION — bump to invalidate old caches on next activation.
  */
 
-const SW_VERSION = "lifetree-v1";
+const SW_VERSION = "lifetree-v3";
 const APP_SHELL = [
   "/",
+  "/auth",
+  "/terms",
+  "/privacy",
   "/dashboard",
   "/goals",
   "/graph",
@@ -35,7 +38,6 @@ const APP_SHELL = [
 
 const STATIC_CACHE = `${SW_VERSION}-static`;
 const RUNTIME_CACHE = `${SW_VERSION}-runtime`;
-const API_CACHE = `${SW_VERSION}-api`;
 
 // ---------- Install: precache app shell ----------
 self.addEventListener("install", (event) => {
@@ -68,7 +70,7 @@ self.addEventListener("activate", (event) => {
         keys
           .filter(
             (k) =>
-              k !== STATIC_CACHE && k !== RUNTIME_CACHE && k !== API_CACHE
+              k !== STATIC_CACHE && k !== RUNTIME_CACHE
           )
           .map((k) => caches.delete(k))
       );
@@ -87,12 +89,23 @@ self.addEventListener("fetch", (event) => {
   // Same-origin only — let cross-origin (fonts, analytics) go straight to network.
   if (url.origin !== self.location.origin) return;
 
+  // Next dev reuses chunk URLs while their contents change. Caching those
+  // files can mix incompatible builds and leave the page as an inert SSR
+  // shell, so localhost development always goes straight to the network.
+  if (
+    self.location.hostname === "localhost" ||
+    self.location.hostname === "127.0.0.1" ||
+    self.location.hostname === "[::1]"
+  ) {
+    return;
+  }
+
   // LLM streaming must never be cached.
   if (url.pathname.startsWith("/api/v1/chat/stream")) return;
 
-  // API: network-first, fall back to cache.
+  // Never cache API responses. In multi-user mode, URL-only cache matching
+  // can otherwise serve one account's protected data to another account.
   if (url.pathname.startsWith("/api/")) {
-    event.respondWith(networkFirst(req, API_CACHE, 60));
     return;
   }
 
@@ -132,40 +145,6 @@ async function cacheFirst(req, cacheName) {
     return res;
   } catch (_) {
     return new Response("", { status: 504, statusText: "Offline" });
-  }
-}
-
-async function networkFirst(req, cacheName, maxAgeSec) {
-  const cache = await caches.open(cacheName);
-  try {
-    const res = await fetch(req);
-    if (res.ok) cache.put(req, res.clone());
-    return res;
-  } catch (_) {
-    const cached = await cache.match(req);
-    if (cached) {
-      // Optional freshness check — we still serve stale if offline.
-      const cachedAt = new Date(cached.headers.get("date") || 0).getTime();
-      const ageSec = (Date.now() - cachedAt) / 1000;
-      const headers = new Headers(cached.headers);
-      headers.set("X-Served-From", "cache");
-      headers.set("X-Cache-Age-Sec", String(Math.round(ageSec)));
-      if (maxAgeSec && ageSec > maxAgeSec) {
-        headers.set("X-Cache-Stale", "1");
-      }
-      return new Response(cached.body, {
-        status: cached.status,
-        statusText: cached.statusText,
-        headers,
-      });
-    }
-    return new Response(
-      JSON.stringify({ error: "offline", message: "无法连接到服务器" }),
-      {
-        status: 503,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
   }
 }
 

@@ -36,6 +36,8 @@ import {
   Perplexity,
   Github,
   LobeHub,
+  Ollama,
+  Qwen,
 } from "@lobehub/icons";
 import { Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -72,6 +74,8 @@ const PROTOCOL_ICON: Record<string, React.ComponentType<{ size?: number; classNa
   perplexity: Perplexity,
   github: Github,
   lobehub: LobeHub,
+  ollama: Ollama,
+  qwen: Qwen,
 };
 
 /**
@@ -82,7 +86,9 @@ const PROTOCOL_ICON: Record<string, React.ComponentType<{ size?: number; classNa
 const NAME_KEYWORDS: Array<{ keywords: string[]; Icon: React.ComponentType<{ size?: number; className?: string }> }> = [
   { keywords: ["openai", "gpt", "chatgpt", "o1", "o3", "o4"], Icon: OpenAI },
   { keywords: ["anthropic", "claude"], Icon: Anthropic },
-  { keywords: ["alibaba", "bailian", "dashscope", "qwen", "tongyi"], Icon: AlibabaCloud },
+  { keywords: ["qwen", "tongyi"], Icon: Qwen },
+  { keywords: ["alibaba", "bailian", "dashscope"], Icon: AlibabaCloud },
+  { keywords: ["ollama"], Icon: Ollama },
   { keywords: ["google", "gemini", "bard", "palm"], Icon: Gemini },
   { keywords: ["deepseek"], Icon: DeepSeek },
   { keywords: ["zhipu", "glm", "chatglm"], Icon: Zhipu },

@@ -314,8 +314,8 @@ class DecayService:
         Each notification is rate-limited to once per day per event via
         Redis SETNX (mirrors ``NotificationService._is_suppressed``).
         """
-        from app.core.tenant import get_default_user
         from app.db.redis import get_redis
+        from app.models.user import UserProfile
         from app.services.notification import NotificationService
 
         now = datetime.now(timezone.utc)
@@ -324,9 +324,6 @@ class DecayService:
         stale_notified = 0
         archive_notified = 0
 
-        # Single-user mode: resolve once. (Multi-tenant would thread user
-        # through event ownership; this matches the rest of the codebase.)
-        user = get_default_user(self.db)
         notif_service = NotificationService(self.db)
         redis = get_redis()
 
@@ -335,6 +332,7 @@ class DecayService:
                 continue
             score, _, _ = self.compute_score(ev, now)
             title = self._event_title(ev)
+            user = self.db.get(UserProfile, ev.user_id) if ev.user_id else None
             if score < archive_below:
                 meta = dict(ev.meta or {})
                 meta["archived"] = True
@@ -342,7 +340,7 @@ class DecayService:
                 meta["auto_archived"] = True
                 ev.meta = meta
                 archived += 1
-                if self._mark_decay_notified(redis, user.id, ev.id, "archived"):
+                if user and self._mark_decay_notified(redis, user.id, ev.id, "archived"):
                     notif_service.notify(
                         user,
                         title=f"信息已自动归档：{title}",
@@ -354,7 +352,7 @@ class DecayService:
                     )
                     archive_notified += 1
             elif score < STALE_SCORE_THRESHOLD:
-                if self._mark_decay_notified(redis, user.id, ev.id, "stale"):
+                if user and self._mark_decay_notified(redis, user.id, ev.id, "stale"):
                     notif_service.notify(
                         user,
                         title=f"信息已过时：{title}",

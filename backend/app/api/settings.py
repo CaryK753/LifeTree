@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core.logging import get_logger
-from app.core.tenant import AdminUser, CurrentUser
+from app.core.tenant import AdminUser, CurrentUser, OptionalCurrentUser
 from app.llm.registry import (
     ALL_ROLES,
     LLMConfig,
@@ -159,8 +159,8 @@ class TestResult(BaseModel):
 class UseModeUpdate(BaseModel):
     """Switch usage mode (admin only).
 
-    ``single``: self-use, no login required (default-user fallback on).
-    ``multi``: multi-user, login required, admin promotes users via env.
+    Both modes require login. ``single`` permits only the first account;
+    ``multi`` allows additional registrations when enabled by an admin.
     """
 
     mode: str = Field(..., description='"single" or "multi"')
@@ -255,21 +255,19 @@ async def get_settings(user: CurrentUser) -> LLMConfigView:
 # ---------- Use mode ----------
 
 @router.put("/use-mode", response_model=UseModeUpdate)
-def put_use_mode(user: CurrentUser, payload: UseModeUpdate) -> UseModeUpdate:
+def put_use_mode(user: OptionalCurrentUser, payload: UseModeUpdate) -> UseModeUpdate:
     """Switch the platform usage mode.
 
-    ``single``: self-use, no login required (default-user fallback on).
-    ``multi``: multi-user, login required, admin promotes users via env.
+    Both modes require a registered account. ``single`` becomes a
+    registration-disabled one-account instance after bootstrap.
 
     Access rules:
-      - In **single-user mode**, anyone (including the default-user fallback)
-        can switch — there's only one user, so they're effectively the admin.
+      - In **single-user mode**, only the registered administrator can switch.
       - In **multi-user mode**, only admins can switch.
 
     The change is persisted to DB (``app_config.use_mode``) and takes
     effect immediately — no process restart required. The next unauthenticated
-    request will be treated according to the new mode (single → default-user
-    fallback; multi → 401).
+    request will be treated according to the new mode.
     """
     if payload.mode not in ("single", "multi"):
         raise HTTPException(400, f"use_mode must be 'single' or 'multi', got {payload.mode!r}")
@@ -284,14 +282,17 @@ def put_use_mode(user: CurrentUser, payload: UseModeUpdate) -> UseModeUpdate:
     from app.db.postgres import SessionLocal
     with SessionLocal() as session:
         bootstrap = _should_promote_first_admin(session)
-    if current_mode == "multi" and user.role != "admin" and not bootstrap:
+    if user is None and not bootstrap:
+        raise HTTPException(401, "Authentication required to switch usage mode")
+    if user is not None and user.role != "admin" and not bootstrap:
         raise HTTPException(
             403,
             "Admin access required to switch usage mode in multi-user mode",
         )
 
     set_use_mode(payload.mode)
-    log.info("use_mode switched from %s to %s by user %s", current_mode, payload.mode, user.id)
+    actor = user.id if user is not None else "bootstrap"
+    log.info("use_mode switched from %s to %s by user %s", current_mode, payload.mode, actor)
     return UseModeUpdate(mode=payload.mode)
 
 

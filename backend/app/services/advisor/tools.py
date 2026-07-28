@@ -1,4 +1,4 @@
-"""Tools exposed to the AI advisor LangGraph agent.
+"""Tools exposed to the intelligent assistant LangGraph agent.
 
 Each tool is a thin, dependency-free wrapper around the existing services
 (ScenarioService, ReasoningEngine, raw DB queries). Tools take the DB session
@@ -22,13 +22,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.core.tenant import get_default_user
 from app.db.postgres import SessionLocal
 from app.models.event import Event, InformationSource
 from app.models.goal import Goal, Pathway, Requirement, RiskFactor
 from app.models.memory import UserMemory
 from app.models.scenario import Scenario
 from app.models.user import UserProfile
+from app.models.user_runtime import UserServiceConfig
 from app.services.crawler import CrawlerService
 from app.services.graph import GraphService
 from app.services.scenarios import ScenarioService
@@ -232,9 +232,11 @@ class WebFetchInput(BaseModel):
     )
 
 
-async def _web_search(query: str, max_results: int = 5, **kwargs: Any) -> str:
+async def _web_search(
+    query: str, max_results: int = 5, *, api_key: str | None = None, **kwargs: Any
+) -> str:
     """Search the web for fresh information using Tavily."""
-    svc = CrawlerService()
+    svc = CrawlerService(api_key=api_key)
     if not svc.available:
         return (
             "Web search is not available — no Tavily API key configured. "
@@ -255,9 +257,11 @@ async def _web_search(query: str, max_results: int = 5, **kwargs: Any) -> str:
     return "\n\n".join(parts)
 
 
-async def _web_fetch(urls: list[str], **kwargs: Any) -> str:
+async def _web_fetch(
+    urls: list[str], *, api_key: str | None = None, **kwargs: Any
+) -> str:
     """Extract clean text content from web pages using Tavily."""
-    svc = CrawlerService()
+    svc = CrawlerService(api_key=api_key)
     if not svc.available:
         return (
             "Web fetch is not available — no Tavily API key configured. "
@@ -281,6 +285,7 @@ async def _web_fetch(urls: list[str], **kwargs: Any) -> str:
 def build_advisor_tools(
     db: Session,
     *,
+    user_id: str,
     goal_id: str | None = None,
     scenario_id: str | None = None,
 ) -> list[StructuredTool]:
@@ -301,6 +306,16 @@ def build_advisor_tools(
     prevents implicit flushes.
     """
     graph_service = GraphService()
+    user_service_config = db.get(UserServiceConfig, user_id)
+    user_tavily_key = (
+        user_service_config.tavily_api_key if user_service_config else None
+    ) or None
+
+    async def user_web_search(query: str, max_results: int = 5) -> str:
+        return await _web_search(query, max_results, api_key=user_tavily_key)
+
+    async def user_web_fetch(urls: list[str]) -> str:
+        return await _web_fetch(urls, api_key=user_tavily_key)
 
     # ---------- Query tools ----------
 
@@ -463,9 +478,8 @@ def build_advisor_tools(
                 return {"error": "invalid_date", "detail": "target_date must be YYYY-MM-DD"}
 
         with SessionLocal() as session:
-            user = get_default_user(session)
             g = Goal(
-                user_id=user.id,
+                user_id=user_id,
                 title=title,
                 description=description,
                 scenario=scenario,
@@ -698,12 +712,8 @@ def build_advisor_tools(
         so your advice is grounded in what you already know about the user.
         Memories are returned with id, content, category, importance.
         """
-        # Use a dedicated session — get_default_user may commit on first
-        # creation, which would race with concurrent tools on the shared
-        # request session.
         with SessionLocal() as session:
-            user = get_default_user(session)
-            stmt = select(UserMemory).where(UserMemory.user_id == user.id)
+            stmt = select(UserMemory).where(UserMemory.user_id == user_id)
             if category:
                 stmt = stmt.where(UserMemory.category == category)
             stmt = stmt.order_by(
@@ -736,9 +746,8 @@ def build_advisor_tools(
         creating a duplicate.
         """
         with SessionLocal() as session:
-            user = get_default_user(session)
             mem = UserMemory(
-                user_id=user.id,
+                user_id=user_id,
                 content=content,
                 category=category,
                 importance=importance,
@@ -768,7 +777,11 @@ def build_advisor_tools(
         true'. Returns ok=true on success.
         """
         with SessionLocal() as session:
-            mem = session.get(UserMemory, memory_id)
+            mem = session.scalar(
+                select(UserMemory).where(
+                    UserMemory.id == memory_id, UserMemory.user_id == user_id
+                )
+            )
             if mem is None:
                 return {"ok": False, "error": "memory_not_found", "memory_id": memory_id}
             session.delete(mem)
@@ -786,7 +799,9 @@ def build_advisor_tools(
         Use when the user shares details about their current stage, scores, age, or waiting status.
         """
         with SessionLocal() as session:
-            user = get_default_user(session)
+            user = session.get(UserProfile, user_id)
+            if user is None:
+                return {"ok": False, "error": "user_not_found"}
             demo = dict(user.demographics or {})
             if lifecycle_stage:
                 demo["lifecycle_stage"] = lifecycle_stage
@@ -831,13 +846,12 @@ def build_advisor_tools(
     ) -> dict[str, Any]:
         """Add a user-provided information source (text snippet from a consultant email, forum post, etc.) and queue it for structuring."""
         with SessionLocal() as session:
-            user = get_default_user(session)
             kind = source_type[:32] if source_type else "chat_mention"
             snippet = content[:40].strip().replace("\n", " ") if content else ""
             title = f"User Source ({source_type}): {snippet}" if snippet else f"User Source ({source_type})"
 
             source = InformationSource(
-                user_id=user.id,
+                user_id=user_id,
                 kind=kind,
                 title=title[:512],
                 raw_text=content,
@@ -893,13 +907,13 @@ def build_advisor_tools(
         forget,
         # Web
         StructuredTool.from_function(
-            coroutine=_web_search,
+            coroutine=user_web_search,
             name="web_search",
             description="Search the web for current information using Tavily. Use this when the user asks about recent events, current facts, news, or anything not in the local knowledge graph. Returns a list of results with title, URL, and snippet.",
             args_schema=WebSearchInput,
         ),
         StructuredTool.from_function(
-            coroutine=_web_fetch,
+            coroutine=user_web_fetch,
             name="web_fetch",
             description="Extract clean text content from one or more web pages. Use this after web_search to read full articles, or when the user provides a URL. Pass up to 5 URLs.",
             args_schema=WebFetchInput,

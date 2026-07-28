@@ -66,7 +66,7 @@ LifeTree 通过以下方式解决这些问题：
 2. **因果建模**：将目标→路径→要求→风险因素建模为有向图，用贝叶斯网络量化不确定性
 3. **情景推演**：蒙特卡洛模拟不同选择路径下的成功概率、风险敞口与时间成本
 4. **动态预警**：Celery 定时任务监控信息新鲜度（半衰期模型），自动触发风险重算与邮件预警
-5. **AI 顾问**：基于 LangGraph 的 ReAct Agent，可调用 15+ 内置工具查询知识图谱、创建新节点、搜索网页、抓取页面内容
+5. **智能助手**：基于 LangGraph 的 ReAct Agent，可调用 15+ 内置工具查询知识图谱、创建新节点、搜索网页、抓取页面内容
 
 ### 示例场景
 
@@ -95,10 +95,10 @@ graph TB
         CRAWLER[Crawler API: Tavily 搜索/抓取]
     end
 
-    subgraph Agent["AI 顾问 (LangGraph ReAct)"]
+    subgraph Agent["智能助手 (LangGraph ReAct)"]
         GRAPH[create_react_agent]
         TOOLS[15+ 内置工具<br/>查询 / 写入 / 记忆 / Web]
-        LLM[LLM: OpenAI / Anthropic / 百炼]
+        LLM[LLM: OpenAI / Anthropic / 百炼 / Ollama]
     end
 
     subgraph Worker["异步任务 (Celery)"]
@@ -116,7 +116,7 @@ graph TB
     subgraph External["外部服务"]
         TAVILY[Tavily API<br/>搜索 + 抓取]
         SMTP[SMTP<br/>邮件预警]
-        LLM_API[LLM Provider<br/>OpenAI / 百炼 / Anthropic]
+        LLM_API[LLM Provider<br/>OpenAI / 百炼 / Anthropic / Ollama]
     end
 
     UI --> REST
@@ -196,7 +196,7 @@ sequenceDiagram
 | | Neo4j 5 | 知识图谱 (APOC) |
 | | Redis 7 | Celery broker + 缓存 |
 | | MinIO | 对象存储 (文件上传) |
-| **LLM** | OpenAI 兼容 | 支持 OpenAI / DeepSeek / 智谱 / vLLM |
+| **LLM** | OpenAI 兼容 / Ollama | 支持 OpenAI / DeepSeek / 智谱 / vLLM / 本地 Ollama |
 | | Anthropic Claude | 原生协议 |
 | | 阿里云百炼 DashScope | Chat / Vision / Embedding / Rerank |
 | **部署** | Docker Compose | 一键启动全栈 |
@@ -211,7 +211,8 @@ sequenceDiagram
 
 - **目标罗盘**：仪表盘式目标管理，跟踪进度、截止日期、风险状态
 - **知识图谱**：Cytoscape 力导向布局，节点 = 实体，边 = 关系，支持点击探索
-- **AI 顾问**：流式对话，15+ 内置工具（查询 / 写入 / 记忆 / Web 搜索 / 网页抓取），工具调用 UI 内联渲染
+- **智能助手**：流式对话，15+ 内置工具，按供应商分组选择当前对话模型，工具调用 UI 内联渲染
+- **用户扩展**：每位用户可独立配置 MCP（HTTP / SSE / stdio）与 Skills（文本 / 压缩包 / 文件夹 / GitHub）
 - **情景推演**：React Flow + dagre 树形布局，蒙特卡洛模拟，分支概率环 + 风险指示
 - **信源管理**：可信度评级（高 / 中 / 低 / 用户标记），信息半衰期管理（指数衰减模型）
 - **风险预警**：通知中心，严重度分级（紧急 / 警告 / 信息），SMTP 邮件推送
@@ -407,14 +408,15 @@ python scripts/seed_fsw.py
 
 ### LLM 配置
 
-在设置页面（`/settings`）配置 LLM Provider：
+管理员在管理页面（`/admin`）配置平台 LLM Provider；获授权的普通用户可在设置页面（`/settings`）配置私有服务：
 
-1. **添加 Provider**：选择协议（OpenAI 兼容 / Anthropic / 阿里云百炼），填写 baseURL 和 API Key
+1. **添加 Provider**：选择协议（OpenAI 兼容 / Ollama / Anthropic / 阿里云百炼），填写 baseURL 和 API Key
 2. **添加模型**：填写模型 ID（如 `gpt-4o-mini`），勾选能力（chat / vision / embedding / rerank）
 3. **分配角色**：为每个角色选择一个模型
 
 支持的 Provider：
 - **OpenAI 兼容**：OpenAI / DeepSeek / 智谱 / OneAPI / vLLM
+- **Ollama**：本地 OpenAI 兼容端点，适合单用户桌面部署
 - **Anthropic**：Claude 系列（chat / vision）
 - **阿里云百炼**：通义千问 / gte-rerank / qwen3-rerank
   - Chat / Vision / Embedding 走 OpenAI 兼容协议
@@ -424,7 +426,7 @@ python scripts/seed_fsw.py
 ### Tavily 搜索配置
 
 在设置页面填写 Tavily API Key，启用：
-- AI 顾问的 `web_search` 和 `web_fetch` 工具
+- 智能助手的 `web_search` 和 `web_fetch` 工具
 - 信源抓取（RSS / 网页爬取）
 
 ### SMTP 邮件配置
@@ -440,15 +442,17 @@ python scripts/seed_fsw.py
 
 LifeTree 支持两种使用模式，由环境变量 `LIFETREE_USE_MODE` 控制（默认 `single`），并持久化到数据库 `app_config.use_mode`，可通过 `PUT /settings/use-mode` 切换：
 
-- **单用户模式（`single`，默认）**：无需登录即可使用，后端通过 default-user 兜底服务数据。用户若希望拥有个人数据范围，仍可通过用户菜单手动登录。AuthGate 不会弹出登录对话框。
-- **多用户模式（`multi`）**：必须登录才能使用，AuthGate 弹出的登录对话框不可关闭。管理员角色由 `LIFETREE_ADMIN_USER_IDS` 环境变量指定。
+- **单用户模式（`single`，默认）**：仍需注册和登录。首个账号自动成为管理员；首个账号创建后，服务端自动禁止新增注册。它等价于开启“禁止注册”的单账号实例。
+- **多用户模式（`multi`）**：必须使用 PostgreSQL、Neo4j、Redis、MinIO、Celery 等全量服务部署。首个注册账号自动成为管理员；管理员也可通过 `LIFETREE_ADMIN_USER_IDS` 补充提权。
+
+本地 SQLite 存储只规划用于 `single` 模式，不能用于 `multi`。当前版本已经完成模式认证边界和用户数据模型，但 SQLite 仓储适配器尚未完成；现阶段两种模式仍使用 PostgreSQL。这样可以避免在事务、向量检索和知识图谱同步尚未抽象完成时制造“看似本地、实际仍依赖远端组件”的混合模式。
 
 支持的登录方式：
 
 - 邮箱 + 密码（JWT access/refresh token），可选邮件验证码注册流程（`send-code` / `register-with-code`）
 - OAuth 登录：Google / GitHub / Microsoft，端点 `/auth/oauth/{id}/start` 与 `/auth/oauth/{id}/callback`
 
-数据隔离：events / sources / plugins / chat 对话按 `user_id` 隔离。前端聊天数据按 `lifetree.chat.conversations.v2.<userId>` 分区存储到 localStorage，未登录用户使用 `default` 作用域。
+数据隔离：events / sources / plugins / 私有模型 / 默认角色 / MCP / Skills / chat 对话均按 `user_id` 隔离。前端聊天数据按 `lifetree.chat.conversations.v2.<userId>` 分区存储到 localStorage。
 
 ### 管理员平台配置
 
@@ -456,8 +460,15 @@ LifeTree 支持两种使用模式，由环境变量 `LIFETREE_USE_MODE` 控制�
 
 - 模型与服务 API 密钥（OpenAI / Anthropic / 阿里云百炼 / Tavily / SMTP 等）
 - 用户管理（`GET/PATCH/DELETE /admin/users`）与平台统计（`GET /admin/stats`）
+- “允许普通用户自己配置服务”开关；关闭时普通用户只能使用管理员提供的模型
 
-非管理员用户在设置页面看不到管理员配置的 API 密钥。
+非管理员用户只能看到管理员模型的公开名称、能力与“管理员提供”标签，不能查看管理员 Base URL 或 API Key。用户自己的 LLM、Tavily、MinerU 和四类默认模型独立存储。
+
+### MCP 与 Skills
+
+- MCP 支持 HTTP、SSE 与 stdio。stdio 使用“命令 + 参数数组”执行，不经过 shell，并限制超时与输出大小；multi 模式阻止访问私有网段地址。
+- Skills 支持直接粘贴文本、上传 ZIP/TAR、选择文件夹、填写 GitHub HTTPS 地址浅克隆。导入过程限制 2 MiB，过滤路径穿越和符号链接。
+- 启用的 Skills 会作为用户提供的上下文注入智能助手，不能覆盖系统安全规则；启用的 MCP 会按用途描述成为可自动调用工具。
 
 ### 环境变量
 

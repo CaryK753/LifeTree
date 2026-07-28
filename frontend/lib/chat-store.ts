@@ -96,8 +96,7 @@ export interface Conversation {
  *   lifetree.chat.conversations.v2.<userId>
  *   lifetree.chat.activeId.v2.<userId>
  *
- * When no user is logged in (single-user mode / default-user fallback),
- * the scope falls back to ``"default"``. The legacy unscoped keys
+ * Before login, the scope falls back to ``"default"``. The legacy unscoped keys
  * (``lifetree.chat.conversations.v2``) are migrated to the ``default``
  * scope on first load so existing single-user deployments keep their
  * chat history.

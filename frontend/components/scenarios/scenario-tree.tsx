@@ -110,11 +110,14 @@ function layoutTree(
 
   const laidOut = nodes.map((n) => {
     const pos = g.node(n.id);
+    // Round to integers to avoid subpixel rendering — dagre outputs
+    // floats and browsers blend non-integer pixel positions, making
+    // text and borders look blurry.
     return {
       ...n,
       position: {
-        x: pos.x - NODE_WIDTH / 2,
-        y: pos.y - NODE_HEIGHT / 2,
+        x: Math.round(pos.x - NODE_WIDTH / 2),
+        y: Math.round(pos.y - NODE_HEIGHT / 2),
       },
     };
   });
@@ -168,7 +171,10 @@ function ScenarioNode({ data }: NodeProps<ScenarioFlowNode>) {
   return (
     <div
       className={cn(
-        "group relative rounded-xl border bg-surface/95 backdrop-blur-sm shadow-lg transition-all",
+        // Opaque background (not /95 + backdrop-blur) — the blur was
+        // causing a fuzzy "frosted glass" effect that made nodes look
+        // soft, especially the text inside them.
+        "group relative rounded-xl border bg-surface shadow-lg transition-all",
         "w-[240px] cursor-pointer pointer-events-auto",
         d.selected
           ? "border-brand-400/60 ring-2 ring-brand-400/30 shadow-brand-500/10"

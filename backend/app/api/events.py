@@ -9,6 +9,8 @@ via ``user_id IS NULL OR user_id = :uid`` filters. In single-user mode
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
@@ -23,6 +25,7 @@ from app.schemas.api import (
     CredibilityDistribution,
     EventRead,
     InformationSourceRead,
+    SourceScheduleUpdate,
 )
 
 log = get_logger(__name__)
@@ -388,3 +391,67 @@ def delete_source(
         raise HTTPException(403, "You do not have access to this source")
     db.delete(src)
     db.commit()
+
+
+@router.patch("/sources/{source_id}/schedule", response_model=InformationSourceRead)
+def update_source_schedule(
+    source_id: str,
+    payload: SourceScheduleUpdate,
+    user: CurrentUser,
+    db: Session = Depends(get_db),
+) -> InformationSource:
+    """Set or update the auto-refresh cron schedule for a source.
+
+    When ``auto_refresh=True``, the Celery beat task ``refresh_due_sources``
+    will re-fetch this source's URL content every ``refresh_interval_minutes``
+    minutes and ingest new events — which in turn triggers risk alerts via
+    the standard structuring pipeline.
+
+    Only sources with a URL can be auto-refreshed.
+    """
+    src = db.get(InformationSource, source_id)
+    if src is None:
+        raise HTTPException(404, "Source not found")
+    if src.user_id is not None and src.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "You do not have access to this source")
+    if payload.auto_refresh and not src.url:
+        raise HTTPException(
+            400, "Cannot auto-refresh a source without a URL"
+        )
+    src.auto_refresh = payload.auto_refresh
+    src.refresh_interval_minutes = payload.refresh_interval_minutes
+    if payload.auto_refresh:
+        src.next_refresh_at = datetime.now(timezone.utc) + timedelta(
+            minutes=payload.refresh_interval_minutes
+        )
+    else:
+        src.next_refresh_at = None
+    db.commit()
+    db.refresh(src)
+    return src
+
+
+@router.post("/sources/{source_id}/refresh", response_model=InformationSourceRead)
+def refresh_source_now(
+    source_id: str,
+    user: CurrentUser,
+    db: Session = Depends(get_db),
+) -> InformationSource:
+    """Manually trigger a refresh of a single source.
+
+    Delegates to the same Celery task used by the beat schedule so the
+    user can test their schedule immediately without waiting.
+    """
+    from app.workers.tasks import refresh_due_sources
+
+    src = db.get(InformationSource, source_id)
+    if src is None:
+        raise HTTPException(404, "Source not found")
+    if src.user_id is not None and src.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "You do not have access to this source")
+    if not src.url:
+        raise HTTPException(400, "Cannot refresh a source without a URL")
+    # Run synchronously (the task itself is fast — one URL fetch + ingest)
+    refresh_due_sources.delay(source_ids=[source_id])
+    db.refresh(src)
+    return src

@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.core.logging import get_logger
 from app.db.postgres import get_session
-from app.models.event import Event
+from app.models.event import Event, InformationSource
 from app.models.goal import Goal, GoalStatus
 from app.models.notification import NotificationLog, NotificationStatus
 from app.models.user import UserProfile
@@ -259,6 +259,111 @@ def run_scenario_reasoning(scenario_id: str) -> dict:
             "status": run.status,
             "run_id": run.id,
             "result": run.result,
+        }
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.workers.tasks.refresh_due_sources")
+def refresh_due_sources(source_ids: list[str] | None = None) -> dict:
+    """Refresh information sources that are due for their scheduled update.
+
+    Runs every minute via Celery Beat. For each source where:
+      - ``auto_refresh == True``
+      - ``next_refresh_at <= now``
+      - ``url`` is not empty
+
+    the task re-fetches the URL content via Tavily Extract, ingests new
+    events through the structuring pipeline (which triggers risk alerts
+    for high-risk events), and advances ``next_refresh_at`` by
+    ``refresh_interval_minutes``.
+
+    If ``source_ids`` is provided (manual trigger), those specific sources
+    are refreshed regardless of schedule — used by the
+    ``POST /sources/{id}/refresh`` API endpoint.
+    """
+    now = datetime.now(timezone.utc)
+
+    db = get_session()
+    try:
+        if source_ids:
+            sources = list(db.scalars(
+                select(InformationSource).where(
+                    InformationSource.id.in_(source_ids)
+                )
+            ))
+        else:
+            sources = list(db.scalars(
+                select(InformationSource).where(
+                    InformationSource.auto_refresh.is_(True),
+                    InformationSource.url.isnot(None),
+                    InformationSource.url != "",
+                    InformationSource.next_refresh_at <= now,
+                ).limit(50)
+            ))
+
+        if not sources:
+            return {"status": "ok", "refreshed": 0}
+
+        crawler = CrawlerService()
+        if not crawler.available:
+            log.warning("refresh_due_sources.skipped_no_tavily_key")
+            return {"status": "skipped", "reason": "no_tavily_key"}
+
+        total_events = 0
+        refreshed = 0
+        for src in sources:
+            try:
+                results = asyncio.run(crawler.extract([src.url]))
+                if not results or not results[0].content:
+                    log.info(
+                        "refresh_source.empty",
+                        source_id=src.id,
+                        url=src.url,
+                    )
+                else:
+                    r = results[0]
+                    structuring = StructuringService(db)
+                    _, extraction = structuring.ingest_text(
+                        text=r.content,
+                        title=src.title,
+                        source_kind=src.kind,
+                        url=src.url,
+                        published_at=now,
+                    )
+                    if extraction is not None:
+                        total_events += len(extraction.events)
+
+                # Advance the schedule
+                src.last_refreshed_at = now
+                src.next_refresh_at = now + timedelta(
+                    minutes=src.refresh_interval_minutes
+                )
+                refreshed += 1
+            except Exception as exc:  # noqa: BLE001
+                log.error(
+                    "refresh_source.failed",
+                    source_id=src.id,
+                    url=src.url,
+                    error=str(exc),
+                )
+                # Still advance the schedule so one failure doesn't block
+                # subsequent runs
+                src.next_refresh_at = now + timedelta(
+                    minutes=src.refresh_interval_minutes
+                )
+
+        db.commit()
+        log.info(
+            "refresh_due_sources.done",
+            sources=len(sources),
+            refreshed=refreshed,
+            events=total_events,
+        )
+        return {
+            "status": "ok",
+            "refreshed": refreshed,
+            "events": total_events,
         }
     finally:
         db.close()

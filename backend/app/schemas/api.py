@@ -28,6 +28,9 @@ class InformationSourceBase(BaseModel):
     raw_text: str | None = None
     meta: dict[str, Any] = {}
     user_upload_id: str | None = None
+    # Per-source auto-refresh schedule (§4.9 信源 cron)
+    auto_refresh: bool = False
+    refresh_interval_minutes: int = 1440
 
 
 class InformationSourceCreate(InformationSourceBase):
@@ -38,6 +41,19 @@ class InformationSourceRead(InformationSourceBase, ORMModel):
     id: str
     created_at: datetime
     updated_at: datetime
+    next_refresh_at: datetime | None = None
+    last_refreshed_at: datetime | None = None
+
+
+class SourceScheduleUpdate(BaseModel):
+    """Payload for ``PATCH /sources/{id}/schedule``.
+
+    Allows the user to enable/disable auto-refresh and set a custom
+    interval (in minutes). The backend recomputes ``next_refresh_at``
+    from ``now + interval`` on every update.
+    """
+    auto_refresh: bool
+    refresh_interval_minutes: int = Field(default=1440, ge=1, le=525600)
 
 
 # ---------- Events ----------
@@ -126,6 +142,37 @@ class ScenarioRunRead(ORMModel):
     created_at: datetime
 
 
+# ---------- Scenario self-evolution (§5 自演化) ----------
+
+
+class ProjectedEventRead(BaseModel):
+    month: int
+    title: str
+    type: Literal["milestone", "risk", "opportunity", "decision"]
+    description: str
+    probability: float
+    impact: float
+    dependencies: list[str] = []
+
+
+class EvolutionProjectionRead(BaseModel):
+    """Response schema for ``POST /scenarios/{id}/evolve``.
+
+    ``projected_events`` and ``trajectory`` are the core payload the
+    frontend renders as timeline nodes. ``cached`` indicates whether
+    the response came from the scenario.meta cache (fast) or a fresh
+    LLM run (slow).
+    """
+    summary: str
+    projected_events: list[ProjectedEventRead]
+    trajectory: list[dict[str, Any]] = []
+    final_probability: float
+    confidence: float
+    evolved_at: str | None = None
+    horizon_months: int = 24
+    cached: bool = False
+
+
 # ---------- Knowledge graph ----------
 
 class GraphNode(BaseModel):
@@ -208,7 +255,7 @@ class IngestTextResponse(BaseModel):
     notifications_triggered: int = 0
 
 
-# ---------- AI Advisor chat ----------
+# ---------- Intelligent Assistant chat ----------
 
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
@@ -230,6 +277,9 @@ class ChatRequest(BaseModel):
     user_id: str | None = None  # deprecated; ignored in single-user mode
     goal_id: str | None = None
     scenario_id: str | None = None
+    model_id: str | None = Field(
+        None, description="Optional chat model selected for this request"
+    )
     messages: list[ChatMessage]
     tools: list[str] | None = None  # Tool names to expose
     stream: bool = True
@@ -242,7 +292,7 @@ class ChatToolCall(BaseModel):
 
 
 class ChatResponseChunk(BaseModel):
-    """One streamed chunk from the AI advisor endpoint (SSE event payload)."""
+    """One streamed chunk from the intelligent assistant endpoint (SSE event payload)."""
 
     delta: str = ""
     tool_call: ChatToolCall | None = None

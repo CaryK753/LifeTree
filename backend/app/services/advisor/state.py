@@ -1,4 +1,4 @@
-"""Typed state schema for the AI advisor LangGraph.
+"""Typed state schema for the intelligent assistant LangGraph.
 
 Holds the conversation messages, the immutable user/goal/scenario context,
 and a log of tool calls made during the run (so the API layer can stream

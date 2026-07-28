@@ -66,7 +66,7 @@ LifeTree solves these problems through:
 2. **Causal Modeling**: Models goal → pathway → requirement → risk factor as a directed graph, using Bayesian networks to quantify uncertainty
 3. **Scenario Simulation**: Monte Carlo simulates success probability, risk exposure, and time cost under different choice paths
 4. **Dynamic Warning**: Celery scheduled tasks monitor information freshness (half-life model), automatically trigger risk recalculation and email alerts
-5. **AI Advisor**: LangGraph-based ReAct Agent that can call 15+ built-in tools to query the knowledge graph, create new nodes, search the web, and crawl page content
+5. **Intelligent Assistant**: LangGraph-based ReAct Agent that can call 15+ built-in tools to query the knowledge graph, create new nodes, search the web, and crawl page content
 
 ### Example Scenario
 
@@ -95,7 +95,7 @@ graph TB
         CRAWLER[Crawler API: Tavily Search/Fetch]
     end
 
-    subgraph Agent["AI Advisor (LangGraph ReAct)"]
+    subgraph Agent["Intelligent Assistant (LangGraph ReAct)"]
         GRAPH[create_react_agent]
         TOOLS[15+ Built-in Tools<br/>Query / Write / Memory / Web]
         LLM[LLM: OpenAI / Anthropic / Bailian]
@@ -211,7 +211,8 @@ sequenceDiagram
 
 - **Goal Compass**: Dashboard-style goal management, tracking progress, deadlines, and risk status
 - **Knowledge Graph**: Cytoscape force-directed layout, nodes = entities, edges = relationships, click-to-explore
-- **AI Advisor**: Streaming chat, 15+ built-in tools (query / write / memory / web search / web fetch), inline tool call UI rendering
+- **Intelligent Assistant**: Streaming chat, 15+ built-in tools, per-conversation model selection grouped by provider, and inline tool call UI
+- **User Extensions**: Per-user MCP (HTTP / SSE / stdio) and Skills (text / archive / folder / GitHub)
 - **Scenario Simulation**: React Flow + dagre tree layout, Monte Carlo simulation, branch probability rings + risk indicators
 - **Source Management**: Credibility rating (high / medium / low / user-marked), information half-life management (exponential decay model)
 - **Risk Warning**: Notification center, severity levels (urgent / warning / info), SMTP email delivery
@@ -407,14 +408,15 @@ Open http://localhost:13000 to see the Goal Compass dashboard.
 
 ### LLM Configuration
 
-Configure LLM Provider on the settings page (`/settings`):
+Admins configure platform providers on `/admin`; authorized users configure private providers on `/settings`:
 
-1. **Add Provider**: Select protocol (OpenAI-compatible / Anthropic / Alibaba Cloud Bailian), fill in baseURL and API Key
+1. **Add Provider**: Select protocol (OpenAI-compatible / Ollama / Anthropic / Alibaba Cloud Bailian), fill in baseURL and API Key
 2. **Add Model**: Fill in model ID (e.g. `gpt-4o-mini`), check capabilities (chat / vision / embedding / rerank)
 3. **Assign Roles**: Select a model for each role
 
 Supported Providers:
 - **OpenAI-compatible**: OpenAI / DeepSeek / Zhipu / OneAPI / vLLM
+- **Ollama**: Local OpenAI-compatible endpoint for single-user desktop deployments
 - **Anthropic**: Claude series (chat / vision)
 - **Alibaba Cloud Bailian**: Qwen / gte-rerank / qwen3-rerank
   - Chat / Vision / Embedding via OpenAI-compatible protocol
@@ -424,7 +426,7 @@ Supported Providers:
 ### Tavily Search Configuration
 
 Fill in Tavily API Key on the settings page to enable:
-- AI Advisor's `web_search` and `web_fetch` tools
+- Intelligent Assistant's `web_search` and `web_fetch` tools
 - Source crawling (RSS / web crawling)
 
 ### SMTP Email Configuration
@@ -440,15 +442,17 @@ Configure SMTP on the settings page to enable risk warning email delivery. Suppo
 
 LifeTree supports two use modes, controlled by the `LIFETREE_USE_MODE` environment variable (default `single`), persisted to the database `app_config.use_mode`, toggleable via `PUT /settings/use-mode`:
 
-- **Single-user mode (`single`, default)**: no login required — the backend serves data via the default-user fallback. Users who want a personal data scope can still sign in manually via the user menu. AuthGate does not pop up the login dialog.
-- **Multi-user mode (`multi`)**: login is required — the AuthGate login dialog cannot be dismissed. Admin role is gated by the `LIFETREE_ADMIN_USER_IDS` environment variable.
+- **Single-user mode (`single`, default)**: registration and sign-in are required. The first account becomes admin; subsequent registration is automatically disabled.
+- **Multi-user mode (`multi`)**: requires the full PostgreSQL, Neo4j, Redis, MinIO, and Celery deployment. The first account becomes admin; `LIFETREE_ADMIN_USER_IDS` may grant additional admin roles.
+
+SQLite local storage is planned only for `single` mode and is not yet implemented. Both modes currently use PostgreSQL while transaction, vector-search, and graph-sync storage boundaries are extracted.
 
 Supported login methods:
 
 - Email + password (JWT access/refresh tokens), with optional email verification code registration flow (`send-code` / `register-with-code`)
 - OAuth login: Google / GitHub / Microsoft, endpoints `/auth/oauth/{id}/start` and `/auth/oauth/{id}/callback`
 
-Data isolation: events / sources / plugins / chat conversations are isolated by `user_id`. Frontend chat data is partitioned by `lifetree.chat.conversations.v2.<userId>` in localStorage; unauthenticated users use the `default` scope.
+Data isolation: events, sources, plugins, private models, role defaults, MCP, Skills, and chat conversations are isolated by `user_id`. Frontend chat data is partitioned by `lifetree.chat.conversations.v2.<userId>`.
 
 ### Admin Platform Configuration
 
@@ -456,8 +460,15 @@ In multi-user mode, admins can access a dedicated platform configuration page to
 
 - Model and service API keys (OpenAI / Anthropic / Alibaba Cloud Bailian / Tavily / SMTP, etc.)
 - User management (`GET/PATCH/DELETE /admin/users`) and platform stats (`GET /admin/stats`)
+- Whether regular users may configure private LLM, Tavily, and MinerU services
 
-Non-admin users cannot see admin-configured API keys on the settings page.
+Non-admin users only see administrator model names, capabilities, and an “Admin provided” label. Admin base URLs and keys are never returned.
+
+### MCP & Skills
+
+- MCP supports HTTP, SSE, and stdio. stdio uses an executable plus argument array without a shell, with timeout and output limits.
+- Skills support pasted text, ZIP/TAR archives, folders, and shallow HTTPS GitHub clones, with a 2 MiB import limit and path traversal checks.
+- Enabled Skills become user-provided assistant context; enabled MCP servers become tools selected by the assistant when relevant.
 
 ### Environment Variables
 

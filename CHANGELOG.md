@@ -153,3 +153,104 @@ system, PWA support, multi-user auth, and i18n.
 - All browser native dialogs/popups replaced with LifeTree's existing
   dialog/popup components.
 - Toast notifications allow text selection and copying.
+
+## [0.2.0] - 2026-07-29
+
+Second tagged release. Expands LifeTree with user-runtime extensibility
+(personal tools, skills, MCP), legal consent flow, scenario evolution
+tracking, per-source cron-style refresh, personal model/service
+configuration, and a redesigned `/auth` ASCII scene.
+
+### Added
+
+#### User Runtime: Tools, Skills, MCP
+- `user_runtime` model + API (`/users/me/runtime/*`): per-user
+  external tool definitions (name, endpoint, auth, schema) that the AI
+  advisor can call like built-in tools. Stored in `user_runtime_tools`.
+- `user_skills` API: user-authored Python skills uploaded and imported
+  via `skill_import` service (AST-checked, sandboxed imports).
+- MCP settings card on `/settings`: configure Model Context Protocol
+  servers per user; advisor can invoke MCP-provided tools.
+- Skill settings card on `/settings`: upload / enable / disable user
+  skills with a managed import pipeline.
+- Personal service keys card: per-user API keys for OpenAI / Anthropic /
+  Alibaba / DeepSeek / etc., stored encrypted and scoped to the user's
+  own advisor runs (not shared with other users in multi-user mode).
+- Personal model settings card: per-user default model selection and
+  per-task overrides (chat / extraction / reasoning).
+- User service policy card: per-user rate limits and allowed provider
+  lists (admin-configurable defaults, user-overridable within bounds).
+- Alembic migration `a6b8d0f2c4e6_add_user_runtime_tools`.
+
+#### Legal Consent & Privacy
+- `legal` core module + `legal_consent` migration: versioned Terms of
+  Service and Privacy Policy documents; users must consent before first
+  use. Consent records stored per user with document version + timestamp.
+- `/terms` and `/privacy` frontend pages rendering the current documents
+  via the `legal-document` component.
+- `legal-consent` dialog shown on first visit post-registration.
+
+#### Scenario Evolution Tracking
+- `evolution` service + `scenario-evolution` component: records each
+  scenario state transition (draft → active → dormant → merged/closed)
+  with timestamp, trigger, and delta, rendering a timeline view in the
+  scenario detail panel.
+- `reasoning/evidence` + `reasoning/factor_model` modules: structured
+  evidence ledger and per-factor model used by the Bayesian + Monte
+  Carlo engines for auditable scenario reasoning.
+
+#### Source Cron Refresh + Risk Alerts
+- Per-source auto-refresh schedule: `auto_refresh`,
+  `refresh_interval_minutes` (default 1440 = 24h, user-configurable down
+  to 1 minute), `next_refresh_at`, `last_refreshed_at` on
+  `InformationSource`.
+- Celery beat task `refresh_due_sources` (runs every minute) re-fetches
+  due source URLs via Tavily Extract, ingests new events through the
+  structuring pipeline, and advances `next_refresh_at`. High-risk
+  events extracted during refresh trigger the standard risk-propagation
+  + notification flow.
+- `PATCH /sources/{id}/schedule` and `POST /sources/{id}/refresh` API
+  endpoints.
+- Frontend `source-schedule-dialog` with 1m / 5m / 30m / 1h / 6h / 12h /
+  24h / 7d presets and custom minute input; manual "refresh now" button.
+- Alembic migration `e4f6a8b0c1d2_add_source_refresh_schedule`.
+
+#### Auth Page ASCII Scene
+- Redesigned `/auth` background: forest of randomly grown ASCII trees
+  with wind sway, day/night themes.
+- Day theme: ASCII sun, drifting clouds, randomly flying birds with
+  flapping wings.
+- Night theme: crescent moon, twinkling stars, meteors flying
+  right-to-left at an angle above the treetops, fading as they travel.
+- Ground layer with grass line + 3-row dense ASCII soil (`#`/`%`/`&`/`@`).
+- Victorian-style street lamp (small lantern nested between twin iron
+  rods, ~32-row tall pole, base plate) placed beside a park bench and
+  a seated person, grouped on the left side to avoid the centered login
+  dialog.
+- Lamp glow halo in dark mode.
+- `prefers-reduced-motion` static fallback.
+
+#### Chat & AI Advisor
+- `chat-model-selector`: per-conversation model picker in the chat
+  toolbar.
+- `ai-elements` component overhaul: richer tool-call rendering with
+  proper icons (no emojis), inline placement within the main content.
+- AI avatar uses `@lobehub/icons` CDN to show the current model's brand
+  icon (e.g. DeepSeek icon when model name contains "deepseek").
+
+### Changed
+- Chat history sidebar defaults to collapsed on first visit; expands
+  only when the user explicitly opens it (preference persisted).
+- `/auth` ASCII art extracted into `ascii-scene-art.ts` for reuse and
+  easier editing.
+- README documentation updated across all 7 language variants.
+
+### Fixed
+- `structuring.py` undefined `user_id` variable in multi-user scenarios
+  (NameError under certain ingestion paths).
+- OAuth callback routing: dynamic `[provider]` path parameter added so
+  provider-specific callbacks resolve correctly.
+- AuthGate no longer renders children when unauthenticated in
+  multi-user mode, preventing spurious SWR API requests.
+- `DEFAULT_USER` role is now `user` (not `admin`); admin privileges
+  applied dynamically via `_apply_admin_override`.

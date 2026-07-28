@@ -92,9 +92,6 @@ async function request<T>(
 ): Promise<T> {
   // Attach Bearer token to every request when available.
   const token = getAccessToken();
-  const authHeaders: Record<string, string> = token
-    ? { Authorization: `Bearer ${token}` }
-    : {};
 
   // FormData: the browser must set Content-Type itself (with the
   // multipart boundary). Forcing ``application/json`` here would make
@@ -102,25 +99,28 @@ async function request<T>(
   // and skip the default Content-Type so uploads work correctly.
   const isFormData = init?.body instanceof FormData;
 
+  const headers = new Headers(init?.headers);
+  if (!isFormData && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
   const res = await fetch(`${API_PREFIX}${path}`, {
     ...init,
-    headers: {
-      ...(isFormData ? {} : { "Content-Type": "application/json" }),
-      ...authHeaders,
-      ...(init?.headers || {}),
-    },
+    headers,
   });
 
   // 401 → attempt a single token refresh, then retry once.
-  if (res.status === 401 && token && !init?.headers?.["X-Retry"]) {
+  if (res.status === 401 && token && !headers.has("X-Retry")) {
     const refreshed = await tryRefreshAccessToken();
     if (refreshed) {
+      headers.set("X-Retry", "1");
+      headers.delete("Authorization");
       return request<T>(path, {
         ...init,
-        headers: {
-          ...(init?.headers || {}),
-          "X-Retry": "1",
-        },
+        headers,
       });
     }
   }
@@ -182,7 +182,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  register: (body: { display_name: string; email: string; password: string }) =>
+  register: (body: RegisterRequest) =>
     request<AuthTokenResponse>(`/auth/register`, {
       method: "POST",
       body: JSON.stringify(body),
@@ -202,10 +202,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  oauthStart: (providerId: string, mode?: "login" | "register") => {
-    const qs = mode && mode !== "login" ? `?mode=${mode}` : "";
+  oauthStart: (
+    providerId: string,
+    mode?: "login" | "register",
+    acceptedTerms = false
+  ) => {
+    const params = new URLSearchParams();
+    if (mode && mode !== "login") params.set("mode", mode);
+    if (acceptedTerms) params.set("accepted_terms", "true");
+    const query = params.size ? `?${params.toString()}` : "";
     return request<OAuthStartResponse>(
-      `/auth/oauth/${encodeURIComponent(providerId)}/start${qs}`
+      `/auth/oauth/${encodeURIComponent(providerId)}/start${query}`
     );
   },
   oauthCallback: (providerId: string, code: string, state?: string) => {
@@ -341,6 +348,13 @@ export const api = {
     request<unknown>(`/sources/${id}/credibility?credibility=${credibility}`, {
       method: "PATCH",
     }),
+  updateSourceSchedule: (id: string, body: { auto_refresh: boolean; refresh_interval_minutes: number }) =>
+    request<unknown>(`/sources/${id}/schedule`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  refreshSourceNow: (id: string) =>
+    request<unknown>(`/sources/${id}/refresh`, { method: "POST" }),
 
   // Scenarios
   listScenarios: (goalId: string) =>
@@ -381,6 +395,10 @@ export const api = {
     request<unknown>(`/scenarios/${id}/merge`, { method: "POST" }),
   runScenario: (id: string) =>
     request<unknown>(`/scenarios/${id}/run`, { method: "POST" }),
+  evolveScenario: (id: string) =>
+    request<EvolutionProjection>(`/scenarios/${id}/evolve`, { method: "POST" }),
+  getEvolution: (id: string) =>
+    request<EvolutionProjection>(`/scenarios/${id}/evolve`, { method: "GET" }),
 
   // Graph
   getGraph: (goalId: string, scenarioId?: string) =>
@@ -508,6 +526,66 @@ export const api = {
 
   // Settings — multi-provider / multi-model
   getSettings: () => request<LLMConfigView>(`/settings`),
+  getRuntimeCatalog: () => request<RuntimeCatalog>(`/settings/runtime/catalog`),
+  getUserServicePolicy: () => request<{ enabled: boolean }>(`/settings/runtime/policy`),
+  setUserServicePolicy: (enabled: boolean) =>
+    request<{ enabled: boolean }>(`/settings/runtime/policy`, {
+      method: "PUT", body: JSON.stringify({ enabled }),
+    }),
+  addUserProvider: (body: ProviderCreate) =>
+    request<RuntimeCatalog>(`/settings/runtime/providers`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  addUserModel: (body: ModelCreate) =>
+    request<RuntimeCatalog>(`/settings/runtime/models`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  setUserRoles: (assignments: Partial<Record<Role, string | null>>) =>
+    request<RuntimeCatalog>(`/settings/runtime/roles`, {
+      method: "PUT", body: JSON.stringify({ assignments }),
+    }),
+  setUserServices: (body: UserServicesUpdate) =>
+    request<RuntimeCatalog>(`/settings/runtime/services`, {
+      method: "PUT", body: JSON.stringify(body),
+    }),
+  listMcpServers: () => request<MCPServer[]>(`/settings/runtime/mcp`),
+  addMcpServer: (body: MCPServerCreate) =>
+    request<MCPServer>(`/settings/runtime/mcp`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  toggleMcpServer: (id: string, enabled: boolean) =>
+    request<MCPServer>(`/settings/runtime/mcp/${id}`, {
+      method: "PATCH", body: JSON.stringify({ enabled }),
+    }),
+  deleteMcpServer: (id: string) =>
+    request<void>(`/settings/runtime/mcp/${id}`, { method: "DELETE", skipJson: true }),
+  listSkills: () => request<UserSkillView[]>(`/settings/skills`),
+  addTextSkill: (name: string, content: string) =>
+    request<UserSkillView>(`/settings/skills/text`, {
+      method: "POST", body: JSON.stringify({ name, content }),
+    }),
+  addGithubSkill: (name: string, repositoryUrl: string) =>
+    request<UserSkillView>(`/settings/skills/github`, {
+      method: "POST", body: JSON.stringify({ name, repository_url: repositoryUrl }),
+    }),
+  addArchiveSkill: (name: string, archive: File) => {
+    const body = new FormData();
+    body.append("name", name);
+    body.append("archive", archive);
+    return request<UserSkillView>(`/settings/skills/archive`, { method: "POST", body });
+  },
+  addFolderSkill: (name: string, files: File[]) => {
+    const body = new FormData();
+    body.append("name", name);
+    files.forEach((file) => body.append("files", file, file.webkitRelativePath || file.name));
+    return request<UserSkillView>(`/settings/skills/folder`, { method: "POST", body });
+  },
+  toggleSkill: (id: string, enabled: boolean) =>
+    request<UserSkillView>(`/settings/skills/${id}`, {
+      method: "PATCH", body: JSON.stringify({ enabled }),
+    }),
+  deleteSkill: (id: string) =>
+    request<void>(`/settings/skills/${id}`, { method: "DELETE", skipJson: true }),
 
   // System components — read-only docker service status
   getSystemComponents: () =>
@@ -707,6 +785,29 @@ export const api = {
 
 export type DecayStatus = "fresh" | "stale" | "expired" | "archived";
 
+// ---------- Scenario self-evolution types ----------
+
+export interface ProjectedEvent {
+  month: number;
+  title: string;
+  type: "milestone" | "risk" | "opportunity" | "decision";
+  description: string;
+  probability: number;
+  impact: number;
+  dependencies: string[];
+}
+
+export interface EvolutionProjection {
+  summary: string;
+  projected_events: ProjectedEvent[];
+  trajectory: Array<{ month: number; p: number }>;
+  final_probability: number;
+  confidence: number;
+  evolved_at: string | null;
+  horizon_months: number;
+  cached: boolean;
+}
+
 export interface DecayScore {
   event_id: string;
   score: number;
@@ -732,7 +833,12 @@ export interface LifecycleEvent {
 
 // ---------- Settings types ----------
 
-export type Protocol = "openai_compatible" | "anthropic" | "bailian" | "bailian_rerank";
+export type Protocol =
+  | "openai_compatible"
+  | "ollama"
+  | "anthropic"
+  | "bailian"
+  | "bailian_rerank";
 export type Role = "chat" | "vision" | "embedding" | "rerank";
 export const ALL_ROLES: Role[] = ["chat", "vision", "embedding", "rerank"];
 
@@ -852,7 +958,19 @@ export interface SendCodeResponse {
   expires_in: number;
 }
 
-export interface RegisterWithCodeRequest {
+export interface LegalConsentRequest {
+  accepted_terms: true;
+  terms_version: string;
+  privacy_version: string;
+}
+
+export interface RegisterRequest extends LegalConsentRequest {
+  display_name: string;
+  email: string;
+  password: string;
+}
+
+export interface RegisterWithCodeRequest extends LegalConsentRequest {
   display_name: string;
   email: string;
   code: string;
@@ -1153,6 +1271,60 @@ export interface LLMConfigView {
   smtp_use_ssl: boolean;
 }
 
+export interface RuntimeProvider extends ProviderView {
+  managed_by: "admin" | "user";
+}
+
+export interface RuntimeModel extends ModelView {
+  managed_by: "admin" | "user";
+}
+
+export interface RuntimeCatalog {
+  allow_user_service_config: boolean;
+  providers: RuntimeProvider[];
+  models: RuntimeModel[];
+  role_assignments: Partial<Record<Role, string>>;
+  tavily_configured: boolean;
+  mineru_configured: boolean;
+  mineru_base_url: string;
+}
+
+export interface UserServicesUpdate {
+  tavily_api_key?: string | null;
+  mineru_api_key?: string | null;
+  mineru_base_url?: string | null;
+}
+
+export interface MCPServer {
+  id: string;
+  name: string;
+  protocol: "http" | "sse" | "stdio";
+  description: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface MCPServerCreate {
+  name: string;
+  protocol: "http" | "sse" | "stdio";
+  description?: string;
+  url?: string;
+  command?: string;
+  args?: string[];
+  headers?: Record<string, string>;
+}
+
+export interface UserSkillView {
+  id: string;
+  name: string;
+  source_type: "text" | "archive" | "folder" | "github";
+  source_ref: string;
+  enabled: boolean;
+  content_preview: string;
+  created_at: string;
+}
+
 export interface ProviderCreate {
   name: string;
   protocol: Protocol;
@@ -1338,6 +1510,7 @@ export async function* streamChat(
   body: {
     goal_id?: string;
     scenario_id?: string;
+    model_id?: string;
     messages: { role: string; content: string }[];
   },
   signal?: AbortSignal

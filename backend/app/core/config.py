@@ -84,20 +84,18 @@ class Settings(BaseSettings):
     # JWT refresh token lifetime (days). Long-lived; stored client-side.
     auth_refresh_token_ttl_days: int = 30
 
-    # Usage mode: ``single`` (self-use, one admin user, no login required)
-    # or ``multi`` (multi-user, login required, admin promotes users via
-    # LIFETREE_ADMIN_USER_IDS). Defaults to ``single`` so existing
+    # Both usage modes require login. ``single`` permits one administrator
+    # account and disables later registrations; ``multi`` supports isolated
+    # users and the full service deployment. Defaults to ``single`` so existing
     # deployments keep working. The runtime value lives in DB
     # (``app_config.use_mode``); this env var only seeds the initial value
     # at first boot — afterwards the admin can switch modes from the
     # settings UI.
     lifetree_use_mode: Literal["single", "multi"] = "single"
 
-    # When True, the legacy default-user fallback is enabled: requests
-    # without a Bearer token resolve to DEFAULT_USER_ID. This lets existing
-    # single-user deployments keep working during the migration. Set to
-    # False once all clients send tokens.
-    auth_allow_default_user_fallback: bool = True
+    # Deprecated compatibility flag. Interactive requests never fall back to
+    # an anonymous default account, regardless of this value.
+    auth_allow_default_user_fallback: bool = False
 
     # ---------- Computed ----------
     @property

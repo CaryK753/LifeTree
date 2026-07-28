@@ -9,7 +9,7 @@ import fcose from "cytoscape-fcose";
 import { X, ExternalLink, ArrowRight } from "lucide-react";
 import { useT } from "@/lib/i18n/provider";
 
-cytoscape.use(fcose);
+cytoscape.use(fcose as unknown as Parameters<typeof cytoscape.use>[0]);
 
 interface GraphNode {
   id: string;
@@ -204,7 +204,7 @@ export function KnowledgeGraph({ nodes, edges }: Props) {
             "border-width": 2,
             "border-color": palette.nodeBorder,
             "transition-property": "border-color, border-width, opacity",
-            "transition-duration": "0.18s",
+            "transition-duration": 180,
           },
         },
         {
@@ -235,11 +235,11 @@ export function KnowledgeGraph({ nodes, edges }: Props) {
             "font-size": "9px",
             "color": palette.edgeLabel,
             "text-background-color": palette.edgeLabelBg,
-            "text-background-padding": 3,
+            "text-background-padding": "3px",
             "text-background-opacity": 0.9,
             "text-rotation": "autorotate",
             "transition-property": "line-color, target-arrow-color, opacity",
-            "transition-duration": "0.18s",
+            "transition-duration": 180,
           },
         },
         // Highlight states — applied when a node is selected.
@@ -296,7 +296,7 @@ export function KnowledgeGraph({ nodes, edges }: Props) {
         nodeDimensionsIncludeLabels: true,
         fit: true,
         randomize: true,
-      },
+      } as unknown as cytoscape.LayoutOptions,
       minZoom: 0.2,
       maxZoom: 2.5,
     });
@@ -461,7 +461,6 @@ export function KnowledgeGraph({ nodes, edges }: Props) {
               </div>
             )}
 
-            {/* Connected entities — §5 透明化 drill-down */}
             {neighbors.length > 0 && (
               <div>
                 <div className="text-[10px] uppercase tracking-wide font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">
@@ -504,7 +503,8 @@ export function KnowledgeGraph({ nodes, edges }: Props) {
             )}
 
             {/* Drill-down to source — for Event nodes, link to /sources page */}
-            {selectedNode.type === "Event" && selectedNode.properties?.source_id && (
+            {selectedNode.type === "Event" &&
+              Boolean(selectedNode.properties?.source_id) && (
               <a
                 href={`/sources`}
                 className="inline-flex items-center gap-1 text-xs text-brand-700 dark:text-brand-300 hover:underline"

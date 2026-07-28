@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import Date, Float, ForeignKey, Index, String, Text
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -43,6 +43,11 @@ class UserProfile(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     role: Mapped[str] = mapped_column(String(16), default="user", server_default="user")
     # Whether the user account is enabled. Disabled users can't log in.
     is_enabled: Mapped[bool] = mapped_column(default=True, server_default="true")
+    accepted_terms_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    terms_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    privacy_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     # Demographics (free-form JSONB to support multiple scenarios)
     demographics: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)

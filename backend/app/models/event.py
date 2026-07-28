@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -65,6 +65,17 @@ class InformationSource(UUIDPkMixin, TimestampMixin, Base):
     # Original user upload reference (if kind=user_upload). Holds either a
     # UUID (legacy) or a MinIO object key like "uploads/<uuid>/<filename>".
     user_upload_id: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
+
+    # ---------- Per-source auto-refresh schedule ----------
+    # When auto_refresh=True, the Celery beat task `refresh_due_sources`
+    # (runs every minute) will re-fetch this source's URL content every
+    # `refresh_interval_minutes` minutes and ingest new events through
+    # the structuring pipeline — which in turn triggers risk alerts.
+    # Default: 1440 minutes = 24 hours. Minimum: 1 minute.
+    auto_refresh: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    refresh_interval_minutes: Mapped[int] = mapped_column(Integer, default=1440, nullable=False)
+    next_refresh_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     def __repr__(self) -> str:
         return f"<InformationSource {self.kind}:{self.title[:40]}>"

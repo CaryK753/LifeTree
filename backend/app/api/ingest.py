@@ -15,6 +15,7 @@ from app.db.minio import ensure_minio_bucket, get_minio_client
 from app.db.postgres import get_db
 from app.models.event import Event
 from app.models.user import UserProfile
+from app.models.user_runtime import UserServiceConfig
 from app.schemas.api import IngestTextRequest, IngestTextResponse
 from app.services.mineru import is_supported, parse_file
 from app.services.notification import NotificationService
@@ -72,7 +73,17 @@ async def ingest_upload(
     if not raw:
         raise HTTPException(400, "空文件")
 
-    parsed = parse_file(raw, file.filename, title=title or None)
+    user_services = db.get(UserServiceConfig, user.id)
+    private_mineru_key = (
+        user_services.mineru_api_key if user_services else ""
+    ) or None
+    parsed = parse_file(
+        raw,
+        file.filename,
+        title=title or None,
+        api_key_override=private_mineru_key,
+        base_url_override=user_services.mineru_base_url if private_mineru_key else None,
+    )
     final_title = parsed.title or file.filename
 
     # Persist to MinIO for traceability

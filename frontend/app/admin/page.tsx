@@ -51,24 +51,22 @@ import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 import { PlatformConfig } from "@/components/settings/platform-config";
 import { UseModeCard } from "@/components/settings/use-mode-card";
 import { SystemComponentsCard } from "@/components/settings/system-components-card";
+import { UserServicePolicyCard } from "@/components/settings/user-service-policy-card";
 
 export default function AdminPage() {
   const t = useT();
   const router = useRouter();
   const { user, isAuthenticated, isLoading: authLoading, isAdmin } = useAuth();
   const { data: authConfig } = useAuthConfig();
-  const singleMode = (authConfig?.use_mode ?? "single") === "single";
   const { data: stats, mutate: refreshStats } = useAdminStats();
   const { data: users, mutate: refreshUsers, isLoading: usersLoading } = useAdminUsers();
   const toast = useToast();
   const { confirm, ConfirmRoot } = useConfirm();
 
   // ---------- Access control ----------
-  // In single mode, the default-user fallback has admin rights — skip the
-  // auth check. In multi mode, require an authenticated admin.
+  // Both runtime modes require an authenticated administrator.
   useEffect(() => {
     if (authLoading) return;
-    if (singleMode) return;
     if (!isAuthenticated) {
       router.replace("/");
       return;
@@ -81,7 +79,7 @@ export default function AdminPage() {
       });
       router.replace("/");
     }
-  }, [authLoading, singleMode, isAuthenticated, user, router, t, toast]);
+  }, [authLoading, isAuthenticated, user, router, t, toast]);
 
   // ---------- Edit user dialog ----------
   const [editingUser, setEditingUser] = useState<AdminUserRead | null>(null);
@@ -171,8 +169,8 @@ export default function AdminPage() {
     );
   }
 
-  // Access check — in single mode, the default user is admin.
-  if (!singleMode && (!isAuthenticated || !isAdmin)) {
+  // Both runtime modes require a real administrator account.
+  if (!isAuthenticated || !isAdmin) {
     return null;
   }
 
@@ -262,6 +260,8 @@ export default function AdminPage() {
 
       {/* Platform services configuration */}
       <PlatformConfig />
+
+      {authConfig?.use_mode === "multi" && <UserServicePolicyCard />}
 
       {/* Use mode (single-user / multi-user) */}
       <UseModeCard />

@@ -48,6 +48,7 @@ from app.models.user import (
 from app.models.user_oauth_link import UserOAuthLink
 from app.models.user_passkey import UserPasskey
 from app.models.user_plugin import UserPlugin
+from app.models.user_runtime import UserMCPServer, UserServiceConfig, UserSkill
 
 __all__ = [
     # Goal ontology
@@ -78,6 +79,9 @@ __all__ = [
     "UserPlugin",
     "UserOAuthLink",
     "UserPasskey",
+    "UserServiceConfig",
+    "UserMCPServer",
+    "UserSkill",
     # Notifications / risk
     "NotificationLog",
     "NotificationChannel",

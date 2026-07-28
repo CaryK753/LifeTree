@@ -27,6 +27,8 @@ import {
   Globe,
   Info,
   RefreshCw,
+  ScrollText,
+  ShieldCheck,
   ShieldAlert,
   Sparkles,
 } from "lucide-react";
@@ -36,6 +38,10 @@ import { LOCALES, LOCALE_LABELS, LOCALE_NAMES, type Locale } from "@/lib/i18n/me
 import { useI18n } from "@/lib/i18n/provider";
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 import Link from "next/link";
+import { McpSettingsCard } from "@/components/settings/mcp-settings-card";
+import { SkillSettingsCard } from "@/components/settings/skill-settings-card";
+import { PersonalModelSettings } from "@/components/settings/personal-model-settings";
+import { PersonalServiceKeys } from "@/components/settings/personal-service-keys";
 
 export default function SettingsPage() {
   const { data: settings } = useSettings();
@@ -78,6 +84,11 @@ export default function SettingsPage() {
           lives on the /admin page to avoid duplicating it here. Show a
           shortcut card so admins know where to find it. */}
       {isAdmin && <AdminShortcutCard />}
+
+      <PersonalModelSettings />
+      <PersonalServiceKeys />
+      <McpSettingsCard />
+      <SkillSettingsCard />
 
       {/* ---------- Theme ---------- */}
       <ThemeCard />
@@ -270,6 +281,18 @@ function AboutCard() {
               <Github className="h-3.5 w-3.5" />
               {t("settings.about.starOnGithub")}
             </a>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/terms" className="inline-flex items-center gap-1.5">
+              <ScrollText className="h-3.5 w-3.5" />
+              {t("legal.terms")}
+            </Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/privacy" className="inline-flex items-center gap-1.5">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              {t("legal.privacy")}
+            </Link>
           </Button>
           <Button
             variant="outline"

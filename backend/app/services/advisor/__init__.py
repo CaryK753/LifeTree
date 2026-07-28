@@ -1,4 +1,4 @@
-"""AI advisor service backed by LangGraph.
+"""intelligent assistant service backed by LangGraph.
 
 Public surface:
 - ``build_advisor_graph``: compile a per-request ReAct agent

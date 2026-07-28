@@ -18,6 +18,8 @@ import {
   Clock,
   User,
   Upload,
+  MessageSquare,
+  Sparkles,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
@@ -343,6 +345,35 @@ export default function HomePage() {
               <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-semibold px-1">
                 {t("home.onboarding.steps.title")}
               </div>
+              {/* Recommended path — chat with AI. This is the primary
+                  way to use LifeTree: the intelligent assistant can auto-call
+                  tools to create goals, pathways, run reasoning, and
+                  update your profile. Highlighted above the manual
+                  steps so first-time users try it first. */}
+              <Link
+                href="/chat"
+                className="block group rounded-lg border border-brand-500/30 bg-gradient-to-r from-brand-500/[0.08] to-violet-500/[0.06] p-3.5 hover:border-brand-500/50 hover:from-brand-500/[0.12] hover:to-violet-500/[0.10] transition-all"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="h-9 w-9 rounded-lg bg-brand-500/15 flex items-center justify-center shrink-0">
+                    <Sparkles className="h-5 w-5 text-brand-600 dark:text-brand-400" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                        {t("home.onboarding.chat.title")}
+                      </span>
+                      <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-brand-500/15 text-brand-700 dark:text-brand-300 font-semibold">
+                        {t("home.onboarding.chat.badge")}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-0.5 leading-relaxed">
+                      {t("home.onboarding.chat.desc")}
+                    </p>
+                  </div>
+                  <ArrowRight className="h-4 w-4 text-brand-500 dark:text-brand-400 shrink-0 group-hover:translate-x-0.5 transition-transform" />
+                </div>
+              </Link>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <Link href="/profile" className="block group">
                   <div className="rounded-md border border-black/5 dark:border-white/5 bg-black/[0.02] dark:bg-white/[0.02] p-3 hover:border-brand-500/30 hover:bg-brand-500/[0.03] transition-colors">

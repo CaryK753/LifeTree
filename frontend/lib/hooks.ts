@@ -124,6 +124,18 @@ export function useSettings() {
   return useSWR("settings", () => api.getSettings(), swrConfig);
 }
 
+export function useRuntimeCatalog() {
+  return useSWR("runtime-catalog", () => api.getRuntimeCatalog(), swrConfig);
+}
+
+export function useMcpServers() {
+  return useSWR("mcp-servers", () => api.listMcpServers(), swrConfig);
+}
+
+export function useUserSkills() {
+  return useSWR("user-skills", () => api.listSkills(), swrConfig);
+}
+
 export function useSystemComponents() {
   return useSWR("system-components", () => api.getSystemComponents(), swrConfig);
 }
@@ -158,24 +170,14 @@ export function useUserProfile(id?: string) {
 /**
  * useAuth: current user state + login/register/logout actions.
  *
- * Always fetches ``GET /auth/me`` via SWR — in single-user mode the backend
- * returns the default-user fallback (with admin role) even without a token,
- * so the frontend can show the correct user info, admin nav, and profile.
- * In multi-user mode without a token, the backend returns 401 and we
- * resolve to ``null``.
- *
- * Distinction between ``isAuthenticated`` and ``user``:
- *   - ``user``: the current user identity (from token OR default fallback).
- *     Available in both single and multi mode. Use this for profile/admin
- *     UI that should be visible to the default user in single mode.
- *   - ``isAuthenticated``: true only when the user has explicitly logged
- *     in (has a token). Use this for logout buttons and other token-gated
- *     UI that shouldn't appear for the anonymous default user.
+ * Fetches ``GET /auth/me`` only when an access token exists. Both runtime
+ * modes require login, so anonymous polling would only produce repeated 401s.
  *
  * The token is refreshed automatically by the ``request()`` helper in
  * lib/api.ts when an API call returns 401.
  */
-export function useAuth() {
+export function useAuth(options: { loadAnonymousUser?: boolean } = {}) {
+  const { loadAnonymousUser = false } = options;
   const hasToken = typeof window !== "undefined" && !!getAccessToken();
   const {
     data: user,
@@ -183,7 +185,7 @@ export function useAuth() {
     isLoading,
     mutate,
   } = useSWR<UserProfileRead | null>(
-    "auth-me",
+    hasToken || loadAnonymousUser ? "auth-me" : null,
     () => api.getMe().catch(() => null),
     { ...swrConfig, shouldRetryOnError: false }
   );
@@ -195,11 +197,17 @@ export function useAuth() {
     return res.user;
   }
 
-  async function register(displayName: string, email: string, password: string) {
+  async function register(
+    displayName: string,
+    email: string,
+    password: string,
+    legalConsent: import("./api").LegalConsentRequest
+  ) {
     const res = await api.register({
       display_name: displayName,
       email,
       password,
+      ...legalConsent,
     });
     setTokens(res.access_token, res.refresh_token);
     await mutate(res.user, { revalidate: false });
@@ -233,12 +241,9 @@ export function useAuth() {
   return {
     user,
     error,
-    // Only show the loading overlay when verifying a token — in single
-    // mode (no token) the default user loads silently without a flash.
+    // Only show the loading overlay when verifying a token.
     isLoading: hasToken && isLoading,
-    // True only when the user has explicitly logged in (has a token).
-    // The default-user fallback in single mode does NOT count as
-    // "authenticated" — there's no token to clear, so no logout button.
+    // True only when a token resolves to a real account.
     isAuthenticated: hasToken && !!user,
     isAdmin: user?.role === "admin",
     login,

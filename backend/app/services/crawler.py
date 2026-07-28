@@ -48,11 +48,11 @@ class ExtractResult:
 class CrawlerService:
     """Thin wrapper around the Tavily search / extract / crawl APIs."""
 
-    def __init__(self) -> None:
+    def __init__(self, api_key: str | None = None) -> None:
         # Read the key fresh on each construction so settings updates in the
         # UI take effect without a process restart. CrawlerService instances
         # are short-lived (one per request) so this is cheap.
-        self._api_key = get_tavily_key()
+        self._api_key = api_key if api_key is not None else get_tavily_key()
 
     @property
     def available(self) -> bool:
@@ -246,4 +246,3 @@ class CrawlerService:
             )
         log.info("crawler.crawl_ok", url=base_url, n=len(out))
         return out
-

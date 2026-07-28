@@ -17,7 +17,20 @@ export function RegisterSW() {
 
     const isDev = process.env.NODE_ENV === "development";
     const enableInDev = process.env.NEXT_PUBLIC_SW_DEV === "1";
-    if (isDev && !enableInDev) return;
+    if (isDev && !enableInDev) {
+      // A worker installed by an earlier production preview can keep serving
+      // stale Next chunks even though dev registration is disabled. Remove it
+      // and reload once so the current tab is no longer controlled.
+      navigator.serviceWorker.getRegistrations().then(async (registrations) => {
+        const results = await Promise.all(
+          registrations.map((registration) => registration.unregister())
+        );
+        if (results.some(Boolean) && navigator.serviceWorker.controller) {
+          window.location.reload();
+        }
+      });
+      return;
+    }
 
     const register = () => {
       navigator.serviceWorker

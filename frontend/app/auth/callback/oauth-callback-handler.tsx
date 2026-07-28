@@ -30,7 +30,7 @@ export function OAuthCallbackHandler({ provider }: { provider: string }) {
   const params = useSearchParams();
   const t = useT();
   const toast = useToast();
-  const { loginWithOAuth } = useAuth();
+  const { loginWithOAuth } = useAuth({ loadAnonymousUser: false });
   const [error, setError] = useState<string | null>(null);
   const ranRef = useRef(false);
 

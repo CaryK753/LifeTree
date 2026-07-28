@@ -57,4 +57,12 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.dispatch_pending_notifications",
         "schedule": crontab(minute="*/5"),
     },
+    # Check for sources due for auto-refresh every minute.
+    # Each source's refresh_interval_minutes (default 1440 = 24h, user-
+    # configurable down to 1 minute) controls how often that individual
+    # source is re-fetched. The task checks next_refresh_at <= now.
+    "refresh-due-sources": {
+        "task": "app.workers.tasks.refresh_due_sources",
+        "schedule": crontab(minute="*"),
+    },
 }

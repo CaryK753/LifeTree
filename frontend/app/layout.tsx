@@ -4,7 +4,6 @@ import { cookies } from "next/headers";
 import "./globals.css";
 import { ToastProvider } from "@/components/ui/toast";
 import { RegisterSW } from "@/components/pwa/register-sw";
-import { SSEProvider } from "@/components/sse/sse-provider";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 import { AppShell } from "@/components/layout/app-shell";
 import { I18nProvider } from "@/lib/i18n/provider";
@@ -106,10 +105,8 @@ export default async function RootLayout({
         <ThemeProvider>
           <I18nProvider>
             <ToastProvider>
-              <SSEProvider>
-                <AppShell>{children}</AppShell>
-                <RegisterSW />
-              </SSEProvider>
+              <AppShell>{children}</AppShell>
+              <RegisterSW />
             </ToastProvider>
           </I18nProvider>
         </ThemeProvider>

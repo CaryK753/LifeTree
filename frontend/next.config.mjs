@@ -7,13 +7,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const nextConfig = {
   reactStrictMode: true,
   output: "standalone",
-  // The cytoscape-fcose type definitions bundle a conflicting version of
-  // @types/cytoscape, causing irreducible type errors in knowledge-graph.tsx.
-  // These are dependency-level conflicts, not code bugs. Type checking is
-  // still available via `npm run type-check` (tsc --noEmit) in local dev.
-  typescript: {
-    ignoreBuildErrors: true,
-  },
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   turbopack: {
     root: __dirname,
   },

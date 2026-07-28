@@ -278,7 +278,7 @@ LifeTree 是 **一款专注于中长期个人决策的智能信息系统**。它
 ### 7.3 后端架构设计
 
 - **API 层**：FastAPI 提供 19 个路由模块的 RESTful API 和 SSE 端点（实时风险推送 + 模拟进度 + 聊天流）。
-- **AI 顾问（chat）**：基于 LangGraph `create_react_agent` 的 ReAct Agent，通过 `astream_events` v2 流式输出。注册 14 个工具：
+- **智能助手（chat）**：基于 LangGraph `create_react_agent` 的 ReAct Agent，通过 `astream_events` v2 流式输出。注册 14 个工具：
   - **读取**：`list_pathways` / `list_requirements` / `list_risk_factors` / `list_recent_events` / `get_scenario_summary` / `list_memories`
   - **写入**：`create_goal` / `create_pathway` / `create_requirement` / `update_requirement_status` / `create_risk_factor` / `create_scenario_branch` / `remember` / `forget` / `update_user_profile` / `add_user_source`
   - **执行**：`run_scenario_reasoning`
@@ -330,7 +330,7 @@ LifeTree 是 **一款专注于中长期个人决策的智能信息系统**。它
 6. 异步触发 `reasoning_engine` 重算受影响目标的风险分与归因瀑布。
 
 **用户互动与推演流**：
-1. 用户通过 AI 顾问提问或点击“推演” → 请求到 FastAPI。
+1. 用户通过 智能助手提问或点击“推演” → 请求到 FastAPI。
 2. API 创建情景分支 → 在 Neo4j 中复制并修改相关节点。
 3. 发送任务到 Celery 执行蒙特卡洛/贝叶斯推理。
 4. 前端通过 SSE 或轮询获取计算进度和结果 → 在情景面板中对比（Diff View）。
@@ -498,7 +498,7 @@ LifeTree 是 **一款专注于中长期个人决策的智能信息系统**。它
 | /dashboard | 目标罗盘（含风险热力图/生存曲线/因子分解/无悔行动/里程碑） | ✅ |
 | /goals + /goals/[id] | 目标管理 + 详情 | ✅ |
 | /scenarios | 情景对比（树/网格/对比三视图 + 概率曲线 overlay） | ✅ |
-| /chat | AI 顾问对话（SSE 流式 + Tool Call UI + 历史侧边栏） | ✅ |
+| /chat | 智能助手对话（SSE 流式 + Tool Call UI + 历史侧边栏） | ✅ |
 | /sources | 信息源管理（含 DELETE + 确认弹窗） | ✅ |
 | /notifications | 通知中心（severity/read 筛选） | ✅ |
 | /profile | 用户画像（含 MemoryBoard + Passkey 绑定 + OAuth 绑定） | ✅ |
@@ -518,7 +518,7 @@ LifeTree 是 **一款专注于中长期个人决策的智能信息系统**。它
 | 风险预警 | email/in_app/sms(stub)/push + SSE + SMTP(SSL/STARTTLS) + 6h 冷却 + 安静时段 + Cruising Mode | ✅ |
 | 结构化管道 | Instructor + Pydantic + sha256 去重 + 三态置信度分层 + Vector(1536) 嵌入 + 半衰期管理 | ✅ |
 | 用户画像 | 完整字段 + ProfilingService 自动 refresh + 记忆板 + lifecycle_stage + joint_profiles | ✅ |
-| AI 顾问 | LangGraph ReAct + 14 工具 + 100k token 截断 + 多样性记忆选取 + Tool Call 透明卡片 | ✅ |
+| 智能助手 | LangGraph ReAct + 14 工具 + 100k token 截断 + 多样性记忆选取 + Tool Call 透明卡片 | ✅ |
 | 蒙特卡洛/贝叶斯 | scenario_runs 表 + engine 类型字段（已搭骨架，深度模拟算法待业务校准） | 🟡 部分实现 |
 
 ### 10.4 部署与运维落地状态

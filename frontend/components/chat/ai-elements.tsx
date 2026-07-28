@@ -8,6 +8,20 @@ import {
   XCircle,
   Loader2,
   Wrench,
+  UserCheck,
+  GitBranch,
+  Target,
+  Route,
+  CheckCircle,
+  Paperclip,
+  Brain,
+  Network,
+  ShieldAlert,
+  Search,
+  Globe,
+  ListChecks,
+  History,
+  type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Markdown } from "@/components/chat/markdown";
@@ -15,17 +29,20 @@ import { useT } from "@/lib/i18n/provider";
 import type { ToolCall } from "@/lib/chat-store";
 
 /**
- * Vercel AI SDK-style elements, adapted to our existing design tokens.
+ * Tool invocation card — renders a single tool call with its args/result.
  *
- * These components are intentionally framework-agnostic and reusable:
- *   - <ToolInvocation> — single tool call with args/result
- *   - <ToolInvocations> — vertical list of tool calls
+ * Icon strategy: each tool maps to a lucide icon (no emojis). The icon
+ * serves double duty: it identifies the tool type at a glance and, for
+ * sync cards, replaces the previous emoji prefix on the label.
  *
- * Each component is a controlled component — the parent owns the state.
- * Streaming-friendly: pass `isRunning={true}` while a tool is in flight.
+ * Failure detection: a tool is considered failed if either:
+ *   - `tool.error` is set (streaming protocol explicitly signaled failure), or
+ *   - `tool.result` is a dict containing an `error` key (backend convention:
+ *     tools return `{"error": "..."}` on failure rather than raising).
+ * When failed, the card shows a red X icon + "failed" status. The error
+ * detail is shown in the expanded section, and the result (if any) is
+ * hidden — the user sees the failure, not the raw payload.
  */
-
-// ---------- Tool invocation ----------
 
 function isPrimitive(value: unknown): boolean {
   return (
@@ -50,55 +67,133 @@ function formatValue(value: unknown, maxLen = 200): string {
   }
 }
 
+/** Detect failure from result shape: backend tools return {"error": ...}. */
+function resultIsError(result: unknown): boolean {
+  if (result && typeof result === "object" && "error" in result) {
+    const v = (result as Record<string, unknown>).error;
+    return typeof v === "string" && v.length > 0;
+  }
+  return false;
+}
+
+interface ToolMeta {
+  icon: LucideIcon;
+  /** i18n key for the label. If absent, tool.name is shown as-is. */
+  labelKey?: string;
+  color?: string;
+}
+
+const TOOL_META: Record<string, ToolMeta> = {
+  update_user_profile: {
+    icon: UserCheck,
+    labelKey: "chat.tool.label.update_user_profile",
+    color: "border-brand-500/30 bg-brand-500/[0.08] text-brand-300",
+  },
+  create_scenario_branch: {
+    icon: GitBranch,
+    labelKey: "chat.tool.label.create_scenario_branch",
+    color: "border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-300",
+  },
+  create_goal: {
+    icon: Target,
+    labelKey: "chat.tool.label.create_goal",
+    color: "border-amber-500/30 bg-amber-500/[0.08] text-amber-300",
+  },
+  create_pathway: {
+    icon: Route,
+    labelKey: "chat.tool.label.create_pathway",
+    color: "border-sky-500/30 bg-sky-500/[0.08] text-sky-300",
+  },
+  update_requirement_status: {
+    icon: CheckCircle,
+    labelKey: "chat.tool.label.update_requirement_status",
+    color: "border-teal-500/30 bg-teal-500/[0.08] text-teal-300",
+  },
+  add_user_source: {
+    icon: Paperclip,
+    labelKey: "chat.tool.label.add_user_source",
+    color: "border-indigo-500/30 bg-indigo-500/[0.08] text-indigo-300",
+  },
+  create_requirement: {
+    icon: ListChecks,
+    labelKey: "chat.tool.label.create_requirement",
+    color: "border-sky-500/30 bg-sky-500/[0.08] text-sky-300",
+  },
+  create_risk_factor: {
+    icon: ShieldAlert,
+    labelKey: "chat.tool.label.create_risk_factor",
+    color: "border-red-500/30 bg-red-500/[0.08] text-red-300",
+  },
+  remember: {
+    icon: Brain,
+    labelKey: "chat.tool.label.remember",
+    color: "border-violet-500/30 bg-violet-500/[0.08] text-violet-300",
+  },
+  forget: {
+    icon: Brain,
+    labelKey: "chat.tool.label.forget",
+    color: "border-violet-500/30 bg-violet-500/[0.08] text-violet-300",
+  },
+  list_memories: {
+    icon: Brain,
+    labelKey: "chat.tool.label.list_memories",
+    color: "border-violet-500/30 bg-violet-500/[0.08] text-violet-300",
+  },
+  run_scenario_reasoning: {
+    icon: Brain,
+    labelKey: "chat.tool.label.run_scenario_reasoning",
+    color: "border-purple-500/30 bg-purple-500/[0.08] text-purple-300",
+  },
+  list_pathways: {
+    icon: Route,
+    labelKey: "chat.tool.label.list_pathways",
+  },
+  list_requirements: {
+    icon: ListChecks,
+    labelKey: "chat.tool.label.list_requirements",
+  },
+  list_risk_factors: {
+    icon: ShieldAlert,
+    labelKey: "chat.tool.label.list_risk_factors",
+  },
+  list_recent_events: {
+    icon: History,
+    labelKey: "chat.tool.label.list_recent_events",
+  },
+  get_scenario_summary: {
+    icon: Network,
+    labelKey: "chat.tool.label.get_scenario_summary",
+  },
+  web_search: {
+    icon: Search,
+    labelKey: "chat.tool.label.web_search",
+  },
+  web_fetch: {
+    icon: Globe,
+    labelKey: "chat.tool.label.web_fetch",
+  },
+};
+
+const DEFAULT_META: ToolMeta = { icon: Wrench };
+
 export function ToolInvocation({ tool }: { tool: ToolCall }) {
   const t = useT();
   const [open, setOpen] = useState(false);
 
+  const resultHasError = resultIsError(tool.result);
+  const failed = !!tool.error || resultHasError;
   const running = !tool.endedAt && tool.result === null && !tool.error;
-  const failed = !!tool.error;
   const done = !!tool.endedAt && !failed;
 
-  // Conversational Graph Building sync card labels
-  const syncCards: Record<string, { label: string; icon: string; color: string }> = {
-    update_user_profile: {
-      label: "💡 画像与进度已同步更新",
-      icon: "UserCheck",
-      color: "border-brand-500/30 bg-brand-500/[0.08] text-brand-300",
-    },
-    create_scenario_branch: {
-      label: "🌿 平行推演分支已创建",
-      icon: "GitBranch",
-      color: "border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-300",
-    },
-    create_goal: {
-      label: "🎯 决策目标实体已建立",
-      icon: "Target",
-      color: "border-amber-500/30 bg-amber-500/[0.08] text-amber-300",
-    },
-    create_pathway: {
-      label: "🛣️ 实施路径实体已关联",
-      icon: "Route",
-      color: "border-sky-500/30 bg-sky-500/[0.08] text-sky-300",
-    },
-    update_requirement_status: {
-      label: "✅ 达标节点已点亮",
-      icon: "CheckCircle",
-      color: "border-teal-500/30 bg-teal-500/[0.08] text-teal-300",
-    },
-    add_user_source: {
-      label: "📎 信源已记录并排队验真",
-      icon: "Paperclip",
-      color: "border-indigo-500/30 bg-indigo-500/[0.08] text-indigo-300",
-    },
-  };
-
-  const syncMeta = syncCards[tool.name];
+  const meta = TOOL_META[tool.name] ?? DEFAULT_META;
+  const ToolIcon = meta.icon;
+  const label = meta.labelKey ? t(meta.labelKey) : tool.name;
 
   return (
     <div
       className={cn(
         "rounded-md border my-1.5 text-xs overflow-hidden transition-all",
-        syncMeta ? syncMeta.color : "border-white/10 bg-white/[0.02]"
+        meta.color ?? "border-white/10 bg-white/[0.02]"
       )}
     >
       <button
@@ -111,17 +206,16 @@ export function ToolInvocation({ tool }: { tool: ToolCall }) {
         ) : (
           <ChevronRight className="h-3 w-3 text-zinc-500 shrink-0" />
         )}
+        <ToolIcon className="h-3.5 w-3.5 shrink-0 opacity-80" />
         {running ? (
           <Loader2 className="h-3 w-3 text-brand-300 animate-spin shrink-0" />
         ) : failed ? (
           <XCircle className="h-3 w-3 text-red-400 shrink-0" />
         ) : done ? (
           <CheckCircle2 className="h-3 w-3 text-emerald-400 shrink-0" />
-        ) : (
-          <Wrench className="h-3 w-3 text-zinc-400 shrink-0" />
-        )}
+        ) : null}
         <span className="font-mono truncate font-medium">
-          {syncMeta ? syncMeta.label : tool.name}
+          {label}
         </span>
         <span className="text-[10px] text-zinc-400 shrink-0 ml-auto">
           {running
@@ -145,7 +239,9 @@ export function ToolInvocation({ tool }: { tool: ToolCall }) {
               </pre>
             </div>
           )}
-          {tool.result !== null && (
+          {/* Show result only when it's not an error payload (errors
+              are displayed in the dedicated error block below). */}
+          {tool.result !== null && !resultHasError && (
             <div>
               <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">
                 {t("chat.tool.result")}
@@ -155,13 +251,20 @@ export function ToolInvocation({ tool }: { tool: ToolCall }) {
               </pre>
             </div>
           )}
-          {tool.error && (
+          {failed && (
             <div>
               <div className="text-[10px] uppercase tracking-wider text-red-400 mb-0.5">
                 {t("chat.tool.failed")}
               </div>
               <pre className="text-[11px] text-red-300 font-mono whitespace-pre-wrap break-words">
-                {tool.error}
+                {tool.error ||
+                  (tool.result &&
+                  typeof tool.result === "object" &&
+                  "error" in tool.result
+                    ? String(
+                        (tool.result as Record<string, unknown>).error
+                      )
+                    : t("chat.tool.failed"))}
               </pre>
             </div>
           )}

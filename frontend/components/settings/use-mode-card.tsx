@@ -3,9 +3,7 @@
 /**
  * UseModeCard — toggle between single-user and multi-user mode.
  *
- * In single-user mode anyone (including the default-user fallback) can
- * switch — there's only one user, so they're effectively the admin. In
- * multi-user mode only admins can switch.
+ * Both modes require a registered administrator to switch.
  *
  * Lives on the /admin page alongside other platform-level configuration
  * (providers, models, SMTP, OAuth providers, auth settings).
@@ -37,7 +35,7 @@ export function UseModeCard() {
   const [switching, setSwitching] = useState<"single" | "multi" | null>(null);
 
   const currentMode = authConfig?.use_mode ?? "single";
-  const canSwitch = isAdmin || currentMode === "single";
+  const canSwitch = isAdmin;
 
   async function handleSwitch(target: "single" | "multi") {
     if (target === currentMode) return;

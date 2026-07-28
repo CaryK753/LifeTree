@@ -47,7 +47,7 @@
       "icons": [{ "src": "/media/icon-192.png", "sizes": "192x192" }]
     },
     {
-      "name": "AI 顾问",
+      "name": "智能助手",
       "short_name": "对话",
       "description": "与 AI 决策顾问对话，自动更新画像",
       "url": "/chat",

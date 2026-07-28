@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { api, streamChat } from "@/lib/api";
 import { useT } from "@/lib/i18n/provider";
-import { useUserProfile, useSettings } from "@/lib/hooks";
+import { useRuntimeCatalog, useUserProfile } from "@/lib/hooks";
 import { useToast } from "@/components/ui/toast";
 import {
   Dialog,
@@ -74,18 +74,19 @@ interface Attachment {
 interface Props {
   goalId?: string;
   scenarioId?: string;
+  modelId?: string;
 }
 
 function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-export function ChatPanel({ goalId, scenarioId }: Props) {
+export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
   const t = useT();
   const state = useChatStore(); // re-renders on store changes
   const activeConv = getActiveConversation();
   const { data: userProfile } = useUserProfile();
-  const { data: settings } = useSettings();
+  const { data: settings } = useRuntimeCatalog();
   const userAvatarUrl = (userProfile as { avatar_url?: string | null } | undefined)?.avatar_url ?? null;
   const toast = useToast();
 
@@ -93,7 +94,7 @@ export function ChatPanel({ goalId, scenarioId }: Props) {
   // brand icon (e.g. DeepSeek, OpenAI, Anthropic) as the AI avatar instead
   // of a generic sparkles icon.
   const chatModelInfo = useMemo(() => {
-    const chatModelId = settings?.role_assignments?.["chat"];
+    const chatModelId = modelId ?? settings?.role_assignments?.["chat"];
     const chatModel = settings?.models?.find((m) => m.id === chatModelId);
     const chatProvider = chatModel
       ? settings?.providers?.find((p) => p.id === chatModel.provider_id)
@@ -102,7 +103,7 @@ export function ChatPanel({ goalId, scenarioId }: Props) {
       protocol: chatProvider?.protocol as string | undefined,
       name: chatModel?.name as string | undefined,
     };
-  }, [settings]);
+  }, [modelId, settings]);
 
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -304,6 +305,7 @@ export function ChatPanel({ goalId, scenarioId }: Props) {
         {
           goal_id: goalId,
           scenario_id: scenarioId,
+          model_id: modelId,
           messages: apiMessages,
         },
         controller.signal
@@ -790,7 +792,7 @@ function EmptyState({
       <p className="text-xs text-zinc-500 mt-1 max-w-md">
         {t("chat.empty.subtitle")}
       </p>
-      {/* Capabilities hint — tells the user what the AI advisor can
+      {/* Capabilities hint — tells the user what the intelligent assistant can
           actually do, so they don't have to guess. */}
       <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-3 max-w-lg leading-relaxed">
         {t("chat.empty.capabilities")}

@@ -5,7 +5,12 @@ export function Card({
   className,
   ...props
 }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("surface surface-hover p-5", className)} {...props} />;
+  return (
+    <div
+      className={cn("surface surface-hover min-w-0 p-4 sm:p-5", className)}
+      {...props}
+    />
+  );
 }
 
 export function CardHeader({
@@ -14,7 +19,7 @@ export function CardHeader({
 }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn("mb-3 flex items-start justify-between gap-3", className)}
+      className={cn("mb-3 flex min-w-0 items-start justify-between gap-3", className)}
       {...props}
     />
   );
@@ -26,7 +31,7 @@ export function CardTitle({
 }: React.HTMLAttributes<HTMLHeadingElement>) {
   return (
     <h3
-      className={cn("text-base font-semibold tracking-tight text-zinc-100", className)}
+      className={cn("min-w-0 break-words text-base font-semibold tracking-normal text-zinc-100", className)}
       {...props}
     />
   );
@@ -37,7 +42,7 @@ export function CardDescription({
   ...props
 }: React.HTMLAttributes<HTMLParagraphElement>) {
   return (
-    <p className={cn("text-xs text-zinc-400 mt-1", className)} {...props} />
+    <p className={cn("mt-1 min-w-0 break-words text-xs text-zinc-400", className)} {...props} />
   );
 }
 
@@ -45,7 +50,7 @@ export function CardContent({
   className,
   ...props
 }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("space-y-3", className)} {...props} />;
+  return <div className={cn("min-w-0 space-y-3", className)} {...props} />;
 }
 
 export function CardFooter({

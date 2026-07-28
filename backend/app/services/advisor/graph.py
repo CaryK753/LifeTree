@@ -26,7 +26,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
 from app.core.logging import get_logger
-from app.llm.client import get_chat_model
+from app.llm.registry import ResolvedModel
 
 from .state import AdvisorState
 
@@ -126,9 +126,8 @@ bullet points. Avoid filler.
 """
 
 
-def _build_llm() -> ChatOpenAI:
+def _build_llm(resolved: ResolvedModel) -> ChatOpenAI:
     """Construct the ChatOpenAI model from the configured chat role."""
-    resolved = get_chat_model()
     return ChatOpenAI(
         model=resolved.model.name,
         api_key=resolved.provider.api_key or "missing",
@@ -142,6 +141,7 @@ def build_advisor_graph(
     *,
     tools: list[BaseTool],
     context_block: str,
+    resolved_model: ResolvedModel,
 ) -> Any:
     """Build a per-request ReAct agent.
 
@@ -155,7 +155,7 @@ def build_advisor_graph(
         A compiled LangGraph ``CompiledStateGraph`` ready to ``ainvoke`` or
         ``astream``.
     """
-    llm = _build_llm()
+    llm = _build_llm(resolved_model)
     system_content = f"{SYSTEM_PROMPT}\n\n# Context\n{context_block}"
 
     # create_react_agent accepts a system message via the ``prompt`` kwarg

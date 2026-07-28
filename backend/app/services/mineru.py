@@ -85,7 +85,14 @@ def is_supported(filename: str) -> bool:
     return Path(filename).suffix.lower() in SUPPORTED_FILE_TYPES
 
 
-def parse_file(file_bytes: bytes, filename: str, *, title: str | None = None) -> ParsedDocument:
+def parse_file(
+    file_bytes: bytes,
+    filename: str,
+    *,
+    title: str | None = None,
+    api_key_override: str | None = None,
+    base_url_override: str | None = None,
+) -> ParsedDocument:
     """Parse a file into Markdown text.
 
     Decision tree:
@@ -107,7 +114,9 @@ def parse_file(file_bytes: bytes, filename: str, *, title: str | None = None) ->
         return ParsedDocument(text=text, title=base_title, parser="plaintext")
 
     # 2. Mineru path
-    api_key, base_url = get_mineru_config()
+    global_api_key, global_base_url = get_mineru_config()
+    api_key = api_key_override or global_api_key
+    base_url = base_url_override or global_base_url
     if not api_key:
         return ParsedDocument(
             text="",

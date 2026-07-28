@@ -37,6 +37,7 @@ import {
   Clock,
   ChevronRight,
   Moon,
+  Sparkles,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatPercent, formatDate } from "@/lib/utils";
@@ -50,6 +51,7 @@ interface Props {
   onClose?: () => void;
   onRerun?: () => void;
   onBranched?: () => void;
+  onEvolve?: () => void;
 }
 
 export function ScenarioDetailPanel({
@@ -58,6 +60,7 @@ export function ScenarioDetailPanel({
   onClose,
   onRerun,
   onBranched,
+  onEvolve,
 }: Props) {
   const t = useT();
   const toast = useToast();
@@ -274,7 +277,7 @@ export function ScenarioDetailPanel({
       </CardContent>
 
       {/* Footer actions */}
-      <div className="shrink-0 pt-3 border-t border-white/5 flex items-center gap-2 px-4 pb-4">
+      <div className="shrink-0 pt-3 border-t border-white/5 flex items-center gap-2 px-4 pb-4 flex-wrap">
         <Button
           variant="outline"
           size="sm"
@@ -305,6 +308,18 @@ export function ScenarioDetailPanel({
           <GitBranch className="h-3 w-3" />
           <span className="ml-1">{t("scenarioComparison.branch")}</span>
         </Button>
+        {onEvolve && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onEvolve}
+            className="text-brand-600 dark:text-brand-400 hover:text-brand-700 dark:hover:text-brand-300"
+            title={t("scenarioEvolution.detailBtn")}
+          >
+            <Sparkles className="h-3 w-3" />
+            <span className="ml-1">{t("scenarioEvolution.detailBtn")}</span>
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="sm"

@@ -7,6 +7,8 @@ back to the default user, so behavior is unchanged.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,6 +18,7 @@ from app.db.postgres import get_db
 from app.models.goal import Goal
 from app.models.scenario import Scenario, ScenarioRun
 from app.schemas.api import (
+    EvolutionProjectionRead,
     ScenarioCreate,
     ScenarioRead,
     ScenarioRunRead,
@@ -106,6 +109,64 @@ def run_reasoning(
 ) -> ScenarioRun:
     _verify_scenario_owner(scenario_id, user, db)
     return ScenarioService(db).run_reasoning(scenario_id)
+
+
+@router.post("/{scenario_id}/evolve", response_model=EvolutionProjectionRead)
+def evolve_scenario(
+    scenario_id: str, user: CurrentUser, db: Session = Depends(get_db)
+) -> EvolutionProjectionRead:
+    """Trigger LLM-driven self-evolution for a scenario.
+
+    Projects the next 24 months of events (milestones, risks, opportunities,
+    decisions) by calling the chat-role LLM with a structured-output schema.
+    The result is cached on ``scenario.meta["evolution"]`` so subsequent
+    reads are instant.
+    """
+    # Import inside the function to avoid a circular import at module load
+    # time: evolution.py imports models that import schemas indirectly.
+    from app.services.evolution import EvolutionService
+
+    scenario = _verify_scenario_owner(scenario_id, user, db)
+    result = EvolutionService(db).evolve(scenario, user)
+    proj = result["projection"]
+    return EvolutionProjectionRead(
+        summary=proj["summary"],
+        projected_events=proj["events"],
+        trajectory=result["trajectory"],
+        final_probability=proj["final_probability"],
+        confidence=proj["confidence"],
+        evolved_at=datetime.now(timezone.utc).isoformat(),
+        horizon_months=result["horizon_months"],
+        cached=False,
+    )
+
+
+@router.get("/{scenario_id}/evolve", response_model=EvolutionProjectionRead)
+def get_evolution(
+    scenario_id: str, user: CurrentUser, db: Session = Depends(get_db)
+) -> EvolutionProjectionRead:
+    """Return the cached evolution projection for a scenario.
+
+    Returns 404 if the scenario has never been evolved.
+    """
+    scenario = _verify_scenario_owner(scenario_id, user, db)
+    meta = dict(scenario.meta or {})
+    cached = meta.get("evolution")
+    if not cached:
+        raise HTTPException(
+            status_code=404,
+            detail="No evolution projection found. POST /scenarios/{id}/evolve to generate one.",
+        )
+    return EvolutionProjectionRead(
+        summary=cached.get("summary", ""),
+        projected_events=cached.get("projected_events", []),
+        trajectory=cached.get("trajectory", []),
+        final_probability=cached.get("final_probability", 0.0),
+        confidence=cached.get("confidence", 0.0),
+        evolved_at=cached.get("evolved_at"),
+        horizon_months=24,
+        cached=True,
+    )
 
 
 @router.get("/{scenario_id}/runs", response_model=list[ScenarioRunRead])

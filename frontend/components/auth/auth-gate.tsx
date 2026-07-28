@@ -14,13 +14,7 @@ import { Loader2 } from "lucide-react";
  *     yet. Redirect to ``/auth`` with ``?first_admin=1`` so the auth
  *     page shows the "create first admin" setup screen. The user can
  *     also switch to single mode from the auth page.
- *   - **Single-user mode** (``use_mode === "single"``, has users): the
- *     app runs without login. The backend serves data via the
- *     default-user fallback. Users who want a personal scope can still
- *     sign in via the user menu (which navigates to /auth).
- *   - **Multi-user mode** (``use_mode === "multi"``, has users): if not
- *     authenticated, redirect to ``/auth``. The auth page is
- *     non-dismissible — the user must authenticate.
+ *   - **Both runtime modes** require a registered, authenticated account.
  */
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, isLoading, isAuthenticated } = useAuth();
@@ -34,11 +28,6 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  // ``use_mode``: "single" (default, no login required) | "multi" (login required).
-  // ``multi_user_mode`` is kept as a legacy alias.
-  const useMode = authConfig?.use_mode ?? (authConfig?.multi_user_mode ? "multi" : "single");
-  const multiUserMode = useMode === "multi";
-
   // ``has_users``: False when no real users exist (excluding the default-user
   // fallback). The frontend redirects to /auth?first_admin=1 in that case.
   const hasUsers = authConfig?.has_users ?? true; // default true to avoid flashing setup on slow loads
@@ -46,7 +35,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   // Sync chat-store's user scope with the current user so conversations
   // are isolated per user in localStorage. When logged out, falls back
-  // to the "default" scope (single-user mode / default-user fallback).
+  // to an empty scope until authentication completes.
   useEffect(() => {
     setChatUserScope(user?.id ?? null);
   }, [user?.id]);
@@ -61,21 +50,19 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     if (isLoading || isAuthenticated) return;
     if (needsFirstAdmin) {
       router.replace("/auth?first_admin=1");
-    } else if (multiUserMode) {
+    } else {
       router.replace("/auth");
     }
-  }, [needsFirstAdmin, multiUserMode, isLoading, isAuthenticated, router]);
+  }, [needsFirstAdmin, isLoading, isAuthenticated, router]);
 
-  // In multi-user mode, hide the children entirely when the user is not
-  // authenticated. This prevents SWR hooks in protected pages from firing
+  // Hide children in both modes when the user is not authenticated. This
+  // prevents SWR hooks in protected pages from firing
   // API requests that the backend would 401 anyway, and avoids any chance
   // of stale default-user data leaking into the DOM while the redirect
   // to /auth is pending.
   //
-  // Single-user mode always renders children (default-user fallback is
-  // intended behaviour there). First-run setup also renders children so
-  // the page doesn't go blank before the redirect fires.
-  const renderChildren = !multiUserMode || isAuthenticated || needsFirstAdmin;
+  // First-run setup briefly keeps the shell mounted until redirect.
+  const renderChildren = isAuthenticated || needsFirstAdmin;
 
   return (
     <>

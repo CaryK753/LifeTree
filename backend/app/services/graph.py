@@ -69,8 +69,9 @@ SET s.kind = $kind, s.title = $title, s.credibility = $credibility
 
 LINK_EVENT_TO_RISK = """
 MATCH (e:Event {id: $event_id}), (rf:RiskFactor {id: $risk_id})
-MERGE (e)-[:AFFECTS]->(rf)
-SET e.weight = $weight
+MERGE (e)-[rel:AFFECTS]->(rf)
+SET rel.weight = $weight, rel.confidence = $confidence,
+    rel.updated_at = timestamp()
 """
 
 LINK_RISK_TO_PATHWAY = """
@@ -89,10 +90,12 @@ MERGE (p)-[:BELONGS_TO]->(sc)
 """
 
 PROPAGATE_RISK_FROM_EVENT = """
-MATCH (e:Event {id: $event_id})-[:AFFECTS]->(rf:RiskFactor)-[:AFFECTS*0..4]->(p:Pathway)<-[:HAS_PATHWAY]-(g:Goal)
+MATCH path=(e:Event {id: $event_id})-[:AFFECTS]->(rf:RiskFactor)-[:AFFECTS*0..4]->(p:Pathway)<-[:HAS_PATHWAY]-(g:Goal)
 RETURN DISTINCT g.id AS goal_id, g.title AS goal_title,
        p.id AS pathway_id, p.name AS pathway_name,
-       rf.id AS risk_id, rf.name AS risk_name, rf.level AS level
+       rf.id AS risk_id, rf.name AS risk_name, rf.level AS level,
+       [rel IN relationships(path) | coalesce(rel.weight, 0.0)] AS path_weights,
+       [rel IN relationships(path) | coalesce(rel.confidence, 0.5)] AS path_confidences
 ORDER BY g.id, rf.level DESC
 """
 
@@ -211,13 +214,20 @@ class GraphService:
         except Exception as exc:  # noqa: BLE001
             log.warning("graph.upsert_event_failed", error=str(exc))
 
-    def link_event_to_risk(self, event_id: str, risk_id: str, weight: float = 0.0) -> None:
+    def link_event_to_risk(
+        self,
+        event_id: str,
+        risk_id: str,
+        weight: float = 0.0,
+        confidence: float = 0.5,
+    ) -> None:
         try:
             self._run(
                 LINK_EVENT_TO_RISK,
                 event_id=event_id,
                 risk_id=risk_id,
                 weight=weight,
+                confidence=confidence,
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("graph.link_event_risk_failed", error=str(exc))

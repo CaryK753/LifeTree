@@ -45,7 +45,7 @@ Schema (v1):
     }
 
 Roles:
-    - ``chat`` — AI advisor conversation + structured extraction
+    - ``chat`` — intelligent assistant conversation + structured extraction
     - ``vision`` — image / document analysis
     - ``embedding`` — semantic search vectors
     - ``rerank`` — second-stage reranking for retrieval (Bailian / Cohere style)
@@ -75,7 +75,7 @@ log = get_logger(__name__)
 
 # ---------- Types ----------
 
-Protocol = Literal["openai_compatible", "anthropic", "bailian", "bailian_rerank"]
+Protocol = Literal["openai_compatible", "ollama", "anthropic", "bailian", "bailian_rerank"]
 Role = Literal["chat", "vision", "embedding", "rerank"]
 ALL_ROLES: tuple[Role, ...] = ("chat", "vision", "embedding", "rerank")
 
@@ -1144,8 +1144,8 @@ def get_use_mode() -> str:
 def set_use_mode(mode: str) -> None:
     """Switch the usage mode at runtime (admin only).
 
-    ``"single"``: no login required, default-user fallback enabled.
-    ``"multi"``: login required, multi-user with admin promotion via env.
+    ``"single"``: login required, one-account registration policy.
+    ``"multi"``: login required, isolated multi-user deployment.
     """
     if mode not in ("single", "multi"):
         raise ValueError(f"use_mode must be 'single' or 'multi', got {mode!r}")
