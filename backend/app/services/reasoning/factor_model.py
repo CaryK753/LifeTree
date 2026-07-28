@@ -34,12 +34,25 @@ def correlated_risk_survival(
     *,
     axis: int | None = None,
 ) -> np.ndarray | float:
-    """Combine hazards while tempering the false independence assumption."""
+    """Combine hazards while tempering the false independence assumption.
+
+    Uses a copula-style blend: the joint survival is a weighted average of
+    the product (full independence, pessimistic) and the minimum survival
+    (perfect correlation, optimistic). This prevents the product from
+    collapsing to near-zero when many risks are present.
+    """
     clipped = np.clip(survivals, 1e-3, 1.0)
     count = clipped.shape[axis] if axis is not None else clipped.size
-    exponent = 1.0 / math.sqrt(max(1, count))
+    if count <= 1:
+        result = np.prod(clipped, axis=axis)
+        return float(result) if axis is None else result
+    # Blend: 30% product (independence) + 70% geometric mean (correlation)
+    # The geometric mean (product^(1/N)) represents perfect correlation
+    # of identical risks — a reasonable upper bound for correlated risks.
     product = np.prod(clipped, axis=axis)
-    result = np.power(product, exponent)
+    gmean = np.power(product, 1.0 / count)
+    alpha = 0.3  # independence weight
+    result = alpha * product + (1.0 - alpha) * gmean
     return float(result) if axis is None else result
 
 

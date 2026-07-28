@@ -220,7 +220,7 @@ class ReasoningEngine:
                 | (RiskFactor.region.is_(None))
             )
         risk_factors = list(
-            self.db.scalars(rf_stmt.order_by(RiskFactor.level.desc()))
+            self.db.scalars(rf_stmt.order_by(RiskFactor.level.desc()).limit(5))
         )
 
         return pathway, requirements, risk_factors

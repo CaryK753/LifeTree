@@ -395,6 +395,14 @@ export default function SourcesPage() {
         </CardContent>
       </Card>
       {ConfirmRoot}
+      <SourceScheduleDialog
+        sourceId={scheduleSource?.id}
+        sourceTitle={scheduleSource?.title}
+        sourceUrl={scheduleSource?.url}
+        open={!!scheduleSource}
+        onOpenChange={(open) => !open && setScheduleSource(null)}
+        onUpdated={() => mutate()}
+      />
     </div>
   );
 }

@@ -122,11 +122,16 @@ class BayesianEstimator:
     # ---------------- Helpers ----------------
 
     def _req_success_prob(self, req: Requirement) -> float:
-        """P(user satisfies this requirement) based on gap_status."""
+        """P(user satisfies this requirement) based on gap_status.
+
+        "missing" means the user hasn't demonstrated it yet — uncertain,
+        not unlikely. The base reflects "could go either way if the user
+        works toward it", not a 20% coin flip.
+        """
         base = {
-            "met": 0.95,
-            "partial": 0.55,
-            "missing": 0.20,
+            "met": 0.92,
+            "partial": 0.60,
+            "missing": 0.40,
             "unknown": 0.50,
         }.get(req.gap_status, 0.5)
         # Weight: high-weight requirements matter more, so a missing
@@ -143,7 +148,7 @@ class BayesianEstimator:
         self, rf: RiskFactor, scenario: Scenario | None
     ) -> float:
         """P(this risk materializes and breaks the path)."""
-        level_to_p = {"low": 0.10, "medium": 0.30, "high": 0.60}
+        level_to_p = {"low": 0.08, "medium": 0.20, "high": 0.40}
         p = level_to_p.get(rf.level, 0.20)
         if rf.probability is not None:
             p = 0.5 * p + 0.5 * float(rf.probability)

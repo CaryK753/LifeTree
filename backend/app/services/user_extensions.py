@@ -107,17 +107,20 @@ async def _invoke_http(server: UserMCPServer, method: str, arguments: dict[str, 
         str(key): str(value) for key, value in (server.config.get("headers") or {}).items()
     }
     headers["Accept"] = "application/json, text/event-stream"
+    # User-defined extra body fields merged into every JSON-RPC request
+    extra_body = server.config.get("extra_body") or {}
     initialize = {
         "jsonrpc": "2.0", "id": "lifetree-init", "method": "initialize",
         "params": {
             "protocolVersion": "2025-03-26",
             "capabilities": {},
-            "clientInfo": {"name": "LifeTree", "version": "0.1.0"},
+            "clientInfo": {"name": "LifeTree", "version": "0.2.0"},
         },
+        **extra_body,
     }
     rpc_method = "tools/list" if method == "__list__" else "tools/call"
     params = {} if method == "__list__" else {"name": method, "arguments": arguments}
-    payload = {"jsonrpc": "2.0", "id": "lifetree-call", "method": rpc_method, "params": params}
+    payload = {"jsonrpc": "2.0", "id": "lifetree-call", "method": rpc_method, "params": params, **extra_body}
     async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
         initialized = await client.post(url, json=initialize, headers=headers)
         if initialized.is_error and server.protocol == "sse":

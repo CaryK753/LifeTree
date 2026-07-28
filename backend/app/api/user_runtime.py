@@ -63,6 +63,7 @@ class MCPCreate(BaseModel):
     command: str | None = Field(None, max_length=256)
     args: list[str] = Field(default_factory=list, max_length=32)
     headers: dict[str, str] = Field(default_factory=dict)
+    extra_body: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToggleUpdate(BaseModel):
@@ -168,7 +169,11 @@ def create_mcp(
     if payload.protocol == "stdio" and not payload.command:
         raise HTTPException(400, "Command is required for stdio MCP")
     config = (
-        {"url": str(payload.url), "headers": payload.headers}
+        {
+            "url": str(payload.url),
+            "headers": payload.headers,
+            "extra_body": payload.extra_body,
+        }
         if payload.protocol in {"http", "sse"}
         else {"command": payload.command, "args": payload.args}
     )

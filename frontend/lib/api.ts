@@ -1313,6 +1313,7 @@ export interface MCPServerCreate {
   command?: string;
   args?: string[];
   headers?: Record<string, string>;
+  extra_body?: Record<string, unknown>;
 }
 
 export interface UserSkillView {

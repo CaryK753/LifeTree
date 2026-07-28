@@ -122,12 +122,16 @@ def evolve_scenario(
     The result is cached on ``scenario.meta["evolution"]`` so subsequent
     reads are instant.
     """
-    # Import inside the function to avoid a circular import at module load
-    # time: evolution.py imports models that import schemas indirectly.
+    from app.core.exceptions import LifeTreeError
     from app.services.evolution import EvolutionService
 
     scenario = _verify_scenario_owner(scenario_id, user, db)
-    result = EvolutionService(db).evolve(scenario, user)
+    try:
+        result = EvolutionService(db).evolve(scenario, user)
+    except LifeTreeError:
+        raise  # domain errors (e.g. LLMNotConfiguredError) have proper status codes
+    except Exception as exc:
+        raise HTTPException(500, f"Evolution failed: {exc}") from exc
     proj = result["projection"]
     return EvolutionProjectionRead(
         summary=proj["summary"],

@@ -151,9 +151,7 @@ class EvolutionService:
             try:
                 instructor = get_instructor_sync()
             except LLMNotConfiguredError:
-                raise RuntimeError(
-                    "Chat model not configured. Assign a model to the 'chat' role in Settings."
-                )
+                raise  # propagate as 503 to the client
 
             # Instructor enforces the Pydantic schema — if the LLM returns
             # malformed JSON or missing fields, it retries automatically
