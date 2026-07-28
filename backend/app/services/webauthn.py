@@ -243,7 +243,11 @@ def verify_registration_response(
         # webauthn 3.0.0 renamed these fields:
         #   device_type → credential_device_type
         #   backed_up   → credential_backed_up
-        "device_type": str(verification.credential_device_type),
+        # Use .name (e.g. "SINGLE_DEVICE") instead of str() (which gives
+        # "CredentialDeviceType.SINGLE_DEVICE" — too long for the column).
+        "device_type": verification.credential_device_type.name
+        if verification.credential_device_type
+        else "MULTI_DEVICE",
         "backed_up": bool(verification.credential_backed_up),
         "nickname": nickname.strip()[:128] if nickname else "",
     }

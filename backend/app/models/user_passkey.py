@@ -55,7 +55,9 @@ class UserPasskey(UUIDPkMixin, Base):
     # attestation-less registrations.
     aaguid: Mapped[str] = mapped_column(String(64), default="00000000-0000-0000-0000-000000000000")
     # 'singleDevice' (device-bound) or 'multiDevice' (synced passkey).
-    device_type: Mapped[str] = mapped_column(String(32), default="multiDevice")
+    # webauthn 3.0.0 enum .name is "SINGLE_DEVICE" / "MULTI_DEVICE" (13 chars)
+    # but we use String(64) for headroom in case of future enum renames.
+    device_type: Mapped[str] = mapped_column(String(64), default="MULTI_DEVICE")
     # Backed up to a synced passkey provider (iCloud Keychain, Google
     # Password Manager, 1Password, …). FIDO "backed_up" flag.
     backed_up: Mapped[bool] = mapped_column(default=False)

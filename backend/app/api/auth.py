@@ -630,7 +630,11 @@ def oauth_callback(
     elif stored.startswith("register:"):
         oauth_mode = "register"
         stored_provider = stored[len("register:"):]
-        if stored_provider != provider_id:
+        # The callback may receive either the provider id (e.g.
+        # "o_c029be02c5d8") or the provider name (e.g. "github") in the
+        # URL path — the redirect_uri encodes the name. Compare against
+        # the resolved provider.id so both forms are accepted.
+        if stored_provider != provider_id and stored_provider != provider.id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="OAuth state provider mismatch",
@@ -638,7 +642,7 @@ def oauth_callback(
     elif stored.startswith("login:"):
         oauth_mode = "login"
         stored_provider = stored[len("login:"):]
-        if stored_provider != provider_id:
+        if stored_provider != provider_id and stored_provider != provider.id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="OAuth state provider mismatch",
@@ -646,7 +650,7 @@ def oauth_callback(
     else:
         # Legacy bare provider_id (no prefix) — treat as login.
         oauth_mode = "login"
-        if stored != provider_id:
+        if stored != provider_id and stored != provider.id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid OAuth state (provider mismatch)",
