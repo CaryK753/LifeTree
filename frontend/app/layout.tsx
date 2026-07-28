@@ -2,12 +2,11 @@ import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import { cookies } from "next/headers";
 import "./globals.css";
-import { Sidebar } from "@/components/layout/sidebar";
 import { ToastProvider } from "@/components/ui/toast";
 import { RegisterSW } from "@/components/pwa/register-sw";
 import { SSEProvider } from "@/components/sse/sse-provider";
 import { ThemeProvider } from "@/components/theme/theme-provider";
-import { AuthGate } from "@/components/auth/auth-gate";
+import { AppShell } from "@/components/layout/app-shell";
 import { I18nProvider } from "@/lib/i18n/provider";
 import {
   DEFAULT_LOCALE,
@@ -108,14 +107,7 @@ export default async function RootLayout({
           <I18nProvider>
             <ToastProvider>
               <SSEProvider>
-                <AuthGate>
-                  <div className="flex h-screen overflow-hidden">
-                    <Sidebar />
-                    <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden safe-top main-shell">
-                      {children}
-                    </main>
-                  </div>
-                </AuthGate>
+                <AppShell>{children}</AppShell>
                 <RegisterSW />
               </SSEProvider>
             </ToastProvider>

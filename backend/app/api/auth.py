@@ -770,13 +770,17 @@ def oauth_callback(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Email or OAuth identity already registered — log in instead",
             )
-        # Update avatar + external_id on each login (keeps them fresh).
+        # Update external_id if missing. Avatar and display_name are NOT
+        # overwritten on subsequent logins — once the user has customized
+        # their profile, OAuth providers shouldn't clobber it. Only fill
+        # them in when they're empty (first-time OAuth-created accounts
+        # that never set a custom avatar/name).
         if not user.external_id and external_sub:
             user.external_id = f"{provider_id}:{external_sub}"
         avatar = userinfo.get("avatar_url") or userinfo.get("picture")
-        if avatar and user.avatar_url != avatar:
+        if avatar and not user.avatar_url:
             user.avatar_url = avatar
-        if user.display_name != display_name and display_name:
+        if display_name and not user.display_name:
             user.display_name = str(display_name)[:128]
         # Make sure a link row exists (backfill for users created before
         # the user_oauth_links table existed).

@@ -1,36 +1,31 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth, useAuthConfig } from "@/lib/hooks";
-import { LoginDialog } from "@/components/auth/login-dialog";
 import { setChatUserScope } from "@/lib/chat-store";
-import { api } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 
 /**
- * AuthGate: wraps the app, shows a login dialog when unauthenticated.
+ * AuthGate: wraps the app, redirects unauthenticated users to /auth.
  *
  * Strategy:
  *   - **First-run setup** (``has_users === false``): no real users exist
- *     yet. In multi mode the dialog auto-opens in "first admin" mode and
- *     is NOT dismissible — the user must create the first admin account
- *     OR switch to single mode via the link on the dialog. In single
- *     mode the dialog is dismissible so the user can skip registration
- *     and use anonymous access (the default-user fallback has admin
- *     rights, so all features work without logging in).
+ *     yet. Redirect to ``/auth`` with ``?first_admin=1`` so the auth
+ *     page shows the "create first admin" setup screen. The user can
+ *     also switch to single mode from the auth page.
  *   - **Single-user mode** (``use_mode === "single"``, has users): the
  *     app runs without login. The backend serves data via the
  *     default-user fallback. Users who want a personal scope can still
- *     sign in via the user menu.
- *   - **Multi-user mode** (``use_mode === "multi"``, has users): the
- *     dialog auto-opens on first load and is NOT dismissible — the user
- *     must authenticate.
+ *     sign in via the user menu (which navigates to /auth).
+ *   - **Multi-user mode** (``use_mode === "multi"``, has users): if not
+ *     authenticated, redirect to ``/auth``. The auth page is
+ *     non-dismissible — the user must authenticate.
  */
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, isLoading, isAuthenticated } = useAuth();
   const { data: authConfig } = useAuthConfig();
-  const [showLogin, setShowLogin] = useState(false);
-  const [dismissed, setDismissed] = useState(false);
+  const router = useRouter();
   // Mount gate: ``useAuth`` derives ``hasToken`` from ``typeof window``,
   // which differs between SSR (false) and client (maybe true). That makes
   // ``isLoading`` differ across the boundary and triggers a hydration
@@ -45,30 +40,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const multiUserMode = useMode === "multi";
 
   // ``has_users``: False when no real users exist (excluding the default-user
-  // fallback). The frontend shows a "create admin" setup screen in that case.
+  // fallback). The frontend redirects to /auth?first_admin=1 in that case.
   const hasUsers = authConfig?.has_users ?? true; // default true to avoid flashing setup on slow loads
   const needsFirstAdmin = !hasUsers;
-
-  // The dialog is dismissible only when:
-  //   - in single-user mode (anonymous access allowed), OR
-  //   - first-run setup (admin can dismiss to switch to single mode)
-  // In multi mode with existing users, the dialog is NOT dismissible —
-  // the user must authenticate. Closing it would otherwise expose
-  // unauthenticated API requests to the default-user fallback.
-  const dismissible = !multiUserMode || needsFirstAdmin;
-
-  // Auto-open login dialog when:
-  //   1. First-run setup (no users yet) — must create admin account, OR
-  //   2. Multi-user mode + not authenticated — must log in.
-  // In multi mode + first-run, the dialog is non-dismissible.
-  useEffect(() => {
-    if (isLoading || isAuthenticated) return;
-    if (needsFirstAdmin && !dismissed) {
-      setShowLogin(true);
-    } else if (multiUserMode && !dismissed) {
-      setShowLogin(true);
-    }
-  }, [needsFirstAdmin, multiUserMode, isLoading, isAuthenticated, dismissed]);
 
   // Sync chat-store's user scope with the current user so conversations
   // are isolated per user in localStorage. When logged out, falls back
@@ -77,48 +51,35 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     setChatUserScope(user?.id ?? null);
   }, [user?.id]);
 
-  function handleOpenChange(open: boolean) {
-    // Non-dismissible modes: the dialog can never be closed (no fallback).
-    if (!open && !dismissible) return;
-    setShowLogin(open);
-    if (!open) setDismissed(true);
-  }
-
-  async function handleSwitchToSingle() {
-    try {
-      await api.setUseMode("single");
-      // Reload so the new use_mode takes effect everywhere.
-      window.location.reload();
-    } catch (err) {
-      // If the switch fails (e.g. server-side validation), just reload —
-      // the user will see the same dialog again.
-      console.error("Failed to switch to single mode:", err);
-      window.location.reload();
+  // Redirect to /auth when authentication is required but the user is
+  // not authenticated. Two cases:
+  //   1. First-run setup (no users yet) — go to /auth?first_admin=1
+  //   2. Multi-user mode + not authenticated — go to /auth
+  // We wait until ``isLoading`` is false so we don't redirect while the
+  // token is still being verified from localStorage.
+  useEffect(() => {
+    if (isLoading || isAuthenticated) return;
+    if (needsFirstAdmin) {
+      router.replace("/auth?first_admin=1");
+    } else if (multiUserMode) {
+      router.replace("/auth");
     }
-  }
+  }, [needsFirstAdmin, multiUserMode, isLoading, isAuthenticated, router]);
 
   // In multi-user mode, hide the children entirely when the user is not
   // authenticated. This prevents SWR hooks in protected pages from firing
   // API requests that the backend would 401 anyway, and avoids any chance
-  // of stale default-user data leaking into the DOM while the login
-  // dialog is showing.
+  // of stale default-user data leaking into the DOM while the redirect
+  // to /auth is pending.
   //
   // Single-user mode always renders children (default-user fallback is
   // intended behaviour there). First-run setup also renders children so
-  // the user can switch to single mode via the dialog link if they prefer.
+  // the page doesn't go blank before the redirect fires.
   const renderChildren = !multiUserMode || isAuthenticated || needsFirstAdmin;
 
   return (
     <>
       {renderChildren ? children : null}
-      <LoginDialog
-        open={showLogin}
-        onOpenChange={handleOpenChange}
-        dismissible={dismissible}
-        firstAdminSetup={needsFirstAdmin}
-        useMode={useMode}
-        onSwitchToSingle={handleSwitchToSingle}
-      />
 
       {/* Loading overlay while verifying token.
           Gated on ``mounted`` so SSR and client first-render agree —

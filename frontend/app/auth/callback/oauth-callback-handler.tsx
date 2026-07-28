@@ -35,7 +35,7 @@ export function OAuthCallbackHandler({ provider }: { provider: string }) {
   const ranRef = useRef(false);
 
   // Detect bind/register mode via sessionStorage flags set by the
-  // originating page (OAuthBindingCard / LoginDialog). We read them once
+  // originating page (OAuthBindingCard / /auth page). We read them once
   // on mount (before the callback fires) so we can pick the right
   // success message and redirect target.
   const isBindFlow = (() => {

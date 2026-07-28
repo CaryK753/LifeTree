@@ -20,6 +20,7 @@ import {
   Gauge,
   ShieldAlert,
   LogOut,
+  LogIn,
   Sun,
   Moon,
   Monitor,
@@ -723,7 +724,7 @@ function DropdownMenu({
           preview multiple themes), so we don't pass ``onClose`` here. */}
       <ThemeSliderRow />
 
-      {isAuthenticated && (
+      {isAuthenticated ? (
         <>
           <div className="my-1 border-t border-black/5 dark:border-white/5" />
 
@@ -736,6 +737,23 @@ function DropdownMenu({
             <LogOut className="h-3.5 w-3.5 shrink-0" />
             <span className="truncate">{t("auth.logout")}</span>
           </button>
+        </>
+      ) : (
+        /* Single-user mode + not authenticated: show a "Sign in" link so
+           the user can navigate to /auth to log in with a personal account.
+           In multi-user mode this branch is unreachable because AuthGate
+           redirects unauthenticated users to /auth before the sidebar
+           renders. */
+        <>
+          <div className="my-1 border-t border-black/5 dark:border-white/5" />
+
+          <MenuLink
+            href="/auth"
+            icon={LogIn}
+            label={t("auth.login")}
+            active={false}
+            onClick={onClose}
+          />
         </>
       )}
     </div>,
