@@ -42,6 +42,8 @@ import {
   Message,
   Composer,
   StreamingCursor,
+  ReasoningPanel,
+  ChatMinimap,
 } from "@/components/chat/ai-elements";
 import {
   useChatStore,
@@ -114,6 +116,10 @@ export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Track whether the user is "stickied" to the bottom of the chat.
+  // When the user scrolls up, we stop auto-scrolling so they can read
+  // earlier messages without being yanked back down on every streaming token.
+  const stickToBottomRef = useRef(true);
 
   const suggestions = useMemo(
     () => [t("chat.suggest1"), t("chat.suggest2"), t("chat.suggest3")],
@@ -124,12 +130,35 @@ export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
   // first user message — but we still need an empty state UI here.
   const messages: ChatMessage[] = activeConv?.messages ?? [];
 
-  // Auto-scroll on new messages or streaming updates.
+  // Smart auto-scroll: only scroll to bottom if the user is already near
+  // the bottom (within ~80px). This lets users scroll up to read earlier
+  // messages without being yanked back down on every streaming token.
   useEffect(() => {
-    if (scrollRef.current) {
+    if (scrollRef.current && stickToBottomRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages, state]);
+
+  // Update stickToBottom when the user scrolls. If they're near the bottom,
+  // we re-enable auto-scroll; if they've scrolled up, we disable it.
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distanceFromBottom < 80;
+  }, []);
+
+  // Jump to a specific message by index — used by the minimap.
+  const handleJumpTo = useCallback((index: number) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const target = el.querySelector(`[data-message-index="${index}"]`);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      // Disable stick-to-bottom since the user is jumping to a specific spot
+      stickToBottomRef.current = false;
+    }
+  }, []);
 
   // Auto-focus the textarea on mount and when the active conversation changes.
   useEffect(() => {
@@ -323,15 +352,19 @@ export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
       // of how many tokens arrive between frames. This produces smooth
       // typewriter-style streaming without overwhelming React.
       let pendingContent: string | null = null;
+      let pendingReasoning: string | null = null;
+      let reasoningAcc = "";
       let rafId: number | null = null;
       const flushPending = () => {
         rafId = null;
-        if (pendingContent !== null) {
+        if (pendingContent !== null || pendingReasoning !== null) {
           patchMessage(convId, assistantId, {
-            content: pendingContent,
+            content: pendingContent ?? acc,
+            ...(pendingReasoning !== null ? { reasoning: pendingReasoning } : {}),
             streaming: true,
           });
           pendingContent = null;
+          pendingReasoning = null;
         }
       };
 
@@ -346,6 +379,16 @@ export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
             }
           }
 
+          // Accumulate reasoning/thinking tokens (CoT) separately from
+          // the main content. The backend sends these as `reasoning_delta`.
+          if (chunk.reasoning_delta) {
+            reasoningAcc += chunk.reasoning_delta;
+            pendingReasoning = reasoningAcc;
+            if (rafId === null) {
+              rafId = requestAnimationFrame(flushPending);
+            }
+          }
+
           if (chunk.tool_call) {
             // Flush any pending content before tool call updates so the
             // user sees the latest text alongside the tool invocation.
@@ -353,18 +396,23 @@ export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
               cancelAnimationFrame(rafId);
               rafId = null;
             }
-            if (pendingContent !== null) {
+            if (pendingContent !== null || pendingReasoning !== null) {
               patchMessage(convId, assistantId, {
-                content: pendingContent,
+                content: pendingContent ?? acc,
+                ...(pendingReasoning !== null ? { reasoning: pendingReasoning } : {}),
                 streaming: true,
               });
               pendingContent = null;
+              pendingReasoning = null;
             }
 
             const tc = chunk.tool_call;
             const hasResult = tc.result !== null && tc.result !== undefined;
             if (!hasResult) {
-              const id = uid();
+              // Use the tool_call_id from the backend (LangGraph run_id)
+              // to correlate start/end events. Fall back to a random uid
+              // for backward compat with older backends that don't send id.
+              const id = tc.id || uid();
               // Capture the current length of the streamed content so the
               // renderer can later insert this tool call at the position
               // where the model actually invoked it, rather than dumping
@@ -380,12 +428,19 @@ export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
               };
               upsertToolCall(convId, assistantId, toolCalls[id]);
             } else {
-              const matchId = Object.entries(toolCalls)
-                .filter(
-                  ([, v]) =>
-                    v.name === tc.name && v.result === null && !v.error
-                )
-                .sort((a, b) => b[1].startedAt - a[1].startedAt)[0]?.[0];
+              // Match by tool_call_id from the backend. If id is missing
+              // (old backend), fall back to name+startedAt matching.
+              let matchId: string | undefined;
+              if (tc.id && toolCalls[tc.id]) {
+                matchId = tc.id;
+              } else {
+                matchId = Object.entries(toolCalls)
+                  .filter(
+                    ([, v]) =>
+                      v.name === tc.name && v.result === null && !v.error
+                  )
+                  .sort((a, b) => b[1].startedAt - a[1].startedAt)[0]?.[0];
+              }
               if (matchId) {
                 upsertToolCall(convId, assistantId, {
                   id: matchId,
@@ -406,12 +461,14 @@ export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
           cancelAnimationFrame(rafId);
           rafId = null;
         }
-        if (pendingContent !== null) {
+        if (pendingContent !== null || pendingReasoning !== null) {
           patchMessage(convId, assistantId, {
-            content: pendingContent,
+            content: pendingContent ?? acc,
+            ...(pendingReasoning !== null ? { reasoning: pendingReasoning } : {}),
             streaming: true,
           });
           pendingContent = null;
+          pendingReasoning = null;
         }
       }
 
@@ -584,36 +641,45 @@ export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
       {/* Messages — uses <Thread> from ai-elements.
           The sidebar toggle and conversation title have been migrated
           to the top-level title bar in app/chat/page.tsx. */}
-      <Thread autoScrollRef={scrollRef}>
-        {isEmpty ? (
-          <EmptyState
-            suggestions={suggestions}
-            onPick={(s) => {
-              setInput(s);
-              textareaRef.current?.focus();
-            }}
-          />
-        ) : (
-          messages.map((m) => (
-            <MessageBubble
-              key={m.id}
-              message={m}
-              userAvatarUrl={userAvatarUrl}
-              userDisplayName={userProfile?.display_name}
-              aiProtocol={chatModelInfo.protocol}
-              aiModelName={chatModelInfo.name}
-              disabled={busy}
-              isEditing={editingId === m.id}
-              onEditStart={() => setEditingId(m.id)}
-              onEditCancel={() => setEditingId(null)}
-              onEdit={handleEdit}
-              onRetry={handleRetry}
-              onDelete={handleDelete}
-              onCopy={handleCopy}
+      <div className="flex-1 flex min-h-0">
+        <Thread autoScrollRef={scrollRef} onScroll={handleScroll}>
+          {isEmpty ? (
+            <EmptyState
+              suggestions={suggestions}
+              onPick={(s) => {
+                setInput(s);
+                textareaRef.current?.focus();
+              }}
             />
-          ))
+          ) : (
+            messages.map((m, i) => (
+              <div key={m.id} data-message-index={i}>
+                <MessageBubble
+                  message={m}
+                  userAvatarUrl={userAvatarUrl}
+                  userDisplayName={userProfile?.display_name}
+                  aiProtocol={chatModelInfo.protocol}
+                  aiModelName={chatModelInfo.name}
+                  disabled={busy}
+                  isEditing={editingId === m.id}
+                  onEditStart={() => setEditingId(m.id)}
+                  onEditCancel={() => setEditingId(null)}
+                  onEdit={handleEdit}
+                  onRetry={handleRetry}
+                  onDelete={handleDelete}
+                  onCopy={handleCopy}
+                />
+              </div>
+            ))
+          )}
+        </Thread>
+        {!isEmpty && messages.length > 2 && (
+          <ChatMinimap
+            messages={messages}
+            onJumpTo={handleJumpTo}
+          />
         )}
-      </Thread>
+      </div>
 
       {/* Attachment preview row */}
       {attachments.length > 0 && (
@@ -968,11 +1034,12 @@ const MessageBubble = memo(function MessageBubble({
   }, [previousVersions.length]);
 
   // Pick the displayed snapshot based on viewingVersion.
-  const snapshot: Pick<ChatMessage, "content" | "toolCalls"> =
+  const snapshot: Pick<ChatMessage, "content" | "toolCalls" | "reasoning"> =
     viewingVersion === 0
       ? {
           content: message.content,
           toolCalls: message.toolCalls,
+          reasoning: message.reasoning,
         }
       : previousVersions[viewingVersion - 1];
 
@@ -1113,6 +1180,13 @@ const MessageBubble = memo(function MessageBubble({
           </div>
         ) : (
           <div className="text-sm leading-relaxed text-zinc-800 dark:text-zinc-200">
+            {snapshot.reasoning && (
+              <ReasoningPanel
+                reasoning={snapshot.reasoning}
+                streaming={isStreaming}
+                hasContent={!!snapshot.content}
+              />
+            )}
             <InterleavedBody
               content={snapshot.content}
               toolCalls={snapshot.toolCalls}

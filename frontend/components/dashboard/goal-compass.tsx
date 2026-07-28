@@ -213,9 +213,9 @@ export function GoalCompass({
 
   return (
     <>
-      <Card className="col-span-2">
+      <Card className="col-span-1 md:col-span-2 lg:col-span-2">
         <CardHeader>
-          <div>
+          <div className="space-y-1.5">
             <CardTitle className="flex items-center gap-2 flex-wrap">
               <span>{t("compass.title")}</span>
               <Badge variant="risk" riskLevel={status === "active" ? "low" : "medium"}>
@@ -229,18 +229,18 @@ export function GoalCompass({
                 风险可控度：{controllabilityGrade.label}
               </button>
             </CardTitle>
-            <CardDescription className="mt-1.5 text-sm text-zinc-300">
+            <CardDescription className="text-sm text-zinc-300">
               {title}
             </CardDescription>
-          </div>
-          <div className="text-right text-xs text-zinc-500">
-            {scenario && <div>{t("compass.scenario", { value: scenario })}</div>}
-            {targetDate && <div>{t("compass.targetDate", { value: targetDate })}</div>}
-            <div>{t("compass.activeBranches", { n: activeScenarios })} (推荐 ≤3 分支)</div>
+            <div className="flex items-center gap-3 flex-wrap text-xs text-zinc-500">
+              {scenario && <span>{t("compass.scenario", { value: scenario })}</span>}
+              {targetDate && <span>{t("compass.targetDate", { value: targetDate })}</span>}
+              <span>{t("compass.activeBranches", { n: activeScenarios })} (推荐 ≤3 分支)</span>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
             <div className="space-y-2">
               <div className="text-xs text-zinc-500">{t("compass.p50")} (估计基准)</div>
               <div className="text-3xl font-semibold text-brand-300">

@@ -285,6 +285,68 @@ export function ToolInvocations({ tools }: { tools: ToolCall[] }) {
   );
 }
 
+// ---------- Reasoning / Chain of Thought ----------
+
+/**
+ * Collapsible panel that displays the model's chain-of-thought reasoning
+ * (CoT). Models that support "thinking" mode (e.g. DeepSeek R1, Qwen3
+ * thinking) emit reasoning tokens separately from the main content.
+ *
+ * - While streaming and no main content yet: auto-expanded so the user
+ *   sees the model "thinking" in real time.
+ * - Once main content starts arriving: auto-collapses to a summary bar.
+ * - User can manually toggle at any time.
+ */
+export function ReasoningPanel({
+  reasoning,
+  streaming,
+  hasContent,
+}: {
+  reasoning: string;
+  streaming?: boolean;
+  hasContent?: boolean;
+}) {
+  const t = useT();
+  // Auto-collapse when main content starts arriving, auto-expand when
+  // only reasoning is streaming (no content yet).
+  const autoOpen = streaming && !hasContent;
+  const [manualToggle, setManualToggle] = useState<boolean | null>(null);
+  const open = manualToggle !== null ? manualToggle : autoOpen;
+
+  if (!reasoning) return null;
+
+  return (
+    <div className="mb-2 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50 bg-zinc-50/80 dark:bg-zinc-800/30 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setManualToggle(!open)}
+        className="flex items-center gap-1.5 w-full px-3 py-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors"
+      >
+        <Brain className="h-3.5 w-3.5 text-violet-500 dark:text-violet-400" />
+        <span>
+          {streaming && !hasContent
+            ? t("chat.reasoning.thinking")
+            : t("chat.reasoning.title")}
+        </span>
+        {streaming && !hasContent && (
+          <Loader2 className="h-3 w-3 animate-spin text-violet-400" />
+        )}
+        <ChevronDown
+          className={cn(
+            "h-3 w-3 ml-auto transition-transform",
+            open ? "rotate-180" : ""
+          )}
+        />
+      </button>
+      {open && (
+        <div className="px-3 pb-2.5 pt-0.5 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400 border-t border-zinc-200/60 dark:border-zinc-700/40 max-h-64 overflow-y-auto">
+          <div className="whitespace-pre-wrap break-words">{reasoning}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------- Streaming thinking dots ----------
 
 export function ThinkingDots({ label }: { label?: string }) {
@@ -352,14 +414,17 @@ export function Thread({
   children,
   className,
   autoScrollRef,
+  onScroll,
 }: {
   children: ReactNode;
   className?: string;
   autoScrollRef?: React.RefObject<HTMLDivElement | null>;
+  onScroll?: React.UIEventHandler<HTMLDivElement>;
 }) {
   return (
     <div
       ref={autoScrollRef}
+      onScroll={onScroll}
       className={cn(
         "flex-1 overflow-y-auto px-4 sm:px-5 py-4 space-y-4",
         className
@@ -369,6 +434,68 @@ export function Thread({
     </div>
   );
 }
+
+// ---------- Chat Minimap (conversation overview) ----------
+
+/**
+ * A compact vertical overview of the conversation structure.
+ * Each message is represented as a colored block; clicking a block
+ * scrolls the chat container to that message.
+ *
+ * - User messages: brand color
+ * - Assistant messages: zinc
+ * - Tool calls: violet dots within the assistant block
+ * - Streaming messages: pulsing indicator
+ */
+export function ChatMinimap({
+  messages,
+  onJumpTo,
+  activeIndex,
+}: {
+  messages: Array<{
+    id: string;
+    role: "user" | "assistant" | "system";
+    content: string;
+    toolCalls?: Array<{ id: string }>;
+    streaming?: boolean;
+  }>;
+  onJumpTo: (index: number) => void;
+  activeIndex?: number;
+}) {
+  if (messages.length === 0) return null;
+
+  return (
+    <div className="w-7 shrink-0 flex flex-col gap-0.5 py-2 overflow-y-auto scrollbar-thin">
+      {messages.map((m, i) => {
+        const isUser = m.role === "user";
+        const toolCount = m.toolCalls?.length ?? 0;
+        const len = Math.max(2, Math.min(20, Math.ceil(m.content.length / 80)));
+        const isActive = activeIndex === i;
+        return (
+          <button
+            key={m.id}
+            onClick={() => onJumpTo(i)}
+            title={m.content.slice(0, 80) || (isUser ? "User" : "AI")}
+            className={cn(
+              "w-full rounded-sm transition-all relative group",
+              isUser
+                ? "bg-brand-500/40 hover:bg-brand-500/70"
+                : "bg-zinc-500/30 hover:bg-zinc-500/50",
+              isActive && "ring-1 ring-brand-400",
+              m.streaming && "animate-pulse"
+            )}
+            style={{ height: `${len * 3}px` }}
+          >
+            {toolCount > 0 && (
+              <span className="absolute -right-0.5 top-0.5 w-1.5 h-1.5 rounded-full bg-violet-400" />
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 
 // ---------- Message (single row) ----------
 

@@ -39,7 +39,7 @@ log = get_logger(__name__)
 # ---------- Tool input schemas ----------
 
 class ListPathwaysInput(BaseModel):
-    goal_id: str = Field(..., description="Goal ID to list pathways for")
+    goal_id: str | None = Field(None, description="Goal ID to list pathways for. Omit to use the current goal context.")
 
 
 class ListRequirementsInput(BaseModel):
@@ -60,11 +60,11 @@ class ListRecentEventsInput(BaseModel):
 
 
 class RunScenarioReasoningInput(BaseModel):
-    scenario_id: str = Field(..., description="Scenario ID to run reasoning on")
+    scenario_id: str | None = Field(None, description="Scenario ID to run reasoning on. Omit to use the current scenario context.")
 
 
 class GetScenarioSummaryInput(BaseModel):
-    scenario_id: str = Field(..., description="Scenario ID to summarize")
+    scenario_id: str | None = Field(None, description="Scenario ID to summarize. Omit to use the current scenario context.")
 
 
 # --- Write tools (create ontology entities) ---
@@ -79,7 +79,7 @@ class CreateGoalInput(BaseModel):
 
 
 class CreatePathwayInput(BaseModel):
-    goal_id: str = Field(..., description="Parent goal ID")
+    goal_id: str | None = Field(None, description="Parent goal ID. Omit to use the current goal context.")
     name: str = Field(..., description="Pathway name, e.g. 'Federal Skilled Worker Program'")
     description: str | None = None
     region: str | None = Field(None, description="Region tag like 'CA' or 'UK'")
@@ -212,7 +212,7 @@ class UpdateUserProfileInput(BaseModel):
 
 
 class CreateScenarioBranchInput(BaseModel):
-    goal_id: str = Field(..., description="Goal ID to create scenario branch for")
+    goal_id: str | None = Field(None, description="Goal ID to create scenario branch for. Omit to use the current goal context.")
     name: str = Field(..., description="Scenario branch name, e.g. 'Canada FSW' or 'Japan IT'")
     description: str | None = Field(None, description="Optional description of the branch assumptions")
 
@@ -292,9 +292,10 @@ def build_advisor_tools(
     """Build tools bound to a specific DB session and goal/scenario context.
 
     The returned tools are stateless from LangGraph's perspective — they close
-    over ``db`` / ``goal_id`` / ``scenario_id`` so the LLM only needs to pass
-    the truly variable arguments (e.g. a different scenario_id to compare
-    against).
+    over ``db`` / ``goal_id_context`` / ``scenario_id_context`` so the LLM
+    only needs to pass the truly variable arguments (e.g. a different
+    scenario_id to compare against). If the LLM omits the id, the tool falls
+    back to the conversation's context.
 
     Session strategy: LangGraph's ReAct agent may execute multiple tool_calls
     concurrently (sync tools run in a thread pool). SQLAlchemy Sessions are
@@ -305,6 +306,8 @@ def build_advisor_tools(
     shared ``db`` since they never call ``commit()`` and ``autoflush=False``
     prevents implicit flushes.
     """
+    goal_id_context = goal_id
+    scenario_id_context = scenario_id
     graph_service = GraphService()
     user_service_config = db.get(UserServiceConfig, user_id)
     user_tavily_key = (
@@ -320,9 +323,12 @@ def build_advisor_tools(
     # ---------- Query tools ----------
 
     @tool("list_pathways", args_schema=ListPathwaysInput)
-    def list_pathways(goal_id: str) -> dict[str, Any]:
+    def list_pathways(goal_id: str | None = None) -> dict[str, Any]:
         """List all pathways for a goal, including their requirement counts."""
-        pathways = list(db.scalars(select(Pathway).where(Pathway.goal_id == goal_id)))
+        effective_goal_id = goal_id or goal_id_context
+        if not effective_goal_id:
+            return {"error": "no_goal_context", "message": "No goal_id provided and no goal context set for this conversation."}
+        pathways = list(db.scalars(select(Pathway).where(Pathway.goal_id == effective_goal_id)))
         return {
             "pathways": [
                 {
@@ -410,11 +416,14 @@ def build_advisor_tools(
         }
 
     @tool("get_scenario_summary", args_schema=GetScenarioSummaryInput)
-    def get_scenario_summary(scenario_id: str) -> dict[str, Any]:
+    def get_scenario_summary(scenario_id: str | None = None) -> dict[str, Any]:
         """Get a scenario's cached probability / risk summary without re-running."""
-        sc = db.get(Scenario, scenario_id)
+        effective_scenario_id = scenario_id or scenario_id_context
+        if not effective_scenario_id:
+            return {"error": "no_scenario_context", "message": "No scenario_id provided and no scenario context set for this conversation."}
+        sc = db.get(Scenario, effective_scenario_id)
         if sc is None:
-            return {"error": "scenario_not_found", "scenario_id": scenario_id}
+            return {"error": "scenario_not_found", "scenario_id": effective_scenario_id}
         return {
             "id": sc.id,
             "name": sc.name,
@@ -427,20 +436,23 @@ def build_advisor_tools(
         }
 
     @tool("run_scenario_reasoning", args_schema=RunScenarioReasoningInput)
-    def run_scenario_reasoning(scenario_id: str) -> dict[str, Any]:
+    def run_scenario_reasoning(scenario_id: str | None = None) -> dict[str, Any]:
         """Trigger the reasoning engine (Bayesian + Monte Carlo) on a scenario.
 
         Use this when the user asks 'what are my chances' or wants a fresh
         probability estimate. Returns the computed success probability and
         key risk factors. Takes ~5-10 seconds.
         """
+        effective_scenario_id = scenario_id or scenario_id_context
+        if not effective_scenario_id:
+            return {"error": "no_scenario_context", "message": "No scenario_id provided and no scenario context set for this conversation."}
         # Use a dedicated session — ScenarioService/ReasoningEngine commit
         # internally multiple times, which would race with other tools on
         # the shared request session.
         with SessionLocal() as session:
             service = ScenarioService(session)
             try:
-                run = service.run_reasoning(scenario_id)
+                run = service.run_reasoning(effective_scenario_id)
                 return {
                     "run_id": run.id,
                     "status": run.status,
@@ -512,8 +524,8 @@ def build_advisor_tools(
 
     @tool("create_pathway", args_schema=CreatePathwayInput)
     def create_pathway(
-        goal_id: str,
-        name: str,
+        goal_id: str | None = None,
+        name: str = "",
         description: str | None = None,
         region: str | None = None,
         parent_pathway_id: str | None = None,
@@ -524,12 +536,19 @@ def build_advisor_tools(
         'maybe I should consider the UK Global Talent visa'. Returns the new
         pathway ID.
         """
+        effective_goal_id = goal_id or goal_id_context
+        if not effective_goal_id:
+            return {"error": "no_goal_context", "message": "No goal_id provided and no goal context set for this conversation."}
         with SessionLocal() as session:
-            g = session.get(Goal, goal_id)
+            g = session.get(Goal, effective_goal_id)
             if g is None:
-                return {"error": "goal_not_found", "goal_id": goal_id}
+                return {"error": "goal_not_found", "goal_id": effective_goal_id}
+            if parent_pathway_id:
+                parent = session.get(Pathway, parent_pathway_id)
+                if parent is None:
+                    return {"error": "parent_pathway_not_found", "parent_pathway_id": parent_pathway_id}
             p = Pathway(
-                goal_id=goal_id,
+                goal_id=effective_goal_id,
                 name=name,
                 description=description,
                 region=region,
@@ -821,16 +840,22 @@ def build_advisor_tools(
 
     @tool("create_scenario_branch", args_schema=CreateScenarioBranchInput)
     def create_scenario_branch(
-        goal_id: str, name: str, description: str | None = None
+        goal_id: str | None = None, name: str = "", description: str | None = None
     ) -> dict[str, Any]:
         """Create a new scenario branch for parallel sandbox推演 during conversation.
 
         Use when the user considers an alternative pathway or 'what if' scenario.
         """
+        effective_goal_id = goal_id or goal_id_context
+        if not effective_goal_id:
+            return {"error": "no_goal_context", "message": "No goal_id provided and no goal context set for this conversation."}
         with SessionLocal() as session:
+            g = session.get(Goal, effective_goal_id)
+            if g is None:
+                return {"error": "goal_not_found", "goal_id": effective_goal_id}
             sc_svc = ScenarioService(session)
-            sc = sc_svc.create_branch(goal_id=goal_id, name=name, description=description)
-            branch_count = sc_svc.count_active_branches(goal_id)
+            sc = sc_svc.create_branch(goal_id=effective_goal_id, name=name, description=description)
+            branch_count = sc_svc.count_active_branches(effective_goal_id)
             return {
                 "ok": True,
                 "scenario_id": sc.id,

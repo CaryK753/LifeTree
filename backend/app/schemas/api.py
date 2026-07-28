@@ -289,6 +289,7 @@ class ChatToolCall(BaseModel):
     name: str
     args: dict[str, Any]
     result: dict[str, Any] | None = None
+    id: str | None = None
 
 
 class ChatResponseChunk(BaseModel):
@@ -298,6 +299,7 @@ class ChatResponseChunk(BaseModel):
     tool_call: ChatToolCall | None = None
     finish_reason: str | None = None
     usage: dict[str, int] | None = None
+    reasoning_delta: str | None = None
 
 
 # ---------- Statistics ----------

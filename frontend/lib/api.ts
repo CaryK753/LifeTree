@@ -1498,6 +1498,7 @@ export interface ChatToolCall {
   name: string;
   args: Record<string, unknown>;
   result: unknown | null;
+  id?: string | null;
 }
 
 export interface ChatChunk {
@@ -1505,6 +1506,7 @@ export interface ChatChunk {
   tool_call?: ChatToolCall | null;
   finish_reason: string | null;
   usage?: Record<string, number>;
+  reasoning_delta?: string | null;
 }
 
 export async function* streamChat(

@@ -63,7 +63,7 @@ async def about() -> dict[str, str]:
     """Return project metadata for the Settings → About panel."""
     return {
         "name": "LifeTree",
-        "version": "0.2.0",
+        "version": "0.2.1",
         "description": "知识图谱驱动的决策支持系统",
         "github_url": "https://github.com/CaryK753/LifeTree",
         "license": "AGPL-3.0",

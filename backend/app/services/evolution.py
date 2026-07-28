@@ -156,14 +156,22 @@ class EvolutionService:
             # Instructor enforces the Pydantic schema — if the LLM returns
             # malformed JSON or missing fields, it retries automatically
             # (default max_retries=3).
-            projection: EvolutionProjection = instructor.chat.completions.create(
-                model=context["model_name"],
-                messages=prompt_messages,
-                response_model=EvolutionProjection,
-                temperature=0.5,
-                max_tokens=2400,
-                max_retries=2,
-            )
+            try:
+                projection: EvolutionProjection = instructor.chat.completions.create(
+                    model=context["model_name"],
+                    messages=prompt_messages,
+                    response_model=EvolutionProjection,
+                    temperature=0.5,
+                    max_tokens=2400,
+                    max_retries=2,
+                )
+            except Exception as llm_exc:
+                from app.core.exceptions import ExternalServiceError
+
+                raise ExternalServiceError(
+                    f"LLM call failed during evolution: {llm_exc}",
+                    details={"provider_error": str(llm_exc)[:500]},
+                ) from llm_exc
 
             trajectory = self._compute_trajectory(
                 base_p=context["base_p50"],

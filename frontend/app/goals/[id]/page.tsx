@@ -192,7 +192,7 @@ export default function GoalDetailPage({
         </TabsList>
 
         <TabsContent value="overview">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <GoalCompass
               goalId={goalId}
               title={goalTitle}
@@ -250,7 +250,7 @@ export default function GoalDetailPage({
                 {(requirements as any[])?.map((r) => (
                   <div
                     key={r.id}
-                    className="grid grid-cols-[1fr_auto_auto] gap-3 items-center py-2 border-b border-white/5 last:border-0"
+                    className="flex flex-col sm:grid sm:grid-cols-[1fr_auto_auto] gap-2 sm:gap-3 sm:items-center py-2 border-b border-white/5 last:border-0"
                   >
                     <div>
                       <div className="text-sm text-zinc-200">{r.name}</div>
@@ -269,7 +269,7 @@ export default function GoalDetailPage({
                     >
                       {gapLabel(r.gap_status)}
                     </Badge>
-                    <div className="text-[11px] text-zinc-500 text-right min-w-[60px]">
+                    <div className="text-[11px] text-zinc-500 sm:text-right min-w-[60px]">
                       <div>{t("goalDetail.requirements.weight")} {r.weight ?? "—"}</div>
                       {r.gap_delta != null && (
                         <div className={r.gap_delta < 0 ? "text-red-400" : "text-emerald-400"}>

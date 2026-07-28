@@ -427,23 +427,48 @@ async def chat_stream(
                         delta = "".join(
                             b.get("text", "") for b in delta if isinstance(b, dict)
                         )
-                    if not delta:
+                    # Extract reasoning/thinking content (CoT) from models
+                    # that support it (e.g. DeepSeek R1, Qwen3 thinking mode).
+                    reasoning_delta = ""
+                    additional_kwargs = getattr(chunk, "additional_kwargs", {}) or {}
+                    reasoning_content = additional_kwargs.get("reasoning_content")
+                    if reasoning_content:
+                        if isinstance(reasoning_content, str):
+                            reasoning_delta = reasoning_content
+                        elif isinstance(reasoning_content, list):
+                            reasoning_delta = "".join(
+                                b.get("text", "") for b in reasoning_content
+                                if isinstance(b, dict)
+                            )
+                    # Some providers put reasoning in response_metadata or usage_metadata
+                    if not reasoning_delta:
+                        response_metadata = getattr(chunk, "response_metadata", {}) or {}
+                        reasoning_meta = response_metadata.get("reasoning_content") or response_metadata.get("reasoning")
+                        if isinstance(reasoning_meta, str):
+                            reasoning_delta = reasoning_meta
+
+                    if not delta and not reasoning_delta:
                         continue
-                    out = ChatResponseChunk(delta=delta)
+                    out = ChatResponseChunk(
+                        delta=delta,
+                        reasoning_delta=reasoning_delta or None,
+                    )
                     yield f"data: {out.model_dump_json()}\n\n"
 
                 elif kind == "on_tool_start":
                     tool_name = event.get("name", "")
+                    run_id = event.get("run_id", "")
                     raw_args = event.get("data", {}).get("input", {})
                     args = raw_args if isinstance(raw_args, dict) else {}
                     out = ChatResponseChunk(
                         delta="",
-                        tool_call={"name": tool_name, "args": args, "result": None},
+                        tool_call={"name": tool_name, "args": args, "result": None, "id": run_id},
                     )
                     yield f"data: {out.model_dump_json()}\n\n"
 
                 elif kind == "on_tool_end":
                     tool_name = event.get("name", "")
+                    run_id = event.get("run_id", "")
                     raw_output = event.get("data", {}).get("output")
                     try:
                         if hasattr(raw_output, "content"):
@@ -456,7 +481,7 @@ async def chat_stream(
                         result = {"value": str(raw_output)}
                     out = ChatResponseChunk(
                         delta="",
-                        tool_call={"name": tool_name, "args": {}, "result": result},
+                        tool_call={"name": tool_name, "args": {}, "result": result, "id": run_id},
                     )
                     yield f"data: {out.model_dump_json()}\n\n"
 
