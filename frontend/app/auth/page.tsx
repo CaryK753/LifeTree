@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,6 +13,9 @@ import {
   ShieldCheck,
   UserPlus,
   KeyRound,
+  Sun,
+  Moon,
+  Monitor,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { useT } from "@/lib/i18n/provider";
@@ -67,6 +71,9 @@ function AuthPageInner() {
   const toast = useToast();
   const { login, register, registerWithCode, user, isAuthenticated } = useAuth();
   const { data: authConfig } = useAuthConfig();
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   const [mode, setMode] = useState<"login" | "register">("login");
   const [loading, setLoading] = useState(false);
@@ -336,6 +343,16 @@ function AuthPageInner() {
         <AsciiTreeBackground />
       </div>
 
+      {/* 右上角主题切换按钮 */}
+      <div className="absolute right-4 top-4 z-10 safe-top">
+        <ThemeToggleButton
+          theme={theme as "light" | "dark" | "system"}
+          setTheme={setTheme}
+          mounted={mounted}
+          t={t}
+        />
+      </div>
+
       {/* 居中登录卡片 */}
       <div className="relative z-10 flex min-h-screen items-center justify-center p-4 safe-top safe-bottom">
         <div className="w-full max-w-md rounded-xl border border-zinc-200/80 bg-white/80 p-6 shadow-2xl backdrop-blur-md dark:border-white/10 dark:bg-[#13161c]/85 sm:p-7">
@@ -602,6 +619,55 @@ function Field({
       <Label className="text-xs text-zinc-700 dark:text-zinc-300">{label}</Label>
       {children}
     </div>
+  );
+}
+
+/**
+ * 主题切换按钮：三档循环（亮 → 暗 → 系统）。
+ * 在 /auth 页面独立使用，因为侧边栏未渲染所以拿不到 UserChip 里的 ThemeSliderRow。
+ */
+function ThemeToggleButton({
+  theme,
+  setTheme,
+  mounted,
+  t,
+}: {
+  theme: "light" | "dark" | "system";
+  setTheme: (t: "light" | "dark" | "system") => void;
+  mounted: boolean;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+}) {
+  // 循环顺序：light → dark → system → light
+  function cycle() {
+    if (theme === "light") setTheme("dark");
+    else if (theme === "dark") setTheme("system");
+    else setTheme("light");
+  }
+  const Icon = !mounted
+    ? Monitor
+    : theme === "light"
+      ? Sun
+      : theme === "dark"
+        ? Moon
+        : Monitor;
+  const label = !mounted
+    ? t("theme.system")
+    : theme === "light"
+      ? t("theme.light")
+      : theme === "dark"
+        ? t("theme.dark")
+        : t("theme.system");
+  return (
+    <button
+      type="button"
+      onClick={cycle}
+      title={label}
+      aria-label={t("theme.label")}
+      className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200/80 bg-white/70 px-2.5 py-1.5 text-xs text-zinc-600 backdrop-blur-md transition-colors hover:bg-white hover:text-zinc-900 dark:border-white/10 dark:bg-[#13161c]/70 dark:text-zinc-400 dark:hover:bg-[#13161c] dark:hover:text-zinc-100"
+    >
+      <Icon className="h-3.5 w-3.5" />
+      <span className="hidden sm:inline">{label}</span>
+    </button>
   );
 }
 
