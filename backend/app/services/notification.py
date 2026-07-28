@@ -54,7 +54,7 @@ class NotificationService:
         force: bool = False,
     ) -> NotificationLog | None:
         """Send a notification to the user, honoring cool-down & quiet hours."""
-        if not force and self._is_suppressed(user, risk_factor_id):
+        if not force and self._is_suppressed(user, risk_factor_id, severity=severity):
             log.info("notification.suppressed", user_id=user.id, title=title)
             return self._log(
                 user,
@@ -73,8 +73,26 @@ class NotificationService:
             if channel == "email":
                 self._send_email(user, title, body)
             elif channel == "sms":
-                # MVP: stub SMS gateway
-                log.info("notification.sms_stub", user_id=user.id)
+                # SMS gateway not yet wired (§4.5 P2 — pending Twilio/阿里云
+                # integration). Mark as FAILED rather than pretending we sent
+                # it, so the user isn't silently misled. The in-app channel
+                # still receives the message via the SSE push below.
+                log.warning(
+                    "notification.sms_not_configured",
+                    user_id=user.id,
+                    title=title,
+                )
+                return self._log(
+                    user,
+                    channel="sms",
+                    status=NotificationStatus.FAILED.value,
+                    title=title,
+                    body=body,
+                    severity=severity,
+                    event_id=event_id,
+                    risk_factor_id=risk_factor_id,
+                    impact_summary=impact_summary or {},
+                )
             # in_app / push: stored, frontend polls
         except Exception as exc:  # noqa: BLE001
             log.error("notification.dispatch_failed", error=str(exc), channel=channel)
@@ -152,7 +170,12 @@ class NotificationService:
 
     # ---------------- Suppression ----------------
 
-    def _is_suppressed(self, user: UserProfile, risk_factor_id: str | None) -> bool:
+    def _is_suppressed(
+        self, user: UserProfile, risk_factor_id: str | None, severity: str = "info"
+    ) -> bool:
+        # Cruising Mode (§4.5 & §5.4): only CRITICAL alerts reach the user; all medium/low notifications are suppressed.
+        if user.cruising_mode and severity != "critical":
+            return True
         if risk_factor_id is None:
             return False
         if self._in_quiet_hours(user):

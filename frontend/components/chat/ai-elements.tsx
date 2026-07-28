@@ -58,8 +58,49 @@ export function ToolInvocation({ tool }: { tool: ToolCall }) {
   const failed = !!tool.error;
   const done = !!tool.endedAt && !failed;
 
+  // Conversational Graph Building sync card labels
+  const syncCards: Record<string, { label: string; icon: string; color: string }> = {
+    update_user_profile: {
+      label: "💡 画像与进度已同步更新",
+      icon: "UserCheck",
+      color: "border-brand-500/30 bg-brand-500/[0.08] text-brand-300",
+    },
+    create_scenario_branch: {
+      label: "🌿 平行推演分支已创建",
+      icon: "GitBranch",
+      color: "border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-300",
+    },
+    create_goal: {
+      label: "🎯 决策目标实体已建立",
+      icon: "Target",
+      color: "border-amber-500/30 bg-amber-500/[0.08] text-amber-300",
+    },
+    create_pathway: {
+      label: "🛣️ 实施路径实体已关联",
+      icon: "Route",
+      color: "border-sky-500/30 bg-sky-500/[0.08] text-sky-300",
+    },
+    update_requirement_status: {
+      label: "✅ 达标节点已点亮",
+      icon: "CheckCircle",
+      color: "border-teal-500/30 bg-teal-500/[0.08] text-teal-300",
+    },
+    add_user_source: {
+      label: "📎 信源已记录并排队验真",
+      icon: "Paperclip",
+      color: "border-indigo-500/30 bg-indigo-500/[0.08] text-indigo-300",
+    },
+  };
+
+  const syncMeta = syncCards[tool.name];
+
   return (
-    <div className="rounded-md border border-white/10 bg-white/[0.02] my-1.5 text-xs overflow-hidden">
+    <div
+      className={cn(
+        "rounded-md border my-1.5 text-xs overflow-hidden transition-all",
+        syncMeta ? syncMeta.color : "border-white/10 bg-white/[0.02]"
+      )}
+    >
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -79,8 +120,10 @@ export function ToolInvocation({ tool }: { tool: ToolCall }) {
         ) : (
           <Wrench className="h-3 w-3 text-zinc-400 shrink-0" />
         )}
-        <span className="text-zinc-300 font-mono truncate">{tool.name}</span>
-        <span className="text-[10px] text-zinc-500 shrink-0 ml-auto">
+        <span className="font-mono truncate font-medium">
+          {syncMeta ? syncMeta.label : tool.name}
+        </span>
+        <span className="text-[10px] text-zinc-400 shrink-0 ml-auto">
           {running
             ? t("chat.tool.running")
             : failed
@@ -260,7 +303,7 @@ export function Message({
           "h-7 w-7 rounded-full shrink-0 flex items-center justify-center text-[10px] font-medium",
           isUser
             ? "bg-brand-500/20 text-brand-200 border border-brand-500/30"
-            : "bg-gradient-to-br from-brand-400 to-brand-700 text-white shadow-md shadow-brand-900/30"
+            : "bg-white dark:bg-zinc-800 border border-black/10 dark:border-white/10 shadow-sm"
         )}
       >
         {avatar ?? (isUser ? t("chat.me") : null)}

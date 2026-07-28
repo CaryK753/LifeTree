@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { api, streamChat } from "@/lib/api";
 import { useT } from "@/lib/i18n/provider";
-import { useUserProfile } from "@/lib/hooks";
+import { useUserProfile, useSettings } from "@/lib/hooks";
 import { useToast } from "@/components/ui/toast";
 import {
   Dialog,
@@ -83,8 +83,24 @@ export function ChatPanel({ goalId, scenarioId }: Props) {
   const state = useChatStore(); // re-renders on store changes
   const activeConv = getActiveConversation();
   const { data: userProfile } = useUserProfile();
+  const { data: settings } = useSettings();
   const userAvatarUrl = (userProfile as { avatar_url?: string | null } | undefined)?.avatar_url ?? null;
   const toast = useToast();
+
+  // Resolve the current chat model + provider so we can show the model's
+  // brand icon (e.g. DeepSeek, OpenAI, Anthropic) as the AI avatar instead
+  // of a generic sparkles icon.
+  const chatModelInfo = useMemo(() => {
+    const chatModelId = settings?.role_assignments?.["chat"];
+    const chatModel = settings?.models?.find((m) => m.id === chatModelId);
+    const chatProvider = chatModel
+      ? settings?.providers?.find((p) => p.id === chatModel.provider_id)
+      : undefined;
+    return {
+      protocol: chatProvider?.protocol as string | undefined,
+      name: chatModel?.name as string | undefined,
+    };
+  }, [settings]);
 
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -542,6 +558,8 @@ export function ChatPanel({ goalId, scenarioId }: Props) {
               message={m}
               userAvatarUrl={userAvatarUrl}
               userDisplayName={userProfile?.display_name}
+              aiProtocol={chatModelInfo.protocol}
+              aiModelName={chatModelInfo.name}
               disabled={busy}
               onRetry={handleRetry}
               onDelete={handleDelete}
@@ -843,6 +861,8 @@ const MessageBubble = memo(function MessageBubble({
   message,
   userAvatarUrl,
   userDisplayName,
+  aiProtocol,
+  aiModelName,
   disabled,
   onRetry,
   onDelete,
@@ -851,6 +871,8 @@ const MessageBubble = memo(function MessageBubble({
   message: ChatMessage;
   userAvatarUrl?: string | null;
   userDisplayName?: string;
+  aiProtocol?: string;
+  aiModelName?: string;
   disabled?: boolean;
   onRetry: (message: ChatMessage) => void;
   onDelete: (message: ChatMessage, viewingVersion: number) => void;
@@ -919,7 +941,12 @@ const MessageBubble = memo(function MessageBubble({
             </span>
           )
         ) : (
-          <AIAvatar size={14} className="h-3.5 w-3.5" />
+          <AIAvatar
+            protocol={aiProtocol}
+            name={aiModelName}
+            size={14}
+            className="h-3.5 w-3.5"
+          />
         )
       }
     >

@@ -131,6 +131,10 @@ class Event(UUIDPkMixin, TimestampMixin, Base):
     # Extraction confidence (0..1)
     extraction_confidence: Mapped[float] = mapped_column(Float, default=0.8)
 
+    # Status for Review Inbox & auto-sinking (§4.9)
+    # 'approved' | 'pending_review' | 'sunk_low_weight'
+    status: Mapped[str] = mapped_column(String(32), default="approved")
+
     # Vector embedding (for RAG / similarity search across events)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
 

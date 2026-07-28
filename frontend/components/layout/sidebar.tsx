@@ -27,6 +27,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   X,
+  Inbox,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
@@ -50,6 +51,7 @@ const NAV: NavItem[] = [
   { href: "/chat", labelKey: "nav.chat", icon: MessageSquare },
   { href: "/scenarios", labelKey: "nav.scenarios", icon: GitBranch },
   { href: "/sources", labelKey: "nav.sources", icon: ShieldCheck },
+  { href: "/review", labelKey: "nav.review", icon: Inbox },
   { href: "/notifications", labelKey: "nav.notifications", icon: Bell },
   { href: "/ingest", labelKey: "nav.ingest", icon: Upload },
   { href: "/plugins", labelKey: "nav.plugins", icon: Plug },

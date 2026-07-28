@@ -20,9 +20,9 @@ import { useToast } from "@/components/ui/toast";
  *   - **Login**: state = ``login:<provider_id>``. After success → redirect to ``/``.
  *   - **Register**: state = ``register:<provider_id>``. After success →
  *     redirect to ``/`` with a register-success toast.
- *   - **Bind**: state = ``bind:<user_id>``. The settings page sets a
+ *   - **Bind**: state = ``bind:<user_id>``. The profile page sets a
  *     ``lifetree.oauth.bind`` sessionStorage flag before redirecting to the
- *     provider so we know to send the user back to ``/settings`` (and show
+ *     provider so we know to send the user back to ``/profile`` (and show
  *     "binding" messaging instead of "logging in") after the round-trip.
  */
 export function OAuthCallbackHandler({ provider }: { provider: string }) {
@@ -80,7 +80,7 @@ export function OAuthCallbackHandler({ provider }: { provider: string }) {
       const msg = base + ": " + oauthError;
       setError(msg);
       toast({ title: base, description: msg, variant: "error" });
-      setTimeout(() => router.replace(isBindFlow ? "/settings" : "/"), 1500);
+      setTimeout(() => router.replace(isBindFlow ? "/profile" : "/"), 1500);
       return;
     }
 
@@ -91,7 +91,7 @@ export function OAuthCallbackHandler({ provider }: { provider: string }) {
       const desc = t("auth.oauth.missingParams");
       setError(desc);
       toast({ title: msg, description: desc, variant: "error" });
-      setTimeout(() => router.replace(isBindFlow ? "/settings" : "/"), 1500);
+      setTimeout(() => router.replace(isBindFlow ? "/profile" : "/"), 1500);
       return;
     }
 
@@ -99,7 +99,7 @@ export function OAuthCallbackHandler({ provider }: { provider: string }) {
       .then(() => {
         if (isBindFlow) {
           toast({ title: t("auth.oauth.bindSuccess"), variant: "success" });
-          router.replace("/settings");
+          router.replace("/profile");
         } else if (isRegisterFlow) {
           toast({ title: t("auth.registerSuccess"), variant: "success" });
           router.replace("/");
@@ -119,7 +119,7 @@ export function OAuthCallbackHandler({ provider }: { provider: string }) {
           description: detail,
           variant: "error",
         });
-        setTimeout(() => router.replace(isBindFlow ? "/settings" : "/"), 2000);
+        setTimeout(() => router.replace(isBindFlow ? "/profile" : "/"), 2000);
       });
   }, [params, router, loginWithOAuth, t, toast, isBindFlow, isRegisterFlow, provider]);
 

@@ -50,6 +50,7 @@ import { api, type AdminUserRead, type AdminUserUpdate } from "@/lib/api";
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 import { PlatformConfig } from "@/components/settings/platform-config";
 import { UseModeCard } from "@/components/settings/use-mode-card";
+import { SystemComponentsCard } from "@/components/settings/system-components-card";
 
 export default function AdminPage() {
   const t = useT();
@@ -243,7 +244,7 @@ export default function AdminPage() {
               <UserRow
                 key={u.id}
                 user={u}
-                isSelf={u.id === user.id}
+                isSelf={!!user && u.id === user.id}
                 onEdit={() => openEditDialog(u)}
                 onDelete={() => deleteUser(u)}
               />
@@ -255,6 +256,9 @@ export default function AdminPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* System components (docker services status) */}
+      <SystemComponentsCard />
 
       {/* Platform services configuration */}
       <PlatformConfig />

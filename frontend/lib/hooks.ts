@@ -57,6 +57,11 @@ export function useEvents(riskLevel?: string) {
   return useSWR(["events", riskLevel], () => api.listEvents(riskLevel), swrConfig);
 }
 
+// §4.9 Review Inbox — pending-review queue
+export function usePendingReview(limit = 50) {
+  return useSWR(["pending-review", limit], () => api.listPendingReview(limit), swrConfig);
+}
+
 export function useSources() {
   return useSWR("sources", () => api.listSources(), swrConfig);
 }

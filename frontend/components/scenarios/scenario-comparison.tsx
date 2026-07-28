@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
-import { Loader2, Play, GitBranch, GitMerge, X } from "lucide-react";
+import { Loader2, Play, GitBranch, GitMerge, X, Moon } from "lucide-react";
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { formatPercent, formatDate } from "@/lib/utils";
@@ -46,6 +46,28 @@ export function ScenarioComparison({ scenarios, onRerun }: Props) {
   const [branchingId, setBranchingId] = useState<string | null>(null);
   const [branchName, setBranchName] = useState("");
   const [branching, setBranching] = useState(false);
+  const [updatingStatusId, setUpdatingStatusId] = useState<string | null>(null);
+
+  async function handleToggleDormant(s: Scenario) {
+    const nextStatus = s.status === "dormant" ? "active" : "dormant";
+    setUpdatingStatusId(s.id);
+    try {
+      await api.updateScenario(s.id, { status: nextStatus });
+      toast({
+        title: nextStatus === "dormant" ? "分支已休眠" : "分支已激活",
+        variant: "success",
+      });
+      onRerun?.();
+    } catch (e: any) {
+      toast({
+        title: "操作失败",
+        description: e?.message,
+        variant: "error",
+      });
+    } finally {
+      setUpdatingStatusId(null);
+    }
+  }
 
   async function handleRun(id: string) {
     setRunning(id);
@@ -275,6 +297,24 @@ export function ScenarioComparison({ scenarios, onRerun }: Props) {
                     <GitMerge className="h-3 w-3" />
                   )}
                   <span className="ml-1">{t("scenarioComparison.merge")}</span>
+                </Button>
+              )}
+              {!isBranching && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={updatingStatusId === s.id}
+                  onClick={() => handleToggleDormant(s)}
+                  title={s.status === "dormant" ? "激活分支" : "归档/休眠分支"}
+                >
+                  {updatingStatusId === s.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Moon className="h-3 w-3" />
+                  )}
+                  <span className="ml-1">
+                    {s.status === "dormant" ? "激活" : "休眠"}
+                  </span>
                 </Button>
               )}
             </div>

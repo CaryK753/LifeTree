@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useGoals, useScenarios } from "@/lib/hooks";
 import { ScenarioTree, type ScenarioNodeData } from "@/components/scenarios/scenario-tree";
 import { ScenarioDetailPanel } from "@/components/scenarios/scenario-detail-panel";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -19,7 +20,7 @@ import {
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog";
-import { Loader2, Plus, X, GitBranch, Network, ListTree, LineChart } from "lucide-react";
+import { Loader2, Plus, X, GitBranch, Network, ListTree, LineChart, AlertTriangle, Moon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { useT } from "@/lib/i18n/provider";
@@ -50,6 +51,31 @@ export default function ScenariosPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("tree");
 
   const scenariosList = (scenarios as any[]) ?? [];
+
+  // Active branches (max 3 allowed simultaneously per §5.5)
+  const activeBranches = useMemo(() => {
+    return scenariosList.filter(
+      (s) => s.status === "active" || s.status === "draft"
+    );
+  }, [scenariosList]);
+  const activeCount = activeBranches.length;
+
+  // Auto-archive excess active branches if activeCount > 3
+  useEffect(() => {
+    if (activeCount > 3) {
+      const excess = activeBranches.slice(3);
+      Promise.all(
+        excess.map((s) => api.updateScenario(s.id, { status: "dormant" }))
+      ).then(() => {
+        toast({
+          title: "已自动休眠超限分支",
+          description: "最多同时支持 3 个活跃对比分支，超出部分已自动设为休眠。",
+          variant: "info",
+        });
+        mutate();
+      });
+    }
+  }, [activeBranches, activeCount, mutate, toast]);
 
   // Look up parent scenario for the breadcrumb in the detail panel.
   const parentScenario = useMemo(() => {
@@ -114,6 +140,21 @@ export default function ScenariosPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {selected && (
+            <Badge
+              variant="outline"
+              className={cn(
+                "gap-1 text-xs px-2.5 py-1 font-medium transition-colors",
+                activeCount >= 3
+                  ? "border-amber-500/40 text-amber-600 dark:text-amber-400 bg-amber-500/10"
+                  : "border-emerald-500/40 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10"
+              )}
+            >
+              <GitBranch className="h-3.5 w-3.5" />
+              <span>{activeCount}/3 活跃分支</span>
+            </Badge>
+          )}
+
           <select
             value={selected ?? ""}
             onChange={(e) => setGoalId(e.target.value)}
@@ -191,6 +232,14 @@ export default function ScenariosPage() {
           )}
         </div>
       </header>
+
+      {/* Warning banner when active branches >= 3 */}
+      {selected && activeCount >= 3 && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-xs text-amber-700 dark:text-amber-300">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+          <span>推荐保持 ≤3 个活跃分支以避免决策瘫痪</span>
+        </div>
+      )}
 
       {/* Create scenario dialog */}
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
@@ -284,7 +333,8 @@ export default function ScenariosPage() {
                     <th className="py-2 px-3 font-medium text-right">P50</th>
                     <th className="py-2 px-3 font-medium text-right">P90</th>
                     <th className="py-2 px-3 font-medium">{t("scenarioComparison.colTopRisk")}</th>
-                    <th className="py-2 pl-3 font-medium text-right">{t("scenarioComparison.colMedian")}</th>
+                    <th className="py-2 px-3 font-medium text-right">{t("scenarioComparison.colMedian")}</th>
+                    <th className="py-2 pl-3 font-medium text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -308,6 +358,8 @@ export default function ScenariosPage() {
                               s.status === "active"
                                 ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
                                 : s.status === "draft"
+                                ? "bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                                : s.status === "dormant"
                                 ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
                                 : "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400"
                             )}
@@ -327,8 +379,31 @@ export default function ScenariosPage() {
                         <td className="py-2 px-3 text-zinc-600 dark:text-zinc-400 truncate max-w-[180px]">
                           {topRisk ? `${topRisk.name} (${Math.round(topRisk.contribution * 100)}%)` : "—"}
                         </td>
-                        <td className="py-2 pl-3 text-right tabular-nums text-zinc-600 dark:text-zinc-400">
+                        <td className="py-2 px-3 text-right tabular-nums text-zinc-600 dark:text-zinc-400">
                           {s.median_time_months != null ? `${s.median_time_months}m` : "—"}
+                        </td>
+                        <td className="py-2 pl-3 text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-[10px]"
+                            onClick={async () => {
+                              const nextStatus = s.status === "dormant" ? "active" : "dormant";
+                              try {
+                                await api.updateScenario(s.id, { status: nextStatus });
+                                toast({
+                                  title: nextStatus === "dormant" ? "分支已休眠" : "分支已激活",
+                                  variant: "success",
+                                });
+                                mutate();
+                              } catch (e: any) {
+                                toast({ title: "操作失败", description: e?.message, variant: "error" });
+                              }
+                            }}
+                          >
+                            <Moon className="h-3 w-3 mr-1" />
+                            {s.status === "dormant" ? "激活" : "休眠"}
+                          </Button>
                         </td>
                       </tr>
                     );
@@ -401,6 +476,29 @@ function ScenarioGridCard({
   const p10 = scenario.success_probability?.p10;
   const p90 = scenario.success_probability?.p90;
 
+  const [updatingStatus, setUpdatingStatus] = useState(false);
+
+  async function handleToggleDormant() {
+    const nextStatus = scenario.status === "dormant" ? "active" : "dormant";
+    setUpdatingStatus(true);
+    try {
+      await api.updateScenario(scenario.id, { status: nextStatus });
+      toast({
+        title: nextStatus === "dormant" ? "分支已休眠" : "分支已激活",
+        variant: "success",
+      });
+      onRerun?.();
+    } catch (e: any) {
+      toast({
+        title: "操作失败",
+        description: e?.message,
+        variant: "error",
+      });
+    } finally {
+      setUpdatingStatus(false);
+    }
+  }
+
   async function handleRun() {
     setRunning(true);
     try {
@@ -444,16 +542,30 @@ function ScenarioGridCard({
   return (
     <Card className="flex flex-col">
       <CardHeader>
-        <div>
-          <CardTitle className="flex items-center gap-2">
-            <GitBranch className="h-4 w-4 text-brand-600 dark:text-brand-400" />
-            <span className="truncate">{scenario.name}</span>
-          </CardTitle>
-          {scenario.description && (
-            <CardDescription className="mt-1">
-              {scenario.description}
-            </CardDescription>
-          )}
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <CardTitle className="flex items-center gap-2">
+              <GitBranch className="h-4 w-4 text-brand-600 dark:text-brand-400 shrink-0" />
+              <span className="truncate">{scenario.name}</span>
+            </CardTitle>
+            {scenario.description && (
+              <CardDescription className="mt-1 line-clamp-2">
+                {scenario.description}
+              </CardDescription>
+            )}
+          </div>
+          <Badge
+            variant="risk"
+            riskLevel={
+              scenario.status === "active"
+                ? "low"
+                : scenario.status === "draft"
+                ? "medium"
+                : "high"
+            }
+          >
+            {scenario.status}
+          </Badge>
         </div>
       </CardHeader>
       <CardContent className="flex-1 space-y-3">
@@ -553,6 +665,22 @@ function ScenarioGridCard({
         >
           <GitBranch className="h-3 w-3" />
           <span className="ml-1">{t("scenarioComparison.branch")}</span>
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={updatingStatus}
+          onClick={handleToggleDormant}
+          title={scenario.status === "dormant" ? "激活分支" : "归档/休眠分支"}
+        >
+          {updatingStatus ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Moon className="h-3 w-3" />
+          )}
+          <span className="ml-1">
+            {scenario.status === "dormant" ? "激活" : "休眠"}
+          </span>
         </Button>
       </div>
     </Card>

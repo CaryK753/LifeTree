@@ -55,6 +55,7 @@ class EventBase(BaseModel):
     risk_flag_type: str | None = None
     risk_flag_urgency: Literal["normal", "elevated", "urgent"] | None = None
     extraction_confidence: float = 0.8
+    status: Literal["approved", "pending_review", "sunk_low_weight"] | str = "approved"
     meta: dict[str, Any] = {}
 
 

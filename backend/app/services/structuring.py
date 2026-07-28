@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import LLMNotConfiguredError
@@ -171,6 +172,11 @@ class StructuringService:
                 )
                 continue
 
+            status = self._classify_atom_status(
+                confidence=atom.extraction_confidence,
+                impact_level=atom.risk_flag.level if atom.risk_flag else None,
+            )
+
             event = Event(
                 source_id=source.id,
                 user_id=user_id,
@@ -181,12 +187,13 @@ class StructuringService:
                 effective_at=atom.effective_at,
                 old_value=atom.old_value,
                 new_value=atom.new_value,
-                risk_flag_level=atom.risk_flag.level,
-                risk_flag_type=atom.risk_flag.type,
-                risk_flag_urgency=atom.risk_flag.urgency,
+                risk_flag_level=atom.risk_flag.level if atom.risk_flag else None,
+                risk_flag_type=atom.risk_flag.type if atom.risk_flag else None,
+                risk_flag_urgency=atom.risk_flag.urgency if atom.risk_flag else None,
                 extraction_confidence=atom.extraction_confidence,
+                status=status,
                 embedding=embeddings[idx] if idx < len(embeddings) else None,
-                half_life_days=self._half_life_for(atom.risk_flag.type),
+                half_life_days=self._half_life_for(atom.risk_flag.type if atom.risk_flag else None),
             )
             self.db.add(event)
             self.db.flush()
@@ -205,7 +212,21 @@ class StructuringService:
             except Exception as exc:  # noqa: BLE001
                 log.warning("structuring.graph_mirror_failed", error=str(exc))
 
-            if atom.risk_flag.level == "high":
+            # §4.9: low-confidence + high-impact events auto-spawn a
+            # lightweight "存疑子分支" off the user's primary goal so the
+            # reasoning engine can independently compute the potential
+            # impact without polluting the main scenario.
+            if status == "pending_review":
+                try:
+                    self._spawn_review_branch(event, user_id=user_id)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "structuring.branch_spawn_failed",
+                        event_id=event.id,
+                        error=str(exc),
+                    )
+
+            if atom.risk_flag and atom.risk_flag.level == "high":
                 notifications_triggered += 1
 
         # Metrics
@@ -261,3 +282,94 @@ class StructuringService:
             "other": 365,
         }
         return defaults.get(risk_type or "other", 365)
+
+    def _classify_atom_status(self, confidence: float, impact_level: str | None) -> str:
+        """Route atom status based on confidence score and impact level per §4.9.
+
+        Rules:
+        - confidence >= 0.8: auto-approve ('approved')
+        - confidence < 0.8 and impact >= 'high': route to review inbox ('pending_review')
+        - confidence < 0.8 and impact < 'high': auto-sink with low weight ('sunk_low_weight')
+        """
+        if confidence >= 0.8:
+            return "approved"
+
+        impact = (impact_level or "low").lower()
+        if impact in ("high", "critical"):
+            return "pending_review"
+
+        return "sunk_low_weight"
+
+    def _spawn_review_branch(self, event: Event, *, user_id: str | None) -> None:
+        """§4.9: auto-spawn a lightweight '存疑子分支' for a pending_review event.
+
+        Finds the user's primary goal (falling back to the most recently
+        created goal), locates the latest scenario for that goal, and
+        spawns a DRAFT child branch carrying the uncertain event as an
+        assumption. The reasoning engine can later run on this branch to
+        compute the potential impact without polluting the main scenario.
+
+        Silently no-ops when the user has no goals or no scenarios — the
+        event itself is still persisted, just without a parallel branch.
+        """
+        if user_id is None:
+            return
+
+        # Lazy imports to avoid circular dependencies at module load time.
+        from app.models.goal import Goal
+        from app.models.scenario import Scenario
+        from app.services.scenarios import ScenarioService
+
+        # Find the user's primary goal, falling back to the newest goal.
+        goal = self.db.scalar(
+            select(Goal)
+            .where(Goal.user_id == user_id)
+            .order_by(Goal.created_at.desc())
+        )
+        if goal is None:
+            log.info("structuring.branch_skip_no_goal", user_id=user_id, event_id=event.id)
+            return
+
+        # Find the latest scenario for this goal to use as the parent.
+        parent = self.db.scalar(
+            select(Scenario)
+            .where(Scenario.goal_id == goal.id)
+            .order_by(
+                Scenario.computed_at.desc().nullslast(),
+                Scenario.created_at.desc(),
+            )
+        )
+
+        svc = ScenarioService(self.db)
+        branch_name = f"存疑分支: {event.subject} {event.action}"
+        assumptions = {
+            "pending_review_event_id": event.id,
+            "pending_review_subject": event.subject,
+            "pending_review_action": event.action,
+            "extraction_confidence": event.extraction_confidence,
+            "risk_flag_level": event.risk_flag_level,
+            "note": "低置信度+高影响事件触发的自动存疑分支；待用户审核后合并或关闭。",
+        }
+
+        if parent is None:
+            # No parent scenario — create a top-level draft branch instead.
+            svc.create_branch(
+                goal_id=goal.id,
+                name=branch_name,
+                description=(
+                    f"自动生成于事件审核：{event.subject} {event.action}。"
+                    f"置信度 {event.extraction_confidence:.2f}，影响等级 {event.risk_flag_level}。"
+                ),
+            )
+        else:
+            svc.spawn_branch(
+                parent,
+                name=branch_name,
+                assumptions=assumptions,
+            )
+        log.info(
+            "structuring.review_branch_spawned",
+            event_id=event.id,
+            goal_id=goal.id,
+            parent_scenario_id=parent.id if parent else None,
+        )

@@ -80,6 +80,21 @@ class UserProfile(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
         """True if this user has a password set (can log in via /auth/login)."""
         return self.password_hash is not None
 
+    @property
+    def lifecycle_stage(self) -> str:
+        """Current lifecycle stage: 'planning', 'submitted', 'in_review', 'waiting_eoi'."""
+        return (self.demographics or {}).get("lifecycle_stage", "planning")
+
+    @property
+    def cruising_mode(self) -> bool:
+        """Whether user has enabled Cruising Mode during long waiting periods."""
+        return bool((self.demographics or {}).get("cruising_mode", False))
+
+    @property
+    def joint_profiles(self) -> list[dict[str, Any]]:
+        """Joint applicant / family profile details."""
+        return (self.demographics or {}).get("joint_profiles", [])
+
 
 class UserUpload(UUIDPkMixin, TimestampMixin, Base):
     """Private information uploaded by user (PDF, screenshot, email forward, etc.)."""

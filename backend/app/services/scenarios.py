@@ -103,7 +103,38 @@ class ScenarioService:
         self.db.commit()
         return scenario
 
-    # ---------------- Lifecycle ----------------
+    def create_branch(
+        self, goal_id: str, name: str, description: str | None = None
+    ) -> Scenario:
+        """Create a new top-level or child scenario branch for a goal."""
+        scenario = Scenario(
+            id=str(uuid.uuid4()),
+            goal_id=goal_id,
+            name=name,
+            description=description,
+            status=ScenarioStatus.ACTIVE.value,
+        )
+        self.db.add(scenario)
+        self.db.commit()
+        self.graph.upsert_scenario(scenario)
+        log.info("scenario.branch_created", id=scenario.id, goal_id=goal_id, name=name)
+        return scenario
+
+    def count_active_branches(self, goal_id: str) -> int:
+        """Count active scenario branches for a goal."""
+        return len(
+            list(
+                self.db.scalars(
+                    select(Scenario)
+                    .where(
+                        Scenario.goal_id == goal_id,
+                        Scenario.status.in_(
+                            [ScenarioStatus.ACTIVE.value, ScenarioStatus.DRAFT.value]
+                        ),
+                    )
+                )
+            )
+        )
 
     def spawn_branch(
         self,

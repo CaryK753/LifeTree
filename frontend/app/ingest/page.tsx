@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   Card,
   CardContent,
@@ -39,6 +39,7 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
+import { PIIPreviewPanel } from "@/components/sources/pii-preview-panel";
 
 const KIND_VALUES = ["public", "official", "news", "advisor", "user_upload", "other"] as const;
 
@@ -78,6 +79,26 @@ export default function IngestPage() {
   const [legalAck, setLegalAck] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [fileContent, setFileContent] = useState("");
+
+  useEffect(() => {
+    if (!file) {
+      setFileContent("");
+      return;
+    }
+    const isTextLike =
+      file.type.startsWith("text/") ||
+      /\.(txt|md|csv|json|xml|html|log|py|js|ts|tsx|jsx)$/i.test(file.name);
+
+    if (isTextLike || file.size < 2 * 1024 * 1024) {
+      file
+        .text()
+        .then((t) => setFileContent(t))
+        .catch(() => setFileContent(file.name));
+    } else {
+      setFileContent(file.name);
+    }
+  }, [file]);
 
   async function handleTextIngest() {
     if (!text.trim() || !textTitle.trim()) return;
@@ -277,6 +298,7 @@ export default function IngestPage() {
                 placeholder={t("ingest.field.bodyPlaceholder")}
               />
             </div>
+            {text.trim() && <PIIPreviewPanel text={text} />}
             <div className="flex justify-end">
               <Button
                 onClick={handleTextIngest}
@@ -381,6 +403,9 @@ export default function IngestPage() {
                 placeholder={file?.name ?? t("ingest.file.titlePlaceholder")}
               />
             </div>
+            {file && (
+              <PIIPreviewPanel text={fileContent || fileTitle || file.name} />
+            )}
 
             {/* Legal disclaimer — required for private uploads. Per project
                 plan §4.7: "上传流程强制确认" the user must acknowledge that

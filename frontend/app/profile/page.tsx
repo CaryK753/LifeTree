@@ -51,7 +51,6 @@ import {
   Pencil,
   Check,
   X,
-  KeyRound,
   Crown,
   Bell,
   AlertTriangle,
@@ -60,6 +59,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
+import { OAuthBindingCard } from "@/components/settings/oauth-binding-card";
 
 // Demographic keys we surface as typed fields (per project plan §4.4).
 const DEMO_FIELDS: { key: string; labelKey: string; placeholderKey: string }[] = [
@@ -112,6 +112,7 @@ export default function ProfilePage() {
   const { data: goals } = useGoals();
   const { user: authUser } = useAuth();
   const { data: authConfig } = useAuthConfig();
+  const isMultiUser = (authConfig?.use_mode ?? "single") === "multi";
   const toast = useToast();
   const { confirm, ConfirmRoot } = useConfirm();
 
@@ -151,6 +152,10 @@ export default function ProfilePage() {
       const v = (profile.demographics as Record<string, unknown>)?.[f.key];
       demo[f.key] = v == null ? "" : String(v);
     }
+    const ls = (profile.demographics as Record<string, unknown>)?.[
+      "lifecycle_stage"
+    ];
+    demo["lifecycle_stage"] = ls == null ? "planning" : String(ls);
     const pf = profile.priority_factors ?? {};
     const nc = profile.notify_channels ?? {};
     const qh = (profile.quiet_hours ?? {}) as { start?: string; end?: string };
@@ -289,10 +294,11 @@ export default function ProfilePage() {
     }
     setSaving(true);
     try {
-      // Strip empty demographic strings.
-      const demographics: Record<string, string> = {};
+      // Preserve existing demographic fields (e.g. cruising_mode) and update form fields.
+      const demographics: Record<string, unknown> = { ...(profile.demographics || {}) };
       for (const [k, v] of Object.entries(form.demographics)) {
         if (v.trim()) demographics[k] = v.trim();
+        else delete demographics[k];
       }
       const priority_factors: Record<string, boolean> = {};
       for (const [k, v] of Object.entries(form.priority_factors)) {
@@ -390,74 +396,6 @@ export default function ProfilePage() {
           {t("profile.save")}
         </Button>
       </header>
-
-      {/* ---------- 账户信息（用户 ID + 角色）----------
-          用户 ID 用于在 .env 中配置管理员提权；角色展示当前用户的权限。
-          仅在已登录（authUser 存在）时显示。 */}
-      {authUser && (
-        <Card>
-          <CardHeader>
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <KeyRound className="h-4 w-4 text-brand-600 dark:text-brand-400" />
-                {t("profile.section.account")}
-              </CardTitle>
-              <CardDescription className="mt-1">
-                {t("profile.section.accountHint")}
-              </CardDescription>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Field label={t("profile.field.userId")}>
-                <div className="flex items-center gap-2">
-                  <code className="flex-1 px-3 py-2 rounded-md bg-black/[0.04] dark:bg-white/[0.04] border border-black/10 dark:border-white/10 text-xs font-mono text-zinc-700 dark:text-zinc-300 break-all select-all">
-                    {authUser.id}
-                  </code>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-9 shrink-0"
-                    onClick={() => {
-                      navigator.clipboard.writeText(authUser.id);
-                      toast({
-                        title: t("profile.userIdCopied"),
-                        variant: "success",
-                      });
-                    }}
-                  >
-                    {t("common.copy")}
-                  </Button>
-                </div>
-              </Field>
-              <Field label={t("profile.field.role")}>
-                <div className="flex items-center gap-2">
-                  {authUser.role === "admin" ? (
-                    <Badge className="border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300">
-                      <Crown className="h-3 w-3 mr-1" />
-                      {t("profile.roleAdmin")}
-                    </Badge>
-                  ) : (
-                    <Badge className="border-brand-500/30 bg-brand-500/10 text-brand-700 dark:text-brand-300">
-                      <UserIcon className="h-3 w-3 mr-1" />
-                      {t("profile.roleUser")}
-                    </Badge>
-                  )}
-                  {!authUser.is_enabled && (
-                    <Badge className="border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300">
-                      {t("profile.accountDisabled")}
-                    </Badge>
-                  )}
-                </div>
-                <p className="text-[10px] text-zinc-500 leading-snug mt-1.5">
-                  {t("profile.field.roleHint")}
-                </p>
-              </Field>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* ---------- 基础属性 ---------- */}
       <Card>
@@ -558,6 +496,57 @@ export default function ProfilePage() {
               />
             </Field>
           </div>
+
+          {/* User ID + role — moved here from the former "账户信息" card.
+              User ID is needed to configure LIFETREE_ADMIN_USER_IDS in .env;
+              role shows the current permission level. Only shown when
+              authenticated (single-user mode has no authUser). */}
+          {authUser && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Field label={t("profile.field.userId")} hint={t("profile.field.roleHint")}>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 px-3 py-2 rounded-md bg-black/[0.04] dark:bg-white/[0.04] border border-black/10 dark:border-white/10 text-xs font-mono text-zinc-700 dark:text-zinc-300 break-all select-all">
+                    {authUser.id}
+                  </code>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-9 shrink-0"
+                    onClick={() => {
+                      navigator.clipboard.writeText(authUser.id);
+                      toast({
+                        title: t("profile.userIdCopied"),
+                        variant: "success",
+                      });
+                    }}
+                  >
+                    {t("common.copy")}
+                  </Button>
+                </div>
+              </Field>
+              <Field label={t("profile.field.role")}>
+                <div className="flex items-center gap-2">
+                  {authUser.role === "admin" ? (
+                    <Badge className="border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+                      <Crown className="h-3 w-3 mr-1" />
+                      {t("profile.roleAdmin")}
+                    </Badge>
+                  ) : (
+                    <Badge className="border-brand-500/30 bg-brand-500/10 text-brand-700 dark:text-brand-300">
+                      <UserIcon className="h-3 w-3 mr-1" />
+                      {t("profile.roleUser")}
+                    </Badge>
+                  )}
+                  {!authUser.is_enabled && (
+                    <Badge className="border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300">
+                      {t("profile.accountDisabled")}
+                    </Badge>
+                  )}
+                </div>
+              </Field>
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {DEMO_FIELDS.map((f) => (
               <Field key={f.key} label={t(f.labelKey)}>
@@ -569,6 +558,33 @@ export default function ProfilePage() {
                 />
               </Field>
             ))}
+            <Field
+              label={t("profile.field.lifecycleStage")}
+              hint={t("profile.field.lifecycleStageHint")}
+            >
+              <Select
+                value={form.demographics["lifecycle_stage"] || "planning"}
+                onValueChange={(v) => updateDemo("lifecycle_stage", v)}
+              >
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="planning">
+                    {t("profile.lifecycleStage.planning")}
+                  </SelectItem>
+                  <SelectItem value="submitted">
+                    {t("profile.lifecycleStage.submitted")}
+                  </SelectItem>
+                  <SelectItem value="in_review">
+                    {t("profile.lifecycleStage.in_review")}
+                  </SelectItem>
+                  <SelectItem value="waiting_eoi">
+                    {t("profile.lifecycleStage.waiting_eoi")}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
           </div>
         </CardContent>
       </Card>
@@ -798,6 +814,9 @@ export default function ProfilePage() {
           </Field>
         </CardContent>
       </Card>
+
+      {/* ---------- 第三方账号绑定 ---------- */}
+      {isMultiUser && <OAuthBindingCard />}
 
       {/* ---------- 通行密钥 ---------- */}
       {authUser && authConfig?.passkey_login_enabled && (

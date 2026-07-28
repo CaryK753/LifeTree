@@ -79,9 +79,12 @@ export function GoalCelebration({
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
       onClick={onClose}
     >
-      {/* Confetti layer — pure CSS, pointer-events: none. */}
+      {/* Confetti layer — pure CSS, pointer-events: none.
+          Hidden when the user prefers reduced motion (per §6 低焦虑设计
+          and WCAG 2.3.3). The celebration dialog still shows; only the
+          falling-confetti animation is suppressed. */}
       {confettiVisible && (
-        <div aria-hidden className="pointer-events-none">
+        <div aria-hidden className="pointer-events-none motion-reduce:hidden">
           {Array.from({ length: CONFETTI_COUNT }, (_, i) => (
             <span key={i} className="confetti-piece" />
           ))}

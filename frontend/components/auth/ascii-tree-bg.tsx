@@ -46,7 +46,7 @@ export function AsciiTreeBackground() {
     const THEMES: Record<"dark" | "light", Theme> = {
       dark: {
         bg: "#0b0d12",
-        tree: "rgba(120, 190, 140, 0.32)",
+        tree: "rgba(100, 220, 130, 0.55)",
         meteor: "rgba(220, 230, 255, 0.85)",
         ground: "rgba(90, 110, 130, 0.25)",
       },
@@ -74,6 +74,7 @@ export function AsciiTreeBackground() {
     const TAG_TREE = 1;
     const TAG_GROUND = 2;
     const TAG_METEOR = 3;
+    const TAG_SPARK = 4;
 
     interface Branch {
       x: number;
@@ -92,16 +93,28 @@ export function AsciiTreeBackground() {
 
     let trees: Tree[] = [];
     let meteors: Meteor[] = [];
+    let sparks: Spark[] = [];
 
     interface Meteor {
       x: number;
       y: number;
       vx: number; // 每帧位移（格）
       vy: number;
-      life: number; // 剩余帧数
-      maxLife: number;
       trail: Array<{ x: number; y: number; age: number }>;
+      landed: boolean;
     }
+
+    interface Spark {
+      x: number;
+      y: number;
+      vx: number;
+      vy: number;
+      life: number;
+      ch: string;
+    }
+
+    // 地面线 Y 坐标 (用于流星碰撞检测)
+    let groundLineY = 0;
 
     let rafId = 0;
     let lastTick = 0;
@@ -129,8 +142,8 @@ export function AsciiTreeBackground() {
       const iy = Math.round(y);
       if (ix < 0 || ix >= cols || iy < 0 || iy >= rows) return;
       const idx = iy * cols + ix;
-      // 树枝允许覆盖地面，流星允许覆盖任何东西
-      if (tag === TAG_METEOR) {
+      // 流星和火花允许覆盖任何东西
+      if (tag === TAG_METEOR || tag === TAG_SPARK) {
         grid[idx] = ch ?? ".";
         colorTag[idx] = tag;
         return;
@@ -156,14 +169,15 @@ export function AsciiTreeBackground() {
       colorTag.fill(0);
       trees = [];
       meteors = [];
+      sparks = [];
 
       // 地面线：随机高度起伏的草地线
-      const groundY = rows - 1 - Math.max(1, Math.floor(rows * 0.08));
+      groundLineY = rows - 1 - Math.max(1, Math.floor(rows * 0.08));
       for (let x = 0; x < cols; x++) {
         // 起伏：用正弦+随机扰动
         const wave =
           Math.sin(x * 0.18) * 1.2 + (Math.random() * 1.4 - 0.7);
-        const gy = Math.round(groundY + wave);
+        const gy = Math.round(groundLineY + wave);
         setCell(x, gy, 0, TAG_GROUND, "·");
         // 地面下面一行偶尔补一个 "."
         if (Math.random() < 0.4) setCell(x, gy + 1, 0, TAG_GROUND, ".");
@@ -183,7 +197,7 @@ export function AsciiTreeBackground() {
         usedX.add(rootX);
         for (let d = -1; d <= 1; d++) usedX.add(rootX + d);
 
-        const rootY = groundY + (Math.random() < 0.3 ? 1 : 0);
+        const rootY = groundLineY + (Math.random() < 0.3 ? 1 : 0);
         // 树干长度：决定树高
         const trunkLen = 7 + Math.floor(Math.random() * 9);
         // 起始角度：略向左/右倾斜
@@ -263,38 +277,67 @@ export function AsciiTreeBackground() {
     }
 
     function spawnMeteor() {
-      // 统一方向：从右上往左下坠落
-      // 起始位置：右上角附近，高度尽量高（屏幕顶部 0~25% 区域）
-      const startX = cols + 2 + Math.random() * 4;
-      const startY = Math.floor(Math.random() * Math.max(1, Math.floor(rows * 0.25)));
-      const speed = 0.9 + Math.random() * 0.6;
-      // 角度：左下方向（π - 0.2 左右），即 cos<0, sin>0
-      const angle = Math.PI - Math.PI * 0.16 - Math.random() * 0.08;
-      const life = 40 + Math.floor(Math.random() * 30);
+      // 流星从顶部任意水平位置出发
+      const startX = Math.floor(Math.random() * cols);
+      const startY = -1; // 从屏幕上方刚出画面的位置开始
+
+      // 方向：向下且带随机的水平偏移，模拟斜向坠落
+      const horizontalDrift = (Math.random() - 0.5) * 1.2; // -0.6 ~ 0.6
+      const fallSpeed = 0.7 + Math.random() * 0.5; // 0.7 ~ 1.2
+
       meteors.push({
         x: startX,
         y: startY,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        life,
-        maxLife: life,
+        vx: horizontalDrift,
+        vy: fallSpeed,
         trail: [],
+        landed: false,
       });
+    }
+
+    const SPARK_CHARS = ["✦", "✧", "*", "·", ".", "+", "★"];
+
+    function spawnImpactSparks(impactX: number, impactY: number) {
+      // 碰撞闪耀动画：向四周散射 6~10 颗火花
+      const count = 6 + Math.floor(Math.random() * 5);
+      for (let i = 0; i < count; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 0.3 + Math.random() * 0.8;
+        sparks.push({
+          x: impactX,
+          y: impactY,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed * 0.6 - 0.3, // 偏向上方散射
+          life: 4 + Math.floor(Math.random() * 6),
+          ch: SPARK_CHARS[Math.floor(Math.random() * SPARK_CHARS.length)],
+        });
+      }
     }
 
     function updateMeteors() {
       const next: Meteor[] = [];
       for (const m of meteors) {
+        if (m.landed) continue;
+
         // 推进
         m.x += m.vx;
         m.y += m.vy;
-        m.life--;
+
+        // 碰撞检测：到达地面线（含小量容差）
+        if (m.y >= groundLineY - 1) {
+          m.landed = true;
+          spawnImpactSparks(Math.round(m.x), groundLineY - 1);
+          // 不再保留此流星
+          continue;
+        }
+
         // 记录尾迹
         m.trail.push({ x: m.x, y: m.y, age: 0 });
         // 老化所有尾迹
         for (const t of m.trail) t.age++;
         // 截断过老的尾迹（长度 ~ 14）
         if (m.trail.length > 16) m.trail.shift();
+
         // 渲染到 grid
         const trailLen = m.trail.length;
         for (let i = 0; i < trailLen; i++) {
@@ -307,12 +350,28 @@ export function AsciiTreeBackground() {
           );
           setCell(t.x, t.y, 0, TAG_METEOR, METEOR_CHARS[chIdx]);
         }
-        // 还活着 + 没飞出屏幕 → 保留
-        if (m.life > 0 && m.x > -5 && m.x < cols + 5 && m.y < rows + 5) {
+
+        // 还没飞出屏幕 → 保留
+        if (m.x > -5 && m.x < cols + 5 && m.y < rows + 5) {
           next.push(m);
         }
       }
       meteors = next;
+    }
+
+    function updateSparks() {
+      const next: Spark[] = [];
+      for (const s of sparks) {
+        s.x += s.vx;
+        s.y += s.vy;
+        s.vy += 0.05; // 微弱重力
+        s.life--;
+        if (s.life > 0) {
+          setCell(s.x, s.y, 0, TAG_SPARK, s.ch);
+          next.push(s);
+        }
+      }
+      sparks = next;
     }
 
     function render() {
@@ -331,6 +390,7 @@ export function AsciiTreeBackground() {
       const treeRuns: Run[] = [];
       const groundRuns: Run[] = [];
       const meteorRuns: Run[] = [];
+      const sparkRuns: Run[] = [];
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
           const idx = r * cols + c;
@@ -339,6 +399,7 @@ export function AsciiTreeBackground() {
           const tag = colorTag[idx];
           const run: Run = { x: c * CELL, y: r * CELL, ch };
           if (tag === TAG_METEOR) meteorRuns.push(run);
+          else if (tag === TAG_SPARK) sparkRuns.push(run);
           else if (tag === TAG_GROUND) groundRuns.push(run);
           else treeRuns.push(run);
         }
@@ -349,6 +410,9 @@ export function AsciiTreeBackground() {
       for (const run of treeRuns) ctx!.fillText(run.ch, run.x, run.y);
       ctx!.fillStyle = theme.meteor;
       for (const run of meteorRuns) ctx!.fillText(run.ch, run.x, run.y);
+      // 火花用更亮的颜色渲染
+      ctx!.fillStyle = theme.meteor;
+      for (const run of sparkRuns) ctx!.fillText(run.ch, run.x, run.y);
     }
 
     function tick(now: number) {
@@ -371,13 +435,14 @@ export function AsciiTreeBackground() {
           nextMeteorAt = now + 200; // 200ms 后放第一颗流星
         }
       } else if (phase === "meteor") {
-        // 随机间歇性放流星：上一颗流星飞完后随机等待 1.5~4 秒再放下一颗
-        if (meteors.length === 0 && now >= nextMeteorAt) {
+        // 随机间歇性放流星：上一颗流星着陆且火花散尽后随机等待再放下一颗
+        if (meteors.length === 0 && sparks.length === 0 && now >= nextMeteorAt) {
           spawnMeteor();
           // 下一次流星的随机间隔
           nextMeteorAt = now + 1500 + Math.random() * 2500;
         }
         updateMeteors();
+        updateSparks();
       }
       render();
     }

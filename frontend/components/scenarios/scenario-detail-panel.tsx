@@ -36,6 +36,7 @@ import {
   AlertTriangle,
   Clock,
   ChevronRight,
+  Moon,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatPercent, formatDate } from "@/lib/utils";
@@ -65,12 +66,35 @@ export function ScenarioDetailPanel({
   const [branchName, setBranchName] = useState("");
   const [branchAssumptions, setBranchAssumptions] = useState("");
   const [branching, setBranching] = useState(false);
+  const [updatingStatus, setUpdatingStatus] = useState(false);
 
   if (!scenario) return null;
 
   const p50 = scenario.success_probability?.p50;
   const p10 = scenario.success_probability?.p10;
   const p90 = scenario.success_probability?.p90;
+
+  async function handleToggleDormant() {
+    if (!scenario) return;
+    const nextStatus = scenario.status === "dormant" ? "active" : "dormant";
+    setUpdatingStatus(true);
+    try {
+      await api.updateScenario(scenario.id, { status: nextStatus });
+      toast({
+        title: nextStatus === "dormant" ? "分支已休眠" : "分支已激活",
+        variant: "success",
+      });
+      onRerun?.();
+    } catch (e: any) {
+      toast({
+        title: "操作失败",
+        description: e?.message,
+        variant: "error",
+      });
+    } finally {
+      setUpdatingStatus(false);
+    }
+  }
 
   async function handleRun() {
     if (!scenario) return;
@@ -280,6 +304,22 @@ export function ScenarioDetailPanel({
         >
           <GitBranch className="h-3 w-3" />
           <span className="ml-1">{t("scenarioComparison.branch")}</span>
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={updatingStatus}
+          onClick={handleToggleDormant}
+          title={scenario.status === "dormant" ? "激活分支" : "归档/休眠分支"}
+        >
+          {updatingStatus ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Moon className="h-3 w-3" />
+          )}
+          <span className="ml-1">
+            {scenario.status === "dormant" ? "激活" : "休眠"}
+          </span>
         </Button>
       </div>
 

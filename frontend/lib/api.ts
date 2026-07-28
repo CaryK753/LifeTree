@@ -320,6 +320,15 @@ export const api = {
   listEvents: (riskLevel?: string) =>
     request<unknown[]>(`/events${riskLevel ? `?risk_level=${riskLevel}` : ""}`),
 
+  // §4.9 Review Inbox — pending-review queue + status transition
+  listPendingReview: (limit = 50) =>
+    request<unknown[]>(`/events/pending-review?limit=${limit}`),
+  updateEventStatus: (eventId: string, action: "approve" | "sink" | "keep_sunk") =>
+    request<unknown>(`/events/${eventId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ action }),
+    }),
+
   // Sources
   listSources: () => request<unknown[]>(`/sources`),
   credibility: () =>
@@ -344,6 +353,20 @@ export const api = {
   }) =>
     request<unknown>(`/scenarios`, {
       method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateScenario: (
+    id: string,
+    payload: {
+      name?: string;
+      description?: string;
+      status?: "draft" | "active" | "dormant" | "merged" | "closed";
+      assumptions?: Record<string, unknown>;
+      impact_threshold?: number;
+    }
+  ) =>
+    request<unknown>(`/scenarios/${id}`, {
+      method: "PATCH",
       body: JSON.stringify(payload),
     }),
   branchScenario: (parentId: string, name: string, assumptions: Record<string, unknown>) =>
@@ -1049,6 +1072,12 @@ export interface FactorContribution {
   type: "requirement" | "risk_factor" | string;
   p: number; // success probability for this factor
   contribution: number; // contribution to failure
+  // §5.3 信源溯源下钻 — populated by the reasoning engine so the UI can
+  // offer one-click drill-down to the original source behind any deduction.
+  source_title?: string;
+  source_url?: string;
+  source_kind?: string;
+  source_credibility?: string;
 }
 
 export interface SurvivalPoint {

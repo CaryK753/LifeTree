@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
+from app.models.event import Event, InformationSource, Relationship
 from app.models.goal import Pathway, Requirement, RiskFactor
 from app.models.scenario import Scenario, ScenarioRun
 from app.services.reasoning.bayesian import BayesianEstimator
@@ -76,6 +77,22 @@ class ReasoningEngine:
                 bayes.factor_contributions, risk_factors
             )
 
+            # §5.3 信源溯源下钻 — attach the most credible source for each
+            # factor so the UI can offer one-click drill-down to the original
+            # document / news page behind any deduction.
+            enriched_contribs = self._enrich_with_sources(
+                bayes.factor_contributions, risk_factors, requirements
+            )
+
+            # Compute Risk Controllability Grade to avoid raw win-rate anxiety
+            p50 = mc.p50
+            if p50 >= 0.75:
+                grade, label = "robust", "稳健"
+            elif p50 >= 0.45:
+                grade, label = "moderate_risk", "中度风险"
+            else:
+                grade, label = "vulnerable", "高风险脆弱"
+
             result = {
                 "success_probability": {
                     "p10": mc.p10,
@@ -85,8 +102,10 @@ class ReasoningEngine:
                     "p_by_target_date": surv.p_by_target_date,
                 },
                 "overall_risk": 1.0 - mc.p50,
+                "controllability_grade": grade,
+                "controllability_label": label,
                 "key_risk_factors": key_risks,
-                "factor_contributions": bayes.factor_contributions,
+                "factor_contributions": enriched_contribs,
                 "survival_curve": surv.curve,
                 "median_time_months": surv.median_time_months,
                 "key_risk_times": mc.key_risk_times,
@@ -175,3 +194,117 @@ class ReasoningEngine:
                 }
             )
         return out[:5]
+
+    # ---------------- Source attribution (§5.3 信源溯源下钻) ----------------
+
+    # Credibility rank: higher = more trustworthy. Used to pick the best
+    # source when a factor has multiple supporting documents.
+    _CRED_RANK = {
+        "high": 5,
+        "user_marked_reliable": 4,
+        "official": 4,
+        "medium": 3,
+        "news": 3,
+        "pending": 2,
+        "low": 1,
+        "user_marked_questionable": 0,
+    }
+
+    def _enrich_with_sources(
+        self,
+        contributions: list[dict],
+        risk_factors: list[RiskFactor],
+        requirements: list[Requirement],
+    ) -> list[dict]:
+        """Attach source_title / source_url / source_kind to each factor.
+
+        Resolution path (per project plan §5.3): for every factor, look up
+        the ``Relationship`` rows that reference it (either as subject or
+        object) and follow their ``source_id`` to ``InformationSource``.
+        Falls back to ``Event`` rows whose ``subject`` matches the factor
+        name — useful when the structuring pipeline didn't emit a
+        Relationship but did emit Events.
+
+        The single most-credible source wins (so the drill-down UI shows one
+        authoritative document instead of a confusing list).
+        """
+        out: list[dict] = []
+        for c in contributions:
+            enriched = dict(c)
+            try:
+                src = self._best_source_for_factor(c, risk_factors, requirements)
+                if src is not None:
+                    enriched["source_title"] = src.title
+                    enriched["source_url"] = src.url
+                    enriched["source_kind"] = src.kind
+                    enriched["source_credibility"] = src.credibility
+            except Exception:  # noqa: BLE001
+                # Source enrichment must never break the reasoning run.
+                log.warning("source_enrichment_failed", factor=c.get("name"))
+            out.append(enriched)
+        return out
+
+    def _best_source_for_factor(
+        self,
+        contribution: dict,
+        risk_factors: list[RiskFactor],
+        requirements: list[Requirement],
+    ) -> InformationSource | None:
+        factor_id = contribution.get("factor_id")
+        factor_type = contribution.get("type")
+        factor_name = contribution.get("name") or ""
+
+        source_ids: set[str] = set()
+
+        # 1) Relationships referencing this factor by id (polymorphic).
+        if factor_id:
+            rels = list(
+                self.db.scalars(
+                    select(Relationship).where(
+                        ((Relationship.subject_type == factor_type)
+                         & (Relationship.subject_id == factor_id))
+                        | ((Relationship.object_type == factor_type)
+                           & (Relationship.object_id == factor_id))
+                    )
+                )
+            )
+            for r in rels:
+                if r.source_id:
+                    source_ids.add(r.source_id)
+
+        # 2) Events whose subject matches the factor name (fallback when no
+        #    explicit Relationship exists — the structuring pipeline often
+        #    emits Events keyed by name rather than id).
+        if not source_ids and factor_name:
+            evs = list(
+                self.db.scalars(
+                    select(Event)
+                    .where(Event.subject.ilike(f"%{factor_name}%"))
+                    .limit(20)
+                )
+            )
+            for e in evs:
+                if e.source_id:
+                    source_ids.add(e.source_id)
+
+        if not source_ids:
+            return None
+
+        # Pick the most credible source (ties broken by recency).
+        candidates = list(
+            self.db.scalars(
+                select(InformationSource).where(
+                    InformationSource.id.in_(source_ids)
+                )
+            )
+        )
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda s: (
+                self._CRED_RANK.get(s.credibility, 0),
+                s.updated_at or s.created_at,
+            ),
+            reverse=True,
+        )
+        return candidates[0]

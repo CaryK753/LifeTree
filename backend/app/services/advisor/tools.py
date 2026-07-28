@@ -121,6 +121,32 @@ class CreateRiskFactorInput(BaseModel):
     impact: float | None = Field(None, ge=0.0, le=1.0)
 
 
+class UpdateRequirementStatusInput(BaseModel):
+    requirement_id: str = Field(..., description="ID of the requirement node to update")
+    gap_status: str = Field(
+        ...,
+        description="Requirement status: 'met' | 'partial' | 'missing' | 'unknown'",
+    )
+    current_value: dict[str, Any] | None = Field(
+        None,
+        description="Optional updated user current value dict, e.g. {'score': 7.5}",
+    )
+
+
+class AddUserSourceInput(BaseModel):
+    content: str = Field(
+        ..., description="Raw text snippet, email content, or forum post provided by user"
+    )
+    source_type: str = Field(
+        "chat_mention",
+        description="Source channel or type, e.g. 'chat_mention', 'consultant_email', 'forum_post'",
+    )
+    credibility: str = Field(
+        "pending",
+        description="Initial credibility rating: 'pending' | 'high' | 'medium' | 'low' | 'user_marked_reliable'",
+    )
+
+
 # --- Memory tools ---
 
 class RememberInput(BaseModel):
@@ -167,6 +193,29 @@ class ListMemoriesInput(BaseModel):
     limit: int = Field(20, description="Max memories to return", ge=1, le=200)
 
 
+# --- Profile & Scenario Branch tools ---
+
+class UpdateUserProfileInput(BaseModel):
+    lifecycle_stage: str | None = Field(
+        None,
+        description="User's lifecycle stage: 'planning' | 'submitted' | 'in_review' | 'waiting_eoi'",
+    )
+    cruising_mode: bool | None = Field(
+        None,
+        description="Whether to enable Cruising Mode during long waiting periods",
+    )
+    demographics_update: dict[str, Any] | None = Field(
+        None,
+        description="Updates to demographics dict, e.g. {'age': 30, 'language_score': 'IELTS 7.5'}",
+    )
+
+
+class CreateScenarioBranchInput(BaseModel):
+    goal_id: str = Field(..., description="Goal ID to create scenario branch for")
+    name: str = Field(..., description="Scenario branch name, e.g. 'Canada FSW' or 'Japan IT'")
+    description: str | None = Field(None, description="Optional description of the branch assumptions")
+
+
 # --- Web tools ---
 
 class WebSearchInput(BaseModel):
@@ -182,7 +231,7 @@ class WebFetchInput(BaseModel):
     )
 
 
-async def _web_search(input: WebSearchInput) -> str:
+async def _web_search(query: str, max_results: int = 5, **kwargs: Any) -> str:
     """Search the web for fresh information using Tavily."""
     svc = CrawlerService()
     if not svc.available:
@@ -191,12 +240,12 @@ async def _web_search(input: WebSearchInput) -> str:
             "Ask the user to configure it in Settings."
         )
     results = await svc.search(
-        query=input.query,
-        max_results=min(input.max_results, 10),
+        query=query,
+        max_results=min(max_results, 10),
         topic="general",
     )
     if not results:
-        return f"No results found for: {input.query}"
+        return f"No results found for: {query}"
     parts: list[str] = []
     for i, r in enumerate(results, 1):
         parts.append(f"{i}. [{r.title}]({r.url})\n   {r.content}")
@@ -205,19 +254,24 @@ async def _web_search(input: WebSearchInput) -> str:
     return "\n\n".join(parts)
 
 
-async def _web_fetch(input: WebFetchInput) -> str:
+async def _web_fetch(urls: list[str], **kwargs: Any) -> str:
     """Extract clean text content from web pages using Tavily."""
     svc = CrawlerService()
     if not svc.available:
-        return "Web fetch is not available — no Tavily API key configured."
-    urls = input.urls[:5]  # cap at 5
-    results = await svc.extract(urls)
-    if not results:
-        return f"Could not extract content from: {', '.join(urls)}"
+        return (
+            "Web fetch is not available — no Tavily API key configured. "
+            "Ask the user to configure it in Settings."
+        )
+    fetched = await svc.extract(urls=urls[:5])
+    if not fetched:
+        return "No text could be extracted from the specified URLs."
     parts: list[str] = []
-    for r in results:
-        content = (r.content or "")[:4000]  # cap per-page content
-        parts.append(f"--- {r.url} ---\n{content}")
+    for item in fetched:
+        url = item.get("url", "unknown")
+        raw = item.get("raw_content", "") or item.get("content", "")
+        # Truncate per document to keep LLM context reasonable
+        snippet = raw[:3000] if raw else "(No text extracted)"
+        parts.append(f"=== Content from {url} ===\n{snippet}")
     return "\n\n".join(parts)
 
 
@@ -522,6 +576,47 @@ def build_advisor_tools(
             result["graph_sync_error"] = str(exc)
         return result
 
+    @tool("update_requirement_status", args_schema=UpdateRequirementStatusInput)
+    def update_requirement_status(
+        requirement_id: str,
+        gap_status: str,
+        current_value: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Update a requirement node's status (met/partial/missing) and optionally its current_value."""
+        req = db.get(Requirement, requirement_id)
+        if req is None:
+            return {"error": "requirement_not_found", "requirement_id": requirement_id}
+
+        req.gap_status = gap_status
+        if current_value is not None:
+            req.current_value = current_value
+
+        db.add(req)
+        db.commit()
+        db.refresh(req)
+
+        result: dict[str, Any] = {
+            "requirement_id": req.id,
+            "name": req.name,
+            "gap_status": req.gap_status,
+            "current_value": req.current_value,
+            "graph_synced": True,
+        }
+        try:
+            graph_service.upsert_requirement(req)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("advisor.tool.update_requirement_status.graph_failed", error=str(exc))
+            result["graph_synced"] = False
+            result["graph_sync_error"] = str(exc)
+
+        log.info(
+            "advisor.tool.update_requirement_status",
+            requirement_id=req.id,
+            gap_status=gap_status,
+            graph_synced=result["graph_synced"],
+        )
+        return result
+
     @tool("create_risk_factor", args_schema=CreateRiskFactorInput)
     def create_risk_factor(
         name: str,
@@ -655,6 +750,97 @@ def build_advisor_tools(
         db.commit()
         return {"ok": True, "memory_id": memory_id}
 
+    @tool("update_user_profile", args_schema=UpdateUserProfileInput)
+    def update_user_profile(
+        lifecycle_stage: str | None = None,
+        cruising_mode: bool | None = None,
+        demographics_update: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Update user profile demographics, lifecycle stage, or cruising mode during conversation.
+
+        Use when the user shares details about their current stage, scores, age, or waiting status.
+        """
+        user = get_default_user(db)
+        demo = dict(user.demographics or {})
+        if lifecycle_stage:
+            demo["lifecycle_stage"] = lifecycle_stage
+        if cruising_mode is not None:
+            demo["cruising_mode"] = cruising_mode
+        if demographics_update:
+            demo.update(demographics_update)
+        user.demographics = demo
+        db.add(user)
+        db.commit()
+        return {
+            "ok": True,
+            "lifecycle_stage": user.lifecycle_stage,
+            "cruising_mode": user.cruising_mode,
+            "demographics": user.demographics,
+        }
+
+    @tool("create_scenario_branch", args_schema=CreateScenarioBranchInput)
+    def create_scenario_branch(
+        goal_id: str, name: str, description: str | None = None
+    ) -> dict[str, Any]:
+        """Create a new scenario branch for parallel sandbox推演 during conversation.
+
+        Use when the user considers an alternative pathway or 'what if' scenario.
+        """
+        sc_svc = ScenarioService(db)
+        sc = sc_svc.create_branch(goal_id=goal_id, name=name, description=description)
+        return {
+            "ok": True,
+            "scenario_id": sc.id,
+            "name": sc.name,
+            "branch_count": sc_svc.count_active_branches(goal_id),
+        }
+
+    @tool("add_user_source", args_schema=AddUserSourceInput)
+    def add_user_source(
+        content: str,
+        source_type: str = "chat_mention",
+        credibility: str = "pending",
+    ) -> dict[str, Any]:
+        """Add a user-provided information source (text snippet from a consultant email, forum post, etc.) and queue it for structuring."""
+        user = get_default_user(db)
+        kind = source_type[:32] if source_type else "chat_mention"
+        snippet = content[:40].strip().replace("\n", " ") if content else ""
+        title = f"User Source ({source_type}): {snippet}" if snippet else f"User Source ({source_type})"
+
+        source = InformationSource(
+            user_id=user.id,
+            kind=kind,
+            title=title[:512],
+            raw_text=content,
+            credibility=credibility,
+            meta={"source_type": source_type, "status": "queued_for_structuring"},
+        )
+        db.add(source)
+        db.commit()
+        db.refresh(source)
+
+        result: dict[str, Any] = {
+            "source_id": source.id,
+            "kind": source.kind,
+            "credibility": source.credibility,
+            "status": "queued_for_structuring",
+            "graph_synced": True,
+        }
+        try:
+            graph_service.upsert_source(source)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("advisor.tool.add_user_source.graph_failed", error=str(exc))
+            result["graph_synced"] = False
+            result["graph_sync_error"] = str(exc)
+
+        log.info(
+            "advisor.tool.add_user_source",
+            source_id=source.id,
+            source_type=source_type,
+            graph_synced=result["graph_synced"],
+        )
+        return result
+
     tools: list[StructuredTool] = [
         # Query
         list_pathways,
@@ -667,7 +853,11 @@ def build_advisor_tools(
         create_goal,
         create_pathway,
         create_requirement,
+        update_requirement_status,
         create_risk_factor,
+        update_user_profile,
+        create_scenario_branch,
+        add_user_source,
         # Memory
         list_memories,
         remember,
