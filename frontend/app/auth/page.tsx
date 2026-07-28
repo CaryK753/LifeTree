@@ -12,7 +12,6 @@ import {
   ShieldCheck,
   UserPlus,
   KeyRound,
-  ArrowLeft,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { useT } from "@/lib/i18n/provider";
@@ -332,21 +331,9 @@ function AuthPageInner() {
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-zinc-50 dark:bg-[#0b0d12]">
-      {/* ASCII 动态生长树背景 */}
+      {/* ASCII 动态树林 + 流星背景 */}
       <div className="absolute inset-0">
         <AsciiTreeBackground />
-      </div>
-
-      {/* 顶部返回首页链接 */}
-      <div className="absolute left-4 top-4 z-10 safe-top">
-        <button
-          type="button"
-          onClick={() => router.push("/")}
-          className="inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200 transition-colors"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          {t("app.name")}
-        </button>
       </div>
 
       {/* 居中登录卡片 */}
