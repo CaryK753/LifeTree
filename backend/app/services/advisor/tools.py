@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.core.tenant import get_default_user
+from app.db.postgres import SessionLocal
 from app.models.event import Event, InformationSource
 from app.models.goal import Goal, Pathway, Requirement, RiskFactor
 from app.models.memory import UserMemory
@@ -289,6 +290,15 @@ def build_advisor_tools(
     over ``db`` / ``goal_id`` / ``scenario_id`` so the LLM only needs to pass
     the truly variable arguments (e.g. a different scenario_id to compare
     against).
+
+    Session strategy: LangGraph's ReAct agent may execute multiple tool_calls
+    concurrently (sync tools run in a thread pool). SQLAlchemy Sessions are
+    NOT thread-safe, so concurrent ``db.commit()`` on the shared request-level
+    session triggers ``_prepare_impl() is already in progress``. To prevent
+    this, **write tools** each open their own short-lived ``SessionLocal()``
+    and commit/close within the tool body. **Read tools** continue to use the
+    shared ``db`` since they never call ``commit()`` and ``autoflush=False``
+    prevents implicit flushes.
     """
     graph_service = GraphService()
 
@@ -409,19 +419,23 @@ def build_advisor_tools(
         probability estimate. Returns the computed success probability and
         key risk factors. Takes ~5-10 seconds.
         """
-        service = ScenarioService(db)
-        try:
-            run = service.run_reasoning(scenario_id)
-            return {
-                "run_id": run.id,
-                "status": run.status,
-                "duration_ms": run.duration_ms,
-                "result": run.result,
-                "error": run.error,
-            }
-        except Exception as exc:  # noqa: BLE001
-            log.error("advisor.tool.run_reasoning_failed", error=str(exc))
-            return {"error": "reasoning_failed", "message": str(exc)}
+        # Use a dedicated session — ScenarioService/ReasoningEngine commit
+        # internally multiple times, which would race with other tools on
+        # the shared request session.
+        with SessionLocal() as session:
+            service = ScenarioService(session)
+            try:
+                run = service.run_reasoning(scenario_id)
+                return {
+                    "run_id": run.id,
+                    "status": run.status,
+                    "duration_ms": run.duration_ms,
+                    "result": run.result,
+                    "error": run.error,
+                }
+            except Exception as exc:  # noqa: BLE001
+                log.error("advisor.tool.run_reasoning_failed", error=str(exc))
+                return {"error": "reasoning_failed", "message": str(exc)}
 
     # ---------- Write tools (ontology mutations) ----------
 
@@ -441,7 +455,6 @@ def build_advisor_tools(
         """
         from datetime import date as date_type
 
-        user = get_default_user(db)
         td: date_type | None = None
         if target_date:
             try:
@@ -449,24 +462,26 @@ def build_advisor_tools(
             except ValueError:
                 return {"error": "invalid_date", "detail": "target_date must be YYYY-MM-DD"}
 
-        g = Goal(
-            user_id=user.id,
-            title=title,
-            description=description,
-            scenario=scenario,
-            target_date=td,
-            status="draft",
-        )
-        db.add(g)
-        db.flush()
-        db.commit()
-        db.refresh(g)
-        result: dict[str, Any] = {
-            "goal_id": g.id,
-            "title": g.title,
-            "status": g.status,
-            "graph_synced": True,
-        }
+        with SessionLocal() as session:
+            user = get_default_user(session)
+            g = Goal(
+                user_id=user.id,
+                title=title,
+                description=description,
+                scenario=scenario,
+                target_date=td,
+                status="draft",
+            )
+            session.add(g)
+            session.flush()
+            session.commit()
+            session.refresh(g)
+            result: dict[str, Any] = {
+                "goal_id": g.id,
+                "title": g.title,
+                "status": g.status,
+                "graph_synced": True,
+            }
         try:
             graph_service.upsert_goal(g)
         except Exception as exc:  # noqa: BLE001
@@ -495,27 +510,28 @@ def build_advisor_tools(
         'maybe I should consider the UK Global Talent visa'. Returns the new
         pathway ID.
         """
-        g = db.get(Goal, goal_id)
-        if g is None:
-            return {"error": "goal_not_found", "goal_id": goal_id}
-        p = Pathway(
-            goal_id=goal_id,
-            name=name,
-            description=description,
-            region=region,
-            parent_pathway_id=parent_pathway_id,
-            status="candidate",
-        )
-        db.add(p)
-        db.commit()
-        db.refresh(p)
-        result = {
-            "pathway_id": p.id,
-            "goal_id": p.goal_id,
-            "name": p.name,
-            "parent_pathway_id": p.parent_pathway_id,
-            "graph_synced": True,
-        }
+        with SessionLocal() as session:
+            g = session.get(Goal, goal_id)
+            if g is None:
+                return {"error": "goal_not_found", "goal_id": goal_id}
+            p = Pathway(
+                goal_id=goal_id,
+                name=name,
+                description=description,
+                region=region,
+                parent_pathway_id=parent_pathway_id,
+                status="candidate",
+            )
+            session.add(p)
+            session.commit()
+            session.refresh(p)
+            result = {
+                "pathway_id": p.id,
+                "goal_id": p.goal_id,
+                "name": p.name,
+                "parent_pathway_id": p.parent_pathway_id,
+                "graph_synced": True,
+            }
         try:
             graph_service.upsert_pathway(p)
         except Exception as exc:  # noqa: BLE001
@@ -546,28 +562,29 @@ def build_advisor_tools(
         Examples: 'IELTS Speaking 6.0' (type=language, threshold={'score':6.0}),
         'Proof of funds CAD 13000' (type=financial).
         """
-        p = db.get(Pathway, pathway_id)
-        if p is None:
-            return {"error": "pathway_not_found", "pathway_id": pathway_id}
-        r = Requirement(
-            pathway_id=pathway_id,
-            name=name,
-            type=type,
-            description=description,
-            threshold=threshold or {},
-            current_value=current_value or {},
-            gap_status=gap_status or "unknown",
-            weight=weight,
-        )
-        db.add(r)
-        db.commit()
-        db.refresh(r)
-        result = {
-            "requirement_id": r.id,
-            "pathway_id": pathway_id,
-            "name": r.name,
-            "graph_synced": True,
-        }
+        with SessionLocal() as session:
+            p = session.get(Pathway, pathway_id)
+            if p is None:
+                return {"error": "pathway_not_found", "pathway_id": pathway_id}
+            r = Requirement(
+                pathway_id=pathway_id,
+                name=name,
+                type=type,
+                description=description,
+                threshold=threshold or {},
+                current_value=current_value or {},
+                gap_status=gap_status or "unknown",
+                weight=weight,
+            )
+            session.add(r)
+            session.commit()
+            session.refresh(r)
+            result = {
+                "requirement_id": r.id,
+                "pathway_id": pathway_id,
+                "name": r.name,
+                "graph_synced": True,
+            }
         try:
             graph_service.upsert_requirement(r)
         except Exception as exc:  # noqa: BLE001
@@ -583,25 +600,26 @@ def build_advisor_tools(
         current_value: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Update a requirement node's status (met/partial/missing) and optionally its current_value."""
-        req = db.get(Requirement, requirement_id)
-        if req is None:
-            return {"error": "requirement_not_found", "requirement_id": requirement_id}
+        with SessionLocal() as session:
+            req = session.get(Requirement, requirement_id)
+            if req is None:
+                return {"error": "requirement_not_found", "requirement_id": requirement_id}
 
-        req.gap_status = gap_status
-        if current_value is not None:
-            req.current_value = current_value
+            req.gap_status = gap_status
+            if current_value is not None:
+                req.current_value = current_value
 
-        db.add(req)
-        db.commit()
-        db.refresh(req)
+            session.add(req)
+            session.commit()
+            session.refresh(req)
 
-        result: dict[str, Any] = {
-            "requirement_id": req.id,
-            "name": req.name,
-            "gap_status": req.gap_status,
-            "current_value": req.current_value,
-            "graph_synced": True,
-        }
+            result: dict[str, Any] = {
+                "requirement_id": req.id,
+                "name": req.name,
+                "gap_status": req.gap_status,
+                "current_value": req.current_value,
+                "graph_synced": True,
+            }
         try:
             graph_service.upsert_requirement(req)
         except Exception as exc:  # noqa: BLE001
@@ -634,25 +652,26 @@ def build_advisor_tools(
         and there isn't already a matching RiskFactor. The new factor will be
         linked into the knowledge graph and trigger personalized risk alerts.
         """
-        rf = RiskFactor(
-            name=name,
-            type=type,
-            description=description,
-            region=region,
-            level=level,
-            urgency=urgency,
-            probability=probability,
-            impact=impact,
-        )
-        db.add(rf)
-        db.commit()
-        db.refresh(rf)
-        result = {
-            "risk_factor_id": rf.id,
-            "name": rf.name,
-            "level": rf.level,
-            "graph_synced": True,
-        }
+        with SessionLocal() as session:
+            rf = RiskFactor(
+                name=name,
+                type=type,
+                description=description,
+                region=region,
+                level=level,
+                urgency=urgency,
+                probability=probability,
+                impact=impact,
+            )
+            session.add(rf)
+            session.commit()
+            session.refresh(rf)
+            result = {
+                "risk_factor_id": rf.id,
+                "name": rf.name,
+                "level": rf.level,
+                "graph_synced": True,
+            }
         try:
             graph_service.upsert_risk_factor(rf)
         except Exception as exc:  # noqa: BLE001
@@ -679,26 +698,30 @@ def build_advisor_tools(
         so your advice is grounded in what you already know about the user.
         Memories are returned with id, content, category, importance.
         """
-        user = get_default_user(db)
-        stmt = select(UserMemory).where(UserMemory.user_id == user.id)
-        if category:
-            stmt = stmt.where(UserMemory.category == category)
-        stmt = stmt.order_by(
-            UserMemory.importance.desc(), UserMemory.created_at.desc()
-        ).limit(limit)
-        mems = list(db.scalars(stmt))
-        return {
-            "memories": [
-                {
-                    "id": m.id,
-                    "content": m.content,
-                    "category": m.category,
-                    "importance": m.importance,
-                }
-                for m in mems
-            ],
-            "count": len(mems),
-        }
+        # Use a dedicated session — get_default_user may commit on first
+        # creation, which would race with concurrent tools on the shared
+        # request session.
+        with SessionLocal() as session:
+            user = get_default_user(session)
+            stmt = select(UserMemory).where(UserMemory.user_id == user.id)
+            if category:
+                stmt = stmt.where(UserMemory.category == category)
+            stmt = stmt.order_by(
+                UserMemory.importance.desc(), UserMemory.created_at.desc()
+            ).limit(limit)
+            mems = list(session.scalars(stmt))
+            return {
+                "memories": [
+                    {
+                        "id": m.id,
+                        "content": m.content,
+                        "category": m.category,
+                        "importance": m.importance,
+                    }
+                    for m in mems
+                ],
+                "count": len(mems),
+            }
 
     @tool("remember", args_schema=RememberInput)
     def remember(
@@ -712,29 +735,30 @@ def build_advisor_tools(
         small talk. If a similar memory already exists, update it rather than
         creating a duplicate.
         """
-        user = get_default_user(db)
-        mem = UserMemory(
-            user_id=user.id,
-            content=content,
-            category=category,
-            importance=importance,
-            source="chat",
-        )
-        db.add(mem)
-        db.commit()
-        db.refresh(mem)
-        log.info(
-            "advisor.tool.remember",
-            memory_id=mem.id,
-            category=category,
-            importance=importance,
-        )
-        return {
-            "memory_id": mem.id,
-            "content": mem.content,
-            "category": mem.category,
-            "importance": mem.importance,
-        }
+        with SessionLocal() as session:
+            user = get_default_user(session)
+            mem = UserMemory(
+                user_id=user.id,
+                content=content,
+                category=category,
+                importance=importance,
+                source="chat",
+            )
+            session.add(mem)
+            session.commit()
+            session.refresh(mem)
+            log.info(
+                "advisor.tool.remember",
+                memory_id=mem.id,
+                category=category,
+                importance=importance,
+            )
+            return {
+                "memory_id": mem.id,
+                "content": mem.content,
+                "category": mem.category,
+                "importance": mem.importance,
+            }
 
     @tool("forget", args_schema=ForgetIntInput)
     def forget(memory_id: str) -> dict[str, Any]:
@@ -743,12 +767,13 @@ def build_advisor_tools(
         Use when the user explicitly says 'forget that' or 'that's no longer
         true'. Returns ok=true on success.
         """
-        mem = db.get(UserMemory, memory_id)
-        if mem is None:
-            return {"ok": False, "error": "memory_not_found", "memory_id": memory_id}
-        db.delete(mem)
-        db.commit()
-        return {"ok": True, "memory_id": memory_id}
+        with SessionLocal() as session:
+            mem = session.get(UserMemory, memory_id)
+            if mem is None:
+                return {"ok": False, "error": "memory_not_found", "memory_id": memory_id}
+            session.delete(mem)
+            session.commit()
+            return {"ok": True, "memory_id": memory_id}
 
     @tool("update_user_profile", args_schema=UpdateUserProfileInput)
     def update_user_profile(
@@ -760,23 +785,24 @@ def build_advisor_tools(
 
         Use when the user shares details about their current stage, scores, age, or waiting status.
         """
-        user = get_default_user(db)
-        demo = dict(user.demographics or {})
-        if lifecycle_stage:
-            demo["lifecycle_stage"] = lifecycle_stage
-        if cruising_mode is not None:
-            demo["cruising_mode"] = cruising_mode
-        if demographics_update:
-            demo.update(demographics_update)
-        user.demographics = demo
-        db.add(user)
-        db.commit()
-        return {
-            "ok": True,
-            "lifecycle_stage": user.lifecycle_stage,
-            "cruising_mode": user.cruising_mode,
-            "demographics": user.demographics,
-        }
+        with SessionLocal() as session:
+            user = get_default_user(session)
+            demo = dict(user.demographics or {})
+            if lifecycle_stage:
+                demo["lifecycle_stage"] = lifecycle_stage
+            if cruising_mode is not None:
+                demo["cruising_mode"] = cruising_mode
+            if demographics_update:
+                demo.update(demographics_update)
+            user.demographics = demo
+            session.add(user)
+            session.commit()
+            return {
+                "ok": True,
+                "lifecycle_stage": user.lifecycle_stage,
+                "cruising_mode": user.cruising_mode,
+                "demographics": user.demographics,
+            }
 
     @tool("create_scenario_branch", args_schema=CreateScenarioBranchInput)
     def create_scenario_branch(
@@ -786,14 +812,16 @@ def build_advisor_tools(
 
         Use when the user considers an alternative pathway or 'what if' scenario.
         """
-        sc_svc = ScenarioService(db)
-        sc = sc_svc.create_branch(goal_id=goal_id, name=name, description=description)
-        return {
-            "ok": True,
-            "scenario_id": sc.id,
-            "name": sc.name,
-            "branch_count": sc_svc.count_active_branches(goal_id),
-        }
+        with SessionLocal() as session:
+            sc_svc = ScenarioService(session)
+            sc = sc_svc.create_branch(goal_id=goal_id, name=name, description=description)
+            branch_count = sc_svc.count_active_branches(goal_id)
+            return {
+                "ok": True,
+                "scenario_id": sc.id,
+                "name": sc.name,
+                "branch_count": branch_count,
+            }
 
     @tool("add_user_source", args_schema=AddUserSourceInput)
     def add_user_source(
@@ -802,30 +830,31 @@ def build_advisor_tools(
         credibility: str = "pending",
     ) -> dict[str, Any]:
         """Add a user-provided information source (text snippet from a consultant email, forum post, etc.) and queue it for structuring."""
-        user = get_default_user(db)
-        kind = source_type[:32] if source_type else "chat_mention"
-        snippet = content[:40].strip().replace("\n", " ") if content else ""
-        title = f"User Source ({source_type}): {snippet}" if snippet else f"User Source ({source_type})"
+        with SessionLocal() as session:
+            user = get_default_user(session)
+            kind = source_type[:32] if source_type else "chat_mention"
+            snippet = content[:40].strip().replace("\n", " ") if content else ""
+            title = f"User Source ({source_type}): {snippet}" if snippet else f"User Source ({source_type})"
 
-        source = InformationSource(
-            user_id=user.id,
-            kind=kind,
-            title=title[:512],
-            raw_text=content,
-            credibility=credibility,
-            meta={"source_type": source_type, "status": "queued_for_structuring"},
-        )
-        db.add(source)
-        db.commit()
-        db.refresh(source)
+            source = InformationSource(
+                user_id=user.id,
+                kind=kind,
+                title=title[:512],
+                raw_text=content,
+                credibility=credibility,
+                meta={"source_type": source_type, "status": "queued_for_structuring"},
+            )
+            session.add(source)
+            session.commit()
+            session.refresh(source)
 
-        result: dict[str, Any] = {
-            "source_id": source.id,
-            "kind": source.kind,
-            "credibility": source.credibility,
-            "status": "queued_for_structuring",
-            "graph_synced": True,
-        }
+            result: dict[str, Any] = {
+                "source_id": source.id,
+                "kind": source.kind,
+                "credibility": source.credibility,
+                "status": "queued_for_structuring",
+                "graph_synced": True,
+            }
         try:
             graph_service.upsert_source(source)
         except Exception as exc:  # noqa: BLE001
