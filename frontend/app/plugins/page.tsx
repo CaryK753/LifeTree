@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -65,7 +66,23 @@ export default function PluginsPage() {
       </header>
 
       {isLoading && (
-        <div className="text-sm text-zinc-500">{t("common.loading")}</div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {[0, 1, 2, 3].map((i) => (
+            <Card key={i} className="opacity-80">
+              <CardHeader>
+                <div className="flex items-start justify-between gap-2">
+                  <Skeleton className="h-4 w-1/2" />
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                </div>
+                <Skeleton className="h-3 w-full mt-2" />
+                <Skeleton className="h-3 w-2/3 mt-1" />
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-8 w-full" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       )}
 
       {!isLoading && (plugins?.length ?? 0) === 0 && (

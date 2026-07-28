@@ -63,6 +63,9 @@ export interface ChatMessage {
    * assistant message — the previous reply is preserved here (newest
    * first) instead of being discarded, so the user can flip through
    * alternative responses to the same prompt.
+   *
+   * Also used for user messages: when the user edits their own message,
+   * the previous content is preserved here so they can flip back.
    */
   previousVersions?: PreviousReply[];
 }
@@ -321,6 +324,56 @@ export function clearAllConversations() {
 }
 
 /**
+ * Export a conversation to a downloadable format.
+ *
+ * - ``markdown``: human-readable transcript with role headers. Good for
+ *   sharing or pasting into a note.
+ * - ``json``: full structured data including tool calls, attachments,
+ *   and previousVersions. Good for backup or re-import.
+ *
+ * Returns the serialized string; the caller is responsible for triggering
+ * the browser download (e.g. via a Blob + anchor click).
+ */
+export function exportConversation(
+  convId: string,
+  format: "markdown" | "json"
+): string | null {
+  const conv = state.conversations.find((c) => c.id === convId);
+  if (!conv) return null;
+
+  if (format === "json") {
+    return JSON.stringify(conv, null, 2);
+  }
+
+  // Markdown transcript
+  const lines: string[] = [];
+  const title = conv.title?.trim() || "Untitled";
+  lines.push(`# ${title}`);
+  lines.push("");
+  lines.push(`> Exported from LifeTree on ${new Date().toISOString()}`);
+  lines.push("");
+
+  for (const m of conv.messages) {
+    const role = m.role === "user" ? "🧑 You" : "🤖 AI Advisor";
+    const time = new Date(m.createdAt).toLocaleString();
+    lines.push(`## ${role}`);
+    lines.push(`*${time}*`);
+    lines.push("");
+    lines.push(m.content || "(empty)");
+    if (m.toolCalls && m.toolCalls.length > 0) {
+      lines.push("");
+      lines.push("**Tool calls:**");
+      for (const tc of m.toolCalls) {
+        lines.push(`- \`${tc.name}\``);
+      }
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+/**
  * Delete a single message from a conversation.
  */
 export function deleteMessage(convId: string, messageId: string) {
@@ -508,6 +561,58 @@ export function retryAssistant(
   setState({ ...state, conversations });
   if (!newAssistantId) return null;
   return { assistantId: newAssistantId, userApiContent };
+}
+
+/**
+ * Edit a user message in-place, preserving the previous content as a
+ * `previousVersions` entry (mirroring the assistant retry pattern).
+ *
+ * After editing the user message, any messages after it (including the
+ * old assistant reply) are truncated — the caller is expected to re-stream
+ * a fresh assistant reply. Returns the kept messages (ending with the
+ * edited user message) so the caller can build the API payload, or null
+ * if the message wasn't found.
+ */
+export function editUserMessage(
+  convId: string,
+  messageId: string,
+  newContent: string
+): ChatMessage[] | null {
+  let kept: ChatMessage[] | null = null;
+  const conversations = state.conversations.map((c) => {
+    if (c.id !== convId) return c;
+    const idx = c.messages.findIndex((m) => m.id === messageId);
+    if (idx < 0) return c;
+    const old = c.messages[idx];
+    if (old.role !== "user") return c;
+
+    // Snapshot the old content (only if non-empty) so the user can flip
+    // back to the original wording via the version navigator.
+    const prevSnapshot: PreviousReply | null = old.content
+      ? {
+          content: old.content,
+          createdAt: old.createdAt,
+        }
+      : null;
+    const previousVersions: PreviousReply[] = [
+      ...(prevSnapshot ? [prevSnapshot] : []),
+      ...(old.previousVersions ?? []),
+    ];
+
+    const edited: ChatMessage = {
+      ...old,
+      content: newContent,
+      createdAt: now(),
+      previousVersions,
+    };
+
+    // Truncate everything after the edited user message — the caller
+    // will push a fresh assistant placeholder and re-stream.
+    kept = [...c.messages.slice(0, idx), edited];
+    return { ...c, messages: kept, updatedAt: now() };
+  });
+  setState({ ...state, conversations });
+  return kept;
 }
 
 /**

@@ -16,6 +16,7 @@ import {
   Square,
   ChevronLeft,
   ChevronRight,
+  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -55,6 +56,7 @@ import {
   deleteAssistantVersion,
   truncateAfterMessage,
   retryAssistant,
+  editUserMessage,
   type ChatMessage,
   type ToolCall,
   type PreviousReply,
@@ -526,6 +528,44 @@ export function ChatPanel({ goalId, scenarioId }: Props) {
     []
   );
 
+  /**
+   * Edit a user message: saves the old content as a previousVersion,
+   * truncates everything after it, then re-streams a fresh assistant reply.
+   * This mirrors the ChatGPT "edit & regenerate" pattern — the user can
+   * flip back to the original wording via the version navigator.
+   */
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const handleEdit = useCallback(
+    async (message: ChatMessage, newContent: string) => {
+      if (busy || !state.activeId) return;
+      const convId = state.activeId;
+      const trimmed = newContent.trim();
+      if (!trimmed || trimmed === message.content) {
+        setEditingId(null);
+        return;
+      }
+      const kept = editUserMessage(convId, message.id, trimmed);
+      if (!kept || kept.length === 0) return;
+      setEditingId(null);
+      const lastUser = kept[kept.length - 1];
+      const userApiContent =
+        lastUser.attachments && lastUser.attachments.length > 0
+          ? `${lastUser.content}\n\n${lastUser.attachments
+              .map((a) =>
+                t("chat.attachmentTemplate", {
+                  filename: a.filename,
+                  sourceId: a.sourceId,
+                })
+              )
+              .join("\n")}`
+          : lastUser.content;
+      const assistantId = pushAssistantPlaceholder(convId);
+      await streamAssistantReply(convId, assistantId, userApiContent);
+    },
+    [busy, state.activeId, t]
+  );
+
   const hasMessages = messages.length > 0;
   const isEmpty = !hasMessages && !busy;
 
@@ -561,6 +601,10 @@ export function ChatPanel({ goalId, scenarioId }: Props) {
               aiProtocol={chatModelInfo.protocol}
               aiModelName={chatModelInfo.name}
               disabled={busy}
+              isEditing={editingId === m.id}
+              onEditStart={() => setEditingId(m.id)}
+              onEditCancel={() => setEditingId(null)}
+              onEdit={handleEdit}
               onRetry={handleRetry}
               onDelete={handleDelete}
               onCopy={handleCopy}
@@ -736,7 +780,7 @@ function EmptyState({
 }) {
   const t = useT();
   return (
-    <div className="h-full flex flex-col items-center justify-center text-center py-8 animate-fade-in">
+    <div className="h-full flex flex-col items-center justify-center text-center py-8 animate-fade-in overflow-y-auto">
       <div className="h-12 w-12 rounded-full bg-gradient-to-br from-brand-400 to-brand-700 flex items-center justify-center shadow-lg shadow-brand-900/40 mb-4">
         <Sparkles className="h-5 w-5 text-white" />
       </div>
@@ -745,6 +789,14 @@ function EmptyState({
       </h2>
       <p className="text-xs text-zinc-500 mt-1 max-w-md">
         {t("chat.empty.subtitle")}
+      </p>
+      {/* Capabilities hint — tells the user what the AI advisor can
+          actually do, so they don't have to guess. */}
+      <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-3 max-w-lg leading-relaxed">
+        {t("chat.empty.capabilities")}
+      </p>
+      <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-1.5 max-w-lg leading-relaxed">
+        {t("chat.empty.howToUse")}
       </p>
       <div className="mt-5 space-y-2 w-full max-w-md">
         <div className="text-[11px] text-zinc-600 px-1 text-left">
@@ -864,6 +916,10 @@ const MessageBubble = memo(function MessageBubble({
   aiProtocol,
   aiModelName,
   disabled,
+  isEditing,
+  onEditStart,
+  onEditCancel,
+  onEdit,
   onRetry,
   onDelete,
   onCopy,
@@ -874,6 +930,10 @@ const MessageBubble = memo(function MessageBubble({
   aiProtocol?: string;
   aiModelName?: string;
   disabled?: boolean;
+  isEditing?: boolean;
+  onEditStart: () => void;
+  onEditCancel: () => void;
+  onEdit: (message: ChatMessage, newContent: string) => void;
   onRetry: (message: ChatMessage) => void;
   onDelete: (message: ChatMessage, viewingVersion: number) => void;
   onCopy: (content: string) => Promise<boolean>;
@@ -884,12 +944,15 @@ const MessageBubble = memo(function MessageBubble({
   const isStreaming = !!message.streaming;
   const isEmpty = !message.content && !hasTools;
   const [copied, setCopied] = useState(false);
+  const [editDraft, setEditDraft] = useState("");
 
   // Version navigation state — purely a UI concern. We don't mutate the
   // store; we just pick which historical snapshot to display. Position
   // 0 = current (newest), N = previousVersions[N-1] (oldest). This avoids
   // the costly swap dance on every click and lets the user flip freely.
-  const previousVersions = !isUser ? message.previousVersions ?? [] : [];
+  // User messages also support versioning (via editUserMessage), so we
+  // include them here too.
+  const previousVersions = message.previousVersions ?? [];
   const totalVersions = previousVersions.length + 1;
   const [viewingVersion, setViewingVersion] = useState(0);
   const hasMultipleVersions = totalVersions > 1;
@@ -922,6 +985,11 @@ const MessageBubble = memo(function MessageBubble({
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     }
+  }
+
+  function handleEditStart() {
+    setEditDraft(snapshot.content);
+    onEditStart();
   }
 
   return (
@@ -990,8 +1058,50 @@ const MessageBubble = memo(function MessageBubble({
           at the exact positions where the model invoked them (tracked via
           `toolCall.contentOffset`). The body is rendered fully without
           an internal scrollbar — long responses simply extend the
-          conversation scroll, which is what users expect from a chat. */}
-      {snapshot.content || isStreaming ? (
+          conversation scroll, which is what users expect from a chat.
+
+          When editing a user message, the bubble is replaced with a
+          textarea + Save/Cancel controls. The original content is
+          preserved as a previousVersion so the user can flip back. */}
+      {isEditing && isUser ? (
+        <div className="rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed bg-brand-500/15 dark:bg-brand-500/20 text-brand-900 dark:text-brand-50 border border-brand-500/40 dark:border-brand-500/50">
+          <textarea
+            autoFocus
+            value={editDraft}
+            onChange={(e) => setEditDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                onEdit(message, editDraft);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                onEditCancel();
+              }
+            }}
+            rows={Math.min(8, Math.max(1, editDraft.split("\n").length))}
+            className="w-full bg-transparent resize-none outline-none text-sm leading-relaxed text-brand-900 dark:text-brand-50 placeholder:text-brand-700/50 dark:placeholder:text-brand-200/50"
+          />
+          <div className="flex items-center justify-end gap-1.5 mt-1.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={onEditCancel}
+            >
+              {t("chat.action.cancel")}
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => onEdit(message, editDraft)}
+              disabled={!editDraft.trim() || editDraft.trim() === message.content}
+            >
+              {t("chat.action.save")}
+            </Button>
+          </div>
+        </div>
+      ) : snapshot.content || isStreaming ? (
         isUser ? (
           <div className="rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed bg-brand-500/15 dark:bg-brand-500/20 text-brand-900 dark:text-brand-50 border border-brand-500/20 dark:border-brand-500/30">
             <div className="whitespace-pre-wrap break-words">
@@ -1031,7 +1141,7 @@ const MessageBubble = memo(function MessageBubble({
           Hidden while streaming and when the global `disabled` flag is set
           (e.g. another reply is in flight). Hover-to-show on touch screens
           would be ideal, but for desktop-first usage always-on is fine. */}
-      {showActions && (
+      {showActions && !isEditing && (
         <div
           className={cn(
             "flex items-center gap-0.5 mt-0.5",
@@ -1050,6 +1160,13 @@ const MessageBubble = memo(function MessageBubble({
             onClick={handleCopyClick}
             disabled={copied}
           />
+          {isUser && (
+            <ActionButton
+              icon={<Pencil className="h-3 w-3" />}
+              label={t("chat.action.edit")}
+              onClick={handleEditStart}
+            />
+          )}
           <ActionButton
             icon={<RotateCcw className="h-3 w-3" />}
             label={t("chat.action.retry")}

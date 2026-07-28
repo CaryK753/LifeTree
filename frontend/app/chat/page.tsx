@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { History, Sparkles } from "lucide-react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { History, Sparkles, Plus } from "lucide-react";
 import { ChatPanel, EditableTitle } from "@/components/chat/chat-panel";
 import { ConversationList } from "@/components/chat/conversation-list";
 import { useGoals, useScenarios } from "@/lib/hooks";
@@ -19,9 +19,11 @@ import {
   useChatStore,
   getActiveConversation,
   renameConversation,
+  createConversation,
 } from "@/lib/chat-store";
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 import { useSidebarDrawerMode } from "@/lib/use-sidebar-drawer-mode";
+import { useChatShortcuts } from "@/lib/use-chat-shortcuts";
 
 const SIDEBAR_KEY = "lifetree.chat.sidebarCollapsed";
 
@@ -38,13 +40,9 @@ export default function ChatPage() {
   const state = useChatStore();
   const activeConv = getActiveConversation();
 
-  const handleRename = useCallback(
-    (title: string) => {
-      if (!state.activeId) return;
-      renameConversation(state.activeId, title.trim());
-    },
-    [state.activeId]
-  );
+  // Ref to the conversation-list search input — used by the ⌘K shortcut
+  // to focus the search box without requiring a mouse click.
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Sidebar collapse — persisted across reloads. Completely collapses (not minibar).
   const [collapsed, setCollapsed] = useState(false);
@@ -53,6 +51,34 @@ export default function ChatPage() {
   // sidebar is a drawer (hidden by default, opened via the History
   // button). Otherwise it's a persistent column that collapses to w-0.
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
+
+  const handleRename = useCallback(
+    (title: string) => {
+      if (!state.activeId) return;
+      renameConversation(state.activeId, title.trim());
+    },
+    [state.activeId]
+  );
+
+  // New conversation — used by the toolbar button and the ⌘N shortcut.
+  const handleNewChat = useCallback(() => {
+    createConversation({ goalId, scenarioId, activate: true });
+  }, [goalId, scenarioId]);
+
+  // Focus the search input — used by the ⌘K shortcut. In drawer mode we
+  // also need to open the drawer first so the input is visible.
+  const handleFocusSearch = useCallback(() => {
+    if (drawerMode) setHistoryDrawerOpen(true);
+    // Defer focus until after the drawer animation starts so the input
+    // is actually in the DOM and focusable.
+    setTimeout(() => searchInputRef.current?.focus(), 50);
+  }, [drawerMode]);
+
+  useChatShortcuts({
+    onNewChat: handleNewChat,
+    onFocusSearch: handleFocusSearch,
+  });
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     const v = window.localStorage.getItem(SIDEBAR_KEY);
@@ -92,7 +118,11 @@ export default function ChatPage() {
               historyDrawerOpen ? "translate-x-0" : "-translate-x-full"
             )}
           >
-            <ConversationList goalId={goalId} scenarioId={scenarioId} />
+            <ConversationList
+              goalId={goalId}
+              scenarioId={scenarioId}
+              searchInputRef={searchInputRef}
+            />
           </aside>
         </>
       ) : (
@@ -104,7 +134,11 @@ export default function ChatPage() {
           aria-hidden={collapsed}
         >
           {!collapsed && (
-            <ConversationList goalId={goalId} scenarioId={scenarioId} />
+            <ConversationList
+              goalId={goalId}
+              scenarioId={scenarioId}
+              searchInputRef={searchInputRef}
+            />
           )}
         </aside>
       )}
@@ -192,6 +226,16 @@ export default function ChatPage() {
                 </SelectContent>
               </Select>
             )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 gap-1.5 text-xs shrink-0"
+              onClick={handleNewChat}
+              title={t("chatPage.newChat")}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">{t("chatPage.newChat")}</span>
+            </Button>
           </div>
         </div>
 

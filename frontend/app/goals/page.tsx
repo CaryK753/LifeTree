@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import {
   Dialog,
@@ -285,7 +286,26 @@ export default function GoalsPage() {
         </div>
       )}
 
-      {isLoading && <div className="text-sm text-zinc-500 dark:text-zinc-400">{t("common.loading")}</div>}
+      {isLoading && (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {[0, 1, 2, 3, 4, 5].map((i) => (
+            <Card key={i} className="opacity-80">
+              <CardHeader>
+                <div className="flex items-start justify-between gap-2">
+                  <Skeleton className="h-4 w-2/3" />
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                </div>
+                <Skeleton className="h-3 w-full mt-2" />
+                <Skeleton className="h-3 w-1/2 mt-1" />
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-2 w-full" />
+                <Skeleton className="h-2 w-3/4 mt-2" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {filtered.map((g: any) => {

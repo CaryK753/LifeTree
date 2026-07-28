@@ -34,6 +34,8 @@ import {
   Globe,
   ExternalLink,
   Plus,
+  Info,
+  RotateCcw,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -80,6 +82,11 @@ export default function IngestPage() {
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileContent, setFileContent] = useState("");
+  // Last upload error — when set, a retry banner is shown. Cleared on
+  // successful upload, file change, or new attempt. Allows the user to
+  // retry without re-selecting the file (file state is preserved on
+  // failure since setFile(null) only runs in the success path).
+  const [fileError, setFileError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!file) {
@@ -145,6 +152,7 @@ export default function IngestPage() {
     }
     setBusy(true);
     setResult(null);
+    setFileError(null);
     try {
       const res = await api.ingestUpload(file, {
         title: fileTitle || file.name,
@@ -171,9 +179,11 @@ export default function IngestPage() {
       setFileTitle("");
       setLegalAck(false);
     } catch (e: any) {
+      const msg = e?.message ?? t("plugins.toast.retryLater");
+      setFileError(msg);
       toast({
         title: t("ingest.toast.uploadFailed"),
-        description: e?.message ?? t("plugins.toast.retryLater"),
+        description: msg,
         variant: "error",
       });
     } finally {
@@ -185,12 +195,18 @@ export default function IngestPage() {
     e.preventDefault();
     setDragOver(false);
     const f = e.dataTransfer.files?.[0];
-    if (f) setFile(f);
+    if (f) {
+      setFile(f);
+      setFileError(null);
+    }
   }
 
   function pickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
-    if (f) setFile(f);
+    if (f) {
+      setFile(f);
+      setFileError(null);
+    }
   }
 
   return (
@@ -203,6 +219,25 @@ export default function IngestPage() {
         </h1>
         <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">{t("ingest.subtitle")}</p>
       </header>
+
+      {/* Guide banner — explains WHY the user should upload documents and
+          what happens to them. First-time users often land on this page
+          with no context; without this they'd see a bare upload form and
+          leave. The card uses an info accent (not a warning) so it reads
+          as helpful guidance, not an error. */}
+      <div className="rounded-md border border-brand-500/20 bg-brand-500/[0.04] p-3 flex gap-3">
+        <div className="h-7 w-7 rounded-md bg-brand-500/15 flex items-center justify-center shrink-0">
+          <Info className="h-4 w-4 text-brand-600 dark:text-brand-400" />
+        </div>
+        <div className="min-w-0">
+          <div className="text-xs font-medium text-zinc-800 dark:text-zinc-200">
+            {t("ingest.guide.title")}
+          </div>
+          <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-0.5 leading-relaxed">
+            {t("ingest.guide.desc")}
+          </p>
+        </div>
+      </div>
 
       {/* Mode switch — a segmented control / "slider" toggle. Uses
           light/dark paired classes so the active segment, track, and
@@ -442,6 +477,35 @@ export default function IngestPage() {
                 )}
               </Button>
             </div>
+
+            {/* Upload failure retry banner — shown when the previous
+                upload attempt failed. The file state is preserved on
+                failure so the user can retry without re-selecting the
+                file. Provides an explicit, visible retry affordance
+                instead of relying on the user to click submit again. */}
+            {fileError && !busy && file && (
+              <div className="rounded-md border border-red-500/30 bg-red-500/[0.06] p-3 flex items-start gap-3">
+                <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-medium text-red-900 dark:text-red-200">
+                    {t("ingest.toast.uploadFailed")}
+                  </div>
+                  <p className="text-[11px] text-red-700/90 dark:text-red-300/80 mt-0.5 leading-relaxed break-words">
+                    {fileError}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1.5 text-xs shrink-0 border-red-500/40 text-red-700 dark:text-red-300 hover:bg-red-500/10"
+                  onClick={handleFileIngest}
+                  disabled={busy || !legalAck}
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  {t("ingest.file.retry")}
+                </Button>
+              </div>
+            )}
 
             <MineruHint />
           </CardContent>

@@ -16,6 +16,8 @@ import {
   Pause,
   AlertTriangle,
   Clock,
+  User,
+  Upload,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
@@ -320,23 +322,82 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* Empty state — keep the "create first goal" CTA so users still have
-          a clear path into the app even without the top-right button. */}
+      {/* Empty state — 3-step onboarding card so first-time users know
+          exactly what to do instead of staring at a blank page with a
+          single CTA. Each step links to the relevant page. */}
       {!isLoading && allGoals.length === 0 && (
         <Card>
-          <CardContent className="py-12 text-center space-y-3">
-            <div className="mx-auto h-12 w-12 rounded-full bg-brand-500/10 flex items-center justify-center">
-              <Compass className="h-6 w-6 text-brand-600 dark:text-brand-400" />
+          <CardContent className="py-10 space-y-6">
+            <div className="text-center space-y-2">
+              <div className="mx-auto h-12 w-12 rounded-full bg-brand-500/10 flex items-center justify-center">
+                <Compass className="h-6 w-6 text-brand-600 dark:text-brand-400" />
+              </div>
+              <div className="text-sm text-zinc-700 dark:text-zinc-300">{t("home.noGoals")}</div>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-sm mx-auto">
+                {t("home.noGoalsHint")}
+              </p>
             </div>
-            <div className="text-sm text-zinc-700 dark:text-zinc-300">{t("home.noGoals")}</div>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-sm mx-auto">
-              {t("home.noGoalsHint")}
-            </p>
-            <Button asChild className="mt-2">
-              <Link href="/goals">
-                <Compass className="h-4 w-4 mr-1.5" /> {t("home.createFirst")}
-              </Link>
-            </Button>
+            {/* Onboarding steps — 3 cards linking to the key first-time
+                actions. Uses a grid so it stacks on mobile. */}
+            <div className="space-y-2">
+              <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-semibold px-1">
+                {t("home.onboarding.steps.title")}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <Link href="/profile" className="block group">
+                  <div className="rounded-md border border-black/5 dark:border-white/5 bg-black/[0.02] dark:bg-white/[0.02] p-3 hover:border-brand-500/30 hover:bg-brand-500/[0.03] transition-colors">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="h-7 w-7 rounded-md bg-brand-500/10 flex items-center justify-center">
+                        <User className="h-3.5 w-3.5 text-brand-600 dark:text-brand-400" />
+                      </div>
+                      <span className="text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                        {t("home.onboarding.step1.title")}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                      {t("home.onboarding.step1.desc")}
+                    </p>
+                  </div>
+                </Link>
+                <Link href="/goals" className="block group">
+                  <div className="rounded-md border border-black/5 dark:border-white/5 bg-black/[0.02] dark:bg-white/[0.02] p-3 hover:border-brand-500/30 hover:bg-brand-500/[0.03] transition-colors">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="h-7 w-7 rounded-md bg-brand-500/10 flex items-center justify-center">
+                        <Compass className="h-3.5 w-3.5 text-brand-600 dark:text-brand-400" />
+                      </div>
+                      <span className="text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                        {t("home.onboarding.step2.title")}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                      {t("home.onboarding.step2.desc")}
+                    </p>
+                  </div>
+                </Link>
+                <Link href="/ingest" className="block group">
+                  <div className="rounded-md border border-black/5 dark:border-white/5 bg-black/[0.02] dark:bg-white/[0.02] p-3 hover:border-brand-500/30 hover:bg-brand-500/[0.03] transition-colors">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="h-7 w-7 rounded-md bg-brand-500/10 flex items-center justify-center">
+                        <Upload className="h-3.5 w-3.5 text-brand-600 dark:text-brand-400" />
+                      </div>
+                      <span className="text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                        {t("home.onboarding.step3.title")}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                      {t("home.onboarding.step3.desc")}
+                    </p>
+                  </div>
+                </Link>
+              </div>
+            </div>
+            <div className="text-center">
+              <Button asChild>
+                <Link href="/goals">
+                  <Compass className="h-4 w-4 mr-1.5" /> {t("home.createFirst")}
+                </Link>
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}

@@ -14,6 +14,7 @@ import {
 import { Network, Layers } from "lucide-react";
 import { useT } from "@/lib/i18n/provider";
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export default function GraphPage() {
   const t = useT();
@@ -84,7 +85,18 @@ export default function GraphPage() {
         </CardHeader>
         <CardContent>
           <div className="h-[70vh] rounded-lg overflow-hidden border border-black/5 dark:border-white/5 bg-surface-2/40">
-            {isLoading && <div className="text-xs text-zinc-500 dark:text-zinc-400 p-4">{t("common.loading")}</div>}
+            {isLoading && (
+              <div className="p-6 space-y-4">
+                <div className="flex items-center justify-center h-48">
+                  <Skeleton className="h-32 w-32 rounded-full" />
+                </div>
+                <div className="flex justify-center gap-3 flex-wrap">
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <Skeleton key={i} className="h-2 w-20" />
+                  ))}
+                </div>
+              </div>
+            )}
             {!isLoading && !graph && (
               <div className="h-full flex flex-col items-center justify-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
                 <Network className="h-8 w-8 opacity-40" />

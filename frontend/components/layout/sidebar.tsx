@@ -43,18 +43,43 @@ type NavItem = {
   icon: typeof Home;
 };
 
-const NAV: NavItem[] = [
-  { href: "/", labelKey: "nav.overview", icon: Home },
-  { href: "/dashboard", labelKey: "nav.dashboard", icon: Gauge },
-  { href: "/goals", labelKey: "nav.goals", icon: Compass },
-  { href: "/graph", labelKey: "nav.graph", icon: Network },
-  { href: "/chat", labelKey: "nav.chat", icon: MessageSquare },
-  { href: "/scenarios", labelKey: "nav.scenarios", icon: GitBranch },
-  { href: "/sources", labelKey: "nav.sources", icon: ShieldCheck },
-  { href: "/review", labelKey: "nav.review", icon: Inbox },
-  { href: "/notifications", labelKey: "nav.notifications", icon: Bell },
-  { href: "/ingest", labelKey: "nav.ingest", icon: Upload },
-  { href: "/plugins", labelKey: "nav.plugins", icon: Plug },
+type NavGroup = {
+  labelKey: string;
+  items: NavItem[];
+};
+
+// Navigation is grouped into 3 logical sections so users can quickly
+// find what they need instead of scanning a flat list of 11 items:
+//   - Decisions: goal management, graph, scenarios
+//   - Insights: AI advisor, sources, review, risk alerts
+//   - Data: ingest, plugins
+const NAV_GROUPS: NavGroup[] = [
+  {
+    labelKey: "nav.group.decisions",
+    items: [
+      { href: "/", labelKey: "nav.overview", icon: Home },
+      { href: "/dashboard", labelKey: "nav.dashboard", icon: Gauge },
+      { href: "/goals", labelKey: "nav.goals", icon: Compass },
+      { href: "/graph", labelKey: "nav.graph", icon: Network },
+      { href: "/scenarios", labelKey: "nav.scenarios", icon: GitBranch },
+    ],
+  },
+  {
+    labelKey: "nav.group.insights",
+    items: [
+      { href: "/chat", labelKey: "nav.chat", icon: MessageSquare },
+      { href: "/sources", labelKey: "nav.sources", icon: ShieldCheck },
+      { href: "/review", labelKey: "nav.review", icon: Inbox },
+      { href: "/notifications", labelKey: "nav.notifications", icon: Bell },
+    ],
+  },
+  {
+    labelKey: "nav.group.data",
+    items: [
+      { href: "/ingest", labelKey: "nav.ingest", icon: Upload },
+      { href: "/plugins", labelKey: "nav.plugins", icon: Plug },
+    ],
+  },
 ];
 
 // Admin-only nav items. Rendered only when the current user has role=admin.
@@ -278,52 +303,65 @@ function SidebarContent({
         )}
       </div>
 
-      {/* Primary nav */}
-      <nav className="px-2 py-2 space-y-0.5 flex-1 overflow-y-auto">
-        {NAV.map((item) => {
-          const Icon = item.icon;
-          const label = t(item.labelKey);
-          const active =
-            pathname === item.href ||
-            (item.href !== "/" && pathname.startsWith(item.href));
-          // Show unread badge only on the notifications nav item.
-          const showBadge = item.href === "/notifications" && unreadCount > 0;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              title={compact ? label : undefined}
-              className={cn(
-                "flex items-center rounded-md text-sm transition-colors group relative",
-                compact
-                  ? "justify-center h-9 w-9 mx-auto"
-                  : "gap-2.5 px-3 py-2",
-                active
-                  ? "bg-brand-500/10 text-brand-700 dark:text-brand-300 border border-brand-500/20"
-                  : "text-zinc-500 dark:text-zinc-400 hover:bg-black/5 dark:hover:bg-white/5 hover:text-zinc-900 dark:hover:text-zinc-100 border border-transparent"
-              )}
-            >
-              <Icon className="h-4 w-4 shrink-0" />
-              {!compact && <span className="truncate">{label}</span>}
-              {compact && active && (
-                <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-r bg-brand-500 dark:bg-brand-400" />
-              )}
-              {/* Unread badge.
-                  - Minibar: small dot at top-right corner of the icon button.
-                  - Expanded: pill with count, pinned to the right edge of the row.
-                  - ring color must match the sidebar surface in both themes;
-                    using rgb(var(--surface)) keeps it consistent. */}
-              {showBadge && compact && (
-                <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-[rgb(var(--surface))]" />
-              )}
-              {showBadge && !compact && (
-                <span className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500/90 text-white text-[10px] font-medium leading-none">
-                  {unreadCount > 99 ? "99+" : unreadCount}
-                </span>
-              )}
-            </Link>
-          );
-        })}
+      {/* Primary nav — grouped into logical sections (Decisions / Insights /
+          Data) so users can quickly find what they need instead of scanning
+          a flat list of 11 items. Group labels are hidden in compact mode. */}
+      <nav className="px-2 py-2 space-y-2 flex-1 overflow-y-auto">
+        {NAV_GROUPS.map((group, gi) => (
+          <div key={group.labelKey} className={cn(gi > 0 && "pt-2")}>
+            {!compact && (
+              <div className="px-3 pb-1 text-[10px] uppercase tracking-wider text-zinc-500 dark:text-zinc-500 font-semibold">
+                {t(group.labelKey)}
+              </div>
+            )}
+            <div className="space-y-0.5">
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                const label = t(item.labelKey);
+                const active =
+                  pathname === item.href ||
+                  (item.href !== "/" && pathname.startsWith(item.href));
+                // Show unread badge only on the notifications nav item.
+                const showBadge = item.href === "/notifications" && unreadCount > 0;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    title={compact ? label : undefined}
+                    className={cn(
+                      "flex items-center rounded-md text-sm transition-colors group relative",
+                      compact
+                        ? "justify-center h-9 w-9 mx-auto"
+                        : "gap-2.5 px-3 py-2",
+                      active
+                        ? "bg-brand-500/10 text-brand-700 dark:text-brand-300 border border-brand-500/20"
+                        : "text-zinc-500 dark:text-zinc-400 hover:bg-black/5 dark:hover:bg-white/5 hover:text-zinc-900 dark:hover:text-zinc-100 border border-transparent"
+                    )}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    {!compact && <span className="truncate">{label}</span>}
+                    {compact && active && (
+                      <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-r bg-brand-500 dark:bg-brand-400" />
+                    )}
+                    {/* Unread badge.
+                        - Minibar: small dot at top-right corner of the icon button.
+                        - Expanded: pill with count, pinned to the right edge of the row.
+                        - ring color must match the sidebar surface in both themes;
+                          using rgb(var(--surface)) keeps it consistent. */}
+                    {showBadge && compact && (
+                      <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-[rgb(var(--surface))]" />
+                    )}
+                    {showBadge && !compact && (
+                      <span className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500/90 text-white text-[10px] font-medium leading-none">
+                        {unreadCount > 99 ? "99+" : unreadCount}
+                      </span>
+                    )}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
 
       {/* Admin-only nav — rendered when the user is an admin OR in single

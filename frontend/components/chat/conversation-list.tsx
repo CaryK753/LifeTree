@@ -10,6 +10,7 @@ import {
   Check,
   X,
   MoreHorizontal,
+  Download,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
@@ -22,6 +23,7 @@ import {
   deleteConversation,
   createConversation,
   clearAllConversations,
+  exportConversation,
   type Conversation,
 } from "@/lib/chat-store";
 
@@ -29,6 +31,8 @@ interface Props {
   goalId?: string;
   scenarioId?: string;
   onPick?: () => void;
+  /** Ref to the search input — exposed so the parent can focus it via ⌘K. */
+  searchInputRef?: React.RefObject<HTMLInputElement | null>;
 }
 
 /**
@@ -41,13 +45,14 @@ interface Props {
  *   - Inline rename (Enter to save, Esc to cancel)
  *   - Delete with confirm
  *   - Clear all
- *   - Search by title or first user message
+ *   - Export (Markdown / JSON)
+ *   - Full-text search across all messages
  *
  * The sidebar reads from the global chat-store (useSyncExternalStore) so any
  * change — including new messages streamed in by the chat panel — is
  * reflected immediately.
  */
-export function ConversationList({ goalId, scenarioId, onPick }: Props) {
+export function ConversationList({ goalId, scenarioId, onPick, searchInputRef }: Props) {
   const t = useT();
   const state = useChatStore();
   const { confirm, ConfirmRoot } = useConfirm();
@@ -63,10 +68,19 @@ export function ConversationList({ goalId, scenarioId, onPick }: Props) {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return all;
+    // Search across title AND all message contents (user + assistant).
+    // The previous implementation only matched the title and the first
+    // user message, which made it impossible to find a conversation by
+    // something the AI said. Searching all messages is cheap because
+    // conversations live in localStorage and the typical user has < 1000.
     return all.filter((c) => {
       const title = c.title.toLowerCase();
-      const firstUser = c.messages.find((m) => m.role === "user")?.content ?? "";
-      return title.includes(q) || firstUser.toLowerCase().includes(q);
+      if (title.includes(q)) return true;
+      // Search all messages — both user and assistant content.
+      for (const m of c.messages) {
+        if (m.content?.toLowerCase().includes(q)) return true;
+      }
+      return false;
     });
   }, [all, query, state]);
 
@@ -130,6 +144,30 @@ export function ConversationList({ goalId, scenarioId, onPick }: Props) {
     }
   };
 
+  /**
+   * Trigger a browser download of the conversation in the chosen format.
+   * Uses a Blob + temporary anchor so it works without any backend round-trip.
+   */
+  const handleExport = (conv: Conversation, format: "markdown" | "json") => {
+    const content = exportConversation(conv.id, format);
+    if (!content) return;
+    const blob = new Blob([content], {
+      type: format === "json" ? "application/json" : "text/markdown",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const safeTitle = (conv.title?.trim() || "conversation").replace(
+      /[^a-zA-Z0-9_-]/g,
+      "_"
+    );
+    a.download = `${safeTitle}.${format === "json" ? "json" : "md"}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="flex flex-col h-full bg-surface/30 border-r border-white/5">
       {/* Header */}
@@ -154,6 +192,7 @@ export function ConversationList({ goalId, scenarioId, onPick }: Props) {
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-zinc-500" />
           <input
+            ref={searchInputRef}
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -194,6 +233,7 @@ export function ConversationList({ goalId, scenarioId, onPick }: Props) {
                   onRenameCommit={commitRename}
                   onRenameCancel={cancelRename}
                   onDelete={() => handleDelete(c)}
+                  onExport={(fmt) => handleExport(c, fmt)}
                 />
               ))}
             </div>
@@ -232,6 +272,7 @@ interface RowProps {
   onRenameCommit: () => void;
   onRenameCancel: () => void;
   onDelete: () => void;
+  onExport: (format: "markdown" | "json") => void;
 }
 
 /**
@@ -266,6 +307,7 @@ function ConversationRow({
   onRenameCommit,
   onRenameCancel,
   onDelete,
+  onExport,
 }: RowProps) {
   const t = useT();
   const title =
@@ -407,7 +449,7 @@ function ConversationRow({
             }}
           />
           <div
-            className="fixed z-[70] w-32 rounded-md border border-white/10 bg-surface shadow-lg shadow-black/40 py-1 text-xs"
+            className="fixed z-[70] w-36 rounded-md border border-white/10 bg-surface shadow-lg shadow-black/40 py-1 text-xs"
             style={{ top: menuPos.top, left: menuPos.left }}
           >
             <button
@@ -420,6 +462,30 @@ function ConversationRow({
             >
               <Pencil className="h-3 w-3" />
               {t("chat.history.rename")}
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onExport("markdown");
+                onMenuToggle();
+              }}
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 text-zinc-200 hover:bg-white/5"
+            >
+              <Download className="h-3 w-3" />
+              {t("chat.export.markdown")}
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onExport("json");
+                onMenuToggle();
+              }}
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 text-zinc-200 hover:bg-white/5"
+            >
+              <Download className="h-3 w-3" />
+              {t("chat.export.json")}
             </button>
             <button
               type="button"

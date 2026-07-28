@@ -6,6 +6,7 @@ import { usePendingReview } from "@/lib/hooks";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 import { useToast } from "@/components/ui/toast";
 import { api, type EventRead } from "@/lib/api";
@@ -288,11 +289,24 @@ export default function ReviewInboxPage() {
       )}
 
       {isLoading ? (
-        <Card>
-          <CardContent className="py-10 text-center text-sm text-muted flex items-center justify-center gap-2">
-            <Loader2 className="h-4 w-4 animate-spin" /> {t("review.loading")}
-          </CardContent>
-        </Card>
+        <div className="space-y-3">
+          {[0, 1, 2].map((i) => (
+            <Card key={i} className="opacity-80">
+              <CardContent className="p-4 space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <Skeleton className="h-4 w-1/2" />
+                  <Skeleton className="h-5 w-20 rounded-full" />
+                </div>
+                <Skeleton className="h-3 w-full" />
+                <Skeleton className="h-3 w-2/3" />
+                <div className="flex gap-2 pt-2">
+                  <Skeleton className="h-7 w-20" />
+                  <Skeleton className="h-7 w-20" />
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       ) : items.length === 0 ? (
         <EmptyReviewState />
       ) : filteredItems.length === 0 ? (

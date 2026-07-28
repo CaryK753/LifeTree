@@ -47,14 +47,46 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 def _build_context_block(
     db: Session, user: UserProfile, goal: Goal | None, scenario: Scenario | None
 ) -> str:
-    """Compose a compact context string for the system prompt."""
+    """Compose a compact context string for the system prompt.
+
+    Note: profile fields (demographics, priority_factors, risk_tolerance,
+    primary_goal_id, implicit_tags) are injected directly here rather than
+    being mirrored into the UserMemory table. The memory channel is for
+    free-form facts the LLM discovers in conversation; structured profile
+    fields belong in the system prompt so the LLM always sees the latest
+    values without a tool round-trip.
+    """
     parts: list[str] = [
         f"# User Profile",
         f"- Name: {user.display_name}",
         f"- Risk tolerance: {user.risk_tolerance}",
         f"- Priority factors: {user.priority_factors}",
         f"- Progress: {user.progress}",
+        f"- Lifecycle stage: {user.lifecycle_stage}",
+        f"- Cruising mode: {'on' if user.cruising_mode else 'off'}",
     ]
+
+    # Demographics hold the user's core "who am I" facts: age, nationality,
+    # education, language scores, fund range, location, family, joint
+    # profiles, etc. Surface them as a compact JSON so the LLM can ground
+    # its advice in the user's actual situation.
+    if user.demographics:
+        parts.append(
+            f"- Demographics: {json.dumps(user.demographics, ensure_ascii=False)}"
+        )
+
+    # Implicit tags are behavior-derived labels (e.g. "risk-averse",
+    # "detail-oriented") that help the LLM tailor tone.
+    if user.implicit_tags:
+        parts.append(
+            f"- Implicit tags: {json.dumps(user.implicit_tags, ensure_ascii=False)}"
+        )
+
+    # If the client didn't pass a goal_id, fall back to the user's primary
+    # goal so the LLM always has goal context. This is the common case —
+    # the chat panel rarely sends goal_id explicitly.
+    if goal is None and user.primary_goal_id:
+        goal = db.get(Goal, user.primary_goal_id)
 
     if goal is not None:
         parts.append(f"\n# Goal: {goal.title}")

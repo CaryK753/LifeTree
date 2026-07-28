@@ -7,6 +7,7 @@ import { LifecyclePanel } from "@/components/sources/lifecycle-panel";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { formatDate } from "@/lib/utils";
 import { api } from "@/lib/api";
@@ -269,9 +270,22 @@ export default function SourcesPage() {
         <CardContent>
           <div className="space-y-2">
             {isLoading ? (
-              <div className="text-xs text-zinc-500 dark:text-zinc-400 text-center py-6 flex items-center justify-center gap-2">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                {t("common.loading")}
+              <div className="space-y-3">
+                {[0, 1, 2, 3].map((i) => (
+                  <div
+                    key={i}
+                    className="grid grid-cols-[1fr_auto_auto_auto] gap-3 items-start py-3 border-b border-black/5 dark:border-white/5 last:border-0"
+                  >
+                    <div className="min-w-0 space-y-1.5">
+                      <Skeleton className="h-3.5 w-2/3" />
+                      <Skeleton className="h-2.5 w-1/2" />
+                      <Skeleton className="h-2.5 w-1/3" />
+                    </div>
+                    <Skeleton className="h-5 w-14 rounded-full" />
+                    <Skeleton className="h-6 w-6 rounded" />
+                    <Skeleton className="h-6 w-6 rounded" />
+                  </div>
+                ))}
               </div>
             ) : (
               visibleSources.map((s) => (
