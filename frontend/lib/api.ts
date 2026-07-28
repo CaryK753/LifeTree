@@ -1323,9 +1323,19 @@ export async function* streamChat(
   const streamUrl = STREAM_BASE_URL
     ? `${STREAM_BASE_URL}${API_PREFIX}/chat/stream`
     : `${API_PREFIX}/chat/stream`;
+  // Attach Bearer token — streamChat uses raw fetch (not ``request``) so
+  // it must add the Authorization header manually. Without this the backend
+  // returns 401 and the user sees "Chat stream failed".
+  const token = getAccessToken();
+  const authHeaders: Record<string, string> = token
+    ? { Authorization: `Bearer ${token}` }
+    : {};
   const res = await fetch(streamUrl, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders,
+    },
     body: JSON.stringify({ ...body, stream: true }),
     signal,
   });

@@ -72,7 +72,7 @@ export default function ScenariosPage() {
         } catch {
           toast({
             title: t("scenarios.toast.createFailed"),
-            description: "Invalid JSON",
+            description: t("scenarios.invalidJson"),
             variant: "error",
           });
           setCreating(false);

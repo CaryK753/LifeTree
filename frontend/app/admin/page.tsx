@@ -49,6 +49,7 @@ import { useAuth, useAuthConfig, useAdminStats, useAdminUsers } from "@/lib/hook
 import { api, type AdminUserRead, type AdminUserUpdate } from "@/lib/api";
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 import { PlatformConfig } from "@/components/settings/platform-config";
+import { UseModeCard } from "@/components/settings/use-mode-card";
 
 export default function AdminPage() {
   const t = useT();
@@ -257,6 +258,9 @@ export default function AdminPage() {
 
       {/* Platform services configuration */}
       <PlatformConfig />
+
+      {/* Use mode (single-user / multi-user) */}
+      <UseModeCard />
 
       {/* Edit dialog */}
       <Dialog

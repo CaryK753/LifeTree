@@ -59,6 +59,7 @@ import {
   type ToolCall,
   type PreviousReply,
 } from "@/lib/chat-store";
+import { AIAvatar } from "@/components/common/ai-avatar";
 
 interface Attachment {
   filename: string;
@@ -918,7 +919,7 @@ const MessageBubble = memo(function MessageBubble({
             </span>
           )
         ) : (
-          <Sparkles className="h-3.5 w-3.5" />
+          <AIAvatar size={14} className="h-3.5 w-3.5" />
         )
       }
     >

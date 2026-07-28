@@ -70,6 +70,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
+import { AIAvatar } from "@/components/common/ai-avatar";
 
 type TFunc = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -728,6 +729,12 @@ function ProviderCard({
       <div className="flex items-start justify-between gap-3 p-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
+            <AIAvatar
+              protocol={provider.protocol}
+              name={provider.name}
+              size={18}
+              className="shrink-0"
+            />
             <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{provider.name}</span>
             <Badge variant="default" className="text-[10px]">
               {options.find((o) => o.value === provider.protocol)?.label ?? provider.protocol}

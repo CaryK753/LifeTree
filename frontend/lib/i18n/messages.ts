@@ -299,6 +299,7 @@ const zhCN: Dict = {
   "goals.toast.updateFailed": "更新失败",
   "goals.toast.deleted": "目标已删除",
   "goals.toast.deleteFailed": "删除失败",
+  "goals.error.targetDatePast": "目标日期不能早于今天",
 
   // Goal edit / delete dialog
   "goal.edit.title": "编辑目标",
@@ -630,6 +631,7 @@ const zhCN: Dict = {
   "profile.field.none": "未选择",
   "profile.toast.saved": "画像已保存",
   "profile.toast.saveFailed": "保存失败",
+  "profile.error.emailInvalid": "邮箱格式不正确",
   "profile.section.danger": "危险操作",
   "profile.section.dangerHint": "以下操作不可撤销，请谨慎确认",
   "profile.destroy.title": "销毁所有数据",
@@ -681,6 +683,8 @@ const zhCN: Dict = {
   "settings.title": "设置",
   "settings.subtitle": "添加 AI 模型并分配角色，让对话、提炼、检索都能跑起来",
   "settings.rolesReady": "{n} / {total} 角色就绪",
+  "settings.adminShortcut.title": "平台管理",
+  "settings.adminShortcut.desc": "供应商、模型、API Key、SMTP、OAuth、登录注册等平台级配置已移至管理页面。点击前往 →",
 
   // Use mode card
   "settings.useMode.title": "使用模式",
@@ -806,11 +810,13 @@ const zhCN: Dict = {
   "settings.oauthBinding.processing": "正在跳转到 OAuth 服务...",
   "settings.oauthBinding.bindSuccess": "绑定成功",
   "settings.oauthBinding.notConfigured": "该服务尚未完成配置，请联系管理员",
+  "settings.oauthBinding.notBound": "未绑定",
 
   // OAuth bind callback
   "auth.oauth.bindProcessing": "正在绑定第三方账号...",
   "auth.oauth.bindSuccess": "第三方账号绑定成功",
   "auth.oauth.bindFailed": "第三方账号绑定失败",
+  "auth.oauth.missingParams": "OAuth 回调缺少必要参数",
 
   // About card
   "settings.about.title": "关于 LifeTree",
@@ -1144,6 +1150,7 @@ const zhCN: Dict = {
   "scenarios.toast.created": "情景已创建",
   "scenarios.toast.branched": "分支已创建",
   "scenarios.toast.createFailed": "创建失败",
+  "scenarios.invalidJson": "假设字段不是有效的 JSON",
 
   // PWA / errors
   "error.uploadFailed": "附件上传失败：{msg}",
@@ -1466,6 +1473,7 @@ const zhTW: Dict = {
   "goals.toast.updateFailed": "更新失敗",
   "goals.toast.deleted": "目標已刪除",
   "goals.toast.deleteFailed": "刪除失敗",
+  "goals.error.targetDatePast": "目標日期不能早於今天",
 
   // Goal edit / delete dialog
   "goal.edit.title": "編輯目標",
@@ -1765,6 +1773,7 @@ const zhTW: Dict = {
   "profile.field.none": "未選擇",
   "profile.toast.saved": "畫像已儲存",
   "profile.toast.saveFailed": "儲存失敗",
+  "profile.error.emailInvalid": "郵箱格式不正確",
   "profile.section.danger": "危險操作",
   "profile.section.dangerHint": "以下操作不可撤銷，請謹慎確認",
   "profile.destroy.title": "銷毀所有資料",
@@ -1814,6 +1823,8 @@ const zhTW: Dict = {
   "settings.title": "設定",
   "settings.subtitle": "新增 AI 模型並分配角色，讓對話、提煉、檢索都能跑起來",
   "settings.rolesReady": "{n} / {total} 角色就緒",
+  "settings.adminShortcut.title": "平台管理",
+  "settings.adminShortcut.desc": "供應商、模型、API Key、SMTP、OAuth、登入註冊等平台級配置已移至管理頁面。點擊前往 →",
 
   // Use mode card
   "settings.useMode.title": "使用模式",
@@ -1939,11 +1950,13 @@ const zhTW: Dict = {
   "settings.oauthBinding.processing": "正在跳轉到 OAuth 服務...",
   "settings.oauthBinding.bindSuccess": "綁定成功",
   "settings.oauthBinding.notConfigured": "該服務尚未完成配置，請聯繫管理員",
+  "settings.oauthBinding.notBound": "未綁定",
 
   // OAuth bind callback
   "auth.oauth.bindProcessing": "正在綁定第三方帳號...",
   "auth.oauth.bindSuccess": "第三方帳號綁定成功",
   "auth.oauth.bindFailed": "第三方帳號綁定失敗",
+  "auth.oauth.missingParams": "OAuth 回呼缺少必要參數",
 
   // About card
   "settings.about.title": "關於 LifeTree",
@@ -2274,6 +2287,7 @@ const zhTW: Dict = {
   "scenarios.toast.created": "情境已建立",
   "scenarios.toast.branched": "分支已建立",
   "scenarios.toast.createFailed": "建立失敗",
+  "scenarios.invalidJson": "假設欄位不是有效的 JSON",
 
   "error.uploadFailed": "附件上傳失敗：{msg}",
   "error.streamError": "[串流錯誤] {msg}",
@@ -2595,6 +2609,7 @@ const en: Dict = {
   "goals.toast.updateFailed": "Update failed",
   "goals.toast.deleted": "Goal deleted",
   "goals.toast.deleteFailed": "Delete failed",
+  "goals.error.targetDatePast": "Target date cannot be earlier than today",
 
   // Goal edit / delete dialog
   "goal.edit.title": "Edit goal",
@@ -2892,6 +2907,7 @@ const en: Dict = {
   "profile.field.none": "Not selected",
   "profile.toast.saved": "Profile saved",
   "profile.toast.saveFailed": "Save failed",
+  "profile.error.emailInvalid": "Invalid email format",
   "profile.section.danger": "Danger zone",
   "profile.section.dangerHint": "These actions are irreversible — proceed with caution",
   "profile.destroy.title": "Destroy all my data",
@@ -2941,6 +2957,8 @@ const en: Dict = {
   "settings.title": "Settings",
   "settings.subtitle": "Add AI models and assign roles so chat, extraction, and retrieval all work",
   "settings.rolesReady": "{n} / {total} roles ready",
+  "settings.adminShortcut.title": "Platform Admin",
+  "settings.adminShortcut.desc": "Platform-level config (providers, models, API keys, SMTP, OAuth, sign-in/registration) now lives on the admin page. Click to open →",
 
   // Use mode card
   "settings.useMode.title": "Usage Mode",
@@ -3066,11 +3084,13 @@ const en: Dict = {
   "settings.oauthBinding.processing": "Redirecting to OAuth provider...",
   "settings.oauthBinding.bindSuccess": "Binding successful",
   "settings.oauthBinding.notConfigured": "This provider is not fully configured. Please contact the admin.",
+  "settings.oauthBinding.notBound": "Not bound",
 
   // OAuth bind callback
   "auth.oauth.bindProcessing": "Binding third-party account...",
   "auth.oauth.bindSuccess": "Third-party account bound successfully",
   "auth.oauth.bindFailed": "Failed to bind third-party account",
+  "auth.oauth.missingParams": "OAuth callback is missing required parameters",
 
   // About card
   "settings.about.title": "About LifeTree",
@@ -3400,6 +3420,7 @@ const en: Dict = {
   "scenarios.toast.created": "Scenario created",
   "scenarios.toast.branched": "Branch created",
   "scenarios.toast.createFailed": "Creation failed",
+  "scenarios.invalidJson": "The assumptions field is not valid JSON",
 
   "error.uploadFailed": "Attachment upload failed: {msg}",
   "error.streamError": "[stream error] {msg}",
@@ -3721,6 +3742,7 @@ const es: Dict = {
   "goals.toast.updateFailed": "Fallo al actualizar",
   "goals.toast.deleted": "Meta eliminada",
   "goals.toast.deleteFailed": "Fallo al eliminar",
+  "goals.error.targetDatePast": "La fecha objetivo no puede ser anterior a hoy",
 
   // Goal edit / delete dialog
   "goal.edit.title": "Editar meta",
@@ -4020,6 +4042,7 @@ const es: Dict = {
   "profile.field.none": "Sin seleccionar",
   "profile.toast.saved": "Perfil guardado",
   "profile.toast.saveFailed": "Fallo al guardar",
+  "profile.error.emailInvalid": "Formato de correo no válido",
   "profile.section.danger": "Zona de peligro",
   "profile.section.dangerHint": "Estas acciones son irreversibles — procede con precaución",
   "profile.destroy.title": "Destruir todos mis datos",
@@ -4069,6 +4092,8 @@ const es: Dict = {
   "settings.title": "Ajustes",
   "settings.subtitle": "Añade modelos de IA y asigna roles para que chat, extracción y búsqueda funcionen",
   "settings.rolesReady": "{n} / {total} roles listos",
+  "settings.adminShortcut.title": "Administración de plataforma",
+  "settings.adminShortcut.desc": "La configuración a nivel de plataforma (proveedores, modelos, claves API, SMTP, OAuth, inicio de sesión/registro) ahora está en la página de administración. Haz clic para abrir →",
 
   // Use mode card
   "settings.useMode.title": "Modo de uso",
@@ -4194,11 +4219,13 @@ const es: Dict = {
   "settings.oauthBinding.processing": "Redirigiendo al proveedor OAuth...",
   "settings.oauthBinding.bindSuccess": "Vinculación exitosa",
   "settings.oauthBinding.notConfigured": "Este proveedor no está completamente configurado. Contacte al administrador.",
+  "settings.oauthBinding.notBound": "No vinculado",
 
   // OAuth bind callback
   "auth.oauth.bindProcessing": "Vinculando cuenta de terceros...",
   "auth.oauth.bindSuccess": "Cuenta de terceros vinculada correctamente",
   "auth.oauth.bindFailed": "Error al vincular cuenta de terceros",
+  "auth.oauth.missingParams": "La devolución de llamada de OAuth carece de parámetros requeridos",
 
   // About card
   "settings.about.title": "Acerca de LifeTree",
@@ -4529,6 +4556,7 @@ const es: Dict = {
   "scenarios.toast.created": "Escenario creado",
   "scenarios.toast.branched": "Rama creada",
   "scenarios.toast.createFailed": "Creación fallida",
+  "scenarios.invalidJson": "El campo de suposiciones no es JSON válido",
 
   "error.uploadFailed": "Subida de adjunto fallida: {msg}",
   "error.streamError": "[error de stream] {msg}",
@@ -4850,6 +4878,7 @@ const de: Dict = {
   "goals.toast.updateFailed": "Aktualisieren fehlgeschlagen",
   "goals.toast.deleted": "Ziel gelöscht",
   "goals.toast.deleteFailed": "Löschen fehlgeschlagen",
+  "goals.error.targetDatePast": "Das Zieldatum darf nicht vor heute liegen",
 
   // Goal edit / delete dialog
   "goal.edit.title": "Ziel bearbeiten",
@@ -5149,6 +5178,7 @@ const de: Dict = {
   "profile.field.none": "Nicht gewählt",
   "profile.toast.saved": "Profil gespeichert",
   "profile.toast.saveFailed": "Speichern fehlgeschlagen",
+  "profile.error.emailInvalid": "Ungültiges E-Mail-Format",
   "profile.section.danger": "Gefahrenzone",
   "profile.section.dangerHint": "Diese Aktionen sind unwiderruflich — mit Vorsicht fortfahren",
   "profile.destroy.title": "Alle meine Daten vernichten",
@@ -5198,6 +5228,8 @@ const de: Dict = {
   "settings.title": "Einstellungen",
   "settings.subtitle": "Füge KI-Modelle hinzu und weise Rollen zu, damit Chat, Extraktion und Retrieval funktionieren",
   "settings.rolesReady": "{n} / {total} Rollen bereit",
+  "settings.adminShortcut.title": "Plattform-Verwaltung",
+  "settings.adminShortcut.desc": "Plattformweite Konfiguration (Anbieter, Modelle, API-Schlüssel, SMTP, OAuth, Anmeldung/Registrierung) befindet sich jetzt auf der Admin-Seite. Klicken zum Öffnen →",
 
   // Use mode card
   "settings.useMode.title": "Nutzungsmodus",
@@ -5323,11 +5355,13 @@ const de: Dict = {
   "settings.oauthBinding.processing": "Weiterleitung zum OAuth-Anbieter...",
   "settings.oauthBinding.bindSuccess": "Verknüpfung erfolgreich",
   "settings.oauthBinding.notConfigured": "Dieser Anbieter ist nicht vollständig konfiguriert. Bitte kontaktieren Sie den Administrator.",
+  "settings.oauthBinding.notBound": "Nicht verknüpft",
 
   // OAuth bind callback
   "auth.oauth.bindProcessing": "Drittanbieter-Konto wird verknüpft...",
   "auth.oauth.bindSuccess": "Drittanbieter-Konto erfolgreich verknüpft",
   "auth.oauth.bindFailed": "Verknüpfung des Drittanbieter-Kontos fehlgeschlagen",
+  "auth.oauth.missingParams": "OAuth-Callback fehlen erforderliche Parameter",
 
   // About card
   "settings.about.title": "Über LifeTree",
@@ -5658,6 +5692,7 @@ const de: Dict = {
   "scenarios.toast.created": "Szenario erstellt",
   "scenarios.toast.branched": "Zweig erstellt",
   "scenarios.toast.createFailed": "Erstellung fehlgeschlagen",
+  "scenarios.invalidJson": "Das Feld „Annahmen“ ist kein gültiges JSON",
 
   "error.uploadFailed": "Anhang-Upload fehlgeschlagen: {msg}",
   "error.streamError": "[Stream-Fehler] {msg}",
@@ -5979,6 +6014,7 @@ const fr: Dict = {
   "goals.toast.updateFailed": "Échec de la mise à jour",
   "goals.toast.deleted": "Objectif supprimé",
   "goals.toast.deleteFailed": "Échec de la suppression",
+  "goals.error.targetDatePast": "La date cible ne peut pas être antérieure à aujourd'hui",
 
   // Goal edit / delete dialog
   "goal.edit.title": "Modifier l'objectif",
@@ -6278,6 +6314,7 @@ const fr: Dict = {
   "profile.field.none": "Non sélectionné",
   "profile.toast.saved": "Profil enregistré",
   "profile.toast.saveFailed": "Échec de l'enregistrement",
+  "profile.error.emailInvalid": "Format d'e-mail invalide",
   "profile.section.danger": "Zone de danger",
   "profile.section.dangerHint": "Ces actions sont irréversibles — procéder avec prudence",
   "profile.destroy.title": "Détruire toutes mes données",
@@ -6327,6 +6364,8 @@ const fr: Dict = {
   "settings.title": "Paramètres",
   "settings.subtitle": "Ajoutez des modèles IA et attribuez des rôles pour que chat, extraction et récupération fonctionnent tous",
   "settings.rolesReady": "{n} / {total} rôles prêts",
+  "settings.adminShortcut.title": "Administration de la plateforme",
+  "settings.adminShortcut.desc": "La configuration au niveau de la plateforme (fournisseurs, modèles, clés API, SMTP, OAuth, connexion/inscription) se trouve maintenant sur la page d'administration. Cliquez pour ouvrir →",
 
   // Use mode card
   "settings.useMode.title": "Mode d'utilisation",
@@ -6452,11 +6491,13 @@ const fr: Dict = {
   "settings.oauthBinding.processing": "Redirection vers le fournisseur OAuth...",
   "settings.oauthBinding.bindSuccess": "Liaison réussie",
   "settings.oauthBinding.notConfigured": "Ce fournisseur n'est pas entièrement configuré. Veuillez contacter l'administrateur.",
+  "settings.oauthBinding.notBound": "Non lié",
 
   // OAuth bind callback
   "auth.oauth.bindProcessing": "Liaison du compte tiers...",
   "auth.oauth.bindSuccess": "Compte tiers lié avec succès",
   "auth.oauth.bindFailed": "Échec de la liaison du compte tiers",
+  "auth.oauth.missingParams": "Le rappel OAuth manque des paramètres requis",
 
   // About card
   "settings.about.title": "À propos de LifeTree",
@@ -6778,6 +6819,7 @@ const fr: Dict = {
   "scenarios.toast.created": "Scénario créé",
   "scenarios.toast.branched": "Branche créée",
   "scenarios.toast.createFailed": "Échec de la création",
+  "scenarios.invalidJson": "Le champ des hypothèses n'est pas un JSON valide",
 
   "error.uploadFailed": "Échec du téléversement de la pièce jointe : {msg}",
   "error.streamError": "[erreur de flux] {msg}",

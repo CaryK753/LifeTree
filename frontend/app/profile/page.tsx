@@ -276,6 +276,17 @@ export default function ProfilePage() {
 
   async function handleSave() {
     if (!profile) return;
+    // Validate email format only when the field is non-empty. An empty
+    // email is allowed (it just clears the field on the backend).
+    const trimmedEmail = form.email.trim();
+    if (trimmedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      toast({
+        title: t("profile.toast.saveFailed"),
+        description: t("profile.error.emailInvalid"),
+        variant: "error",
+      });
+      return;
+    }
     setSaving(true);
     try {
       // Strip empty demographic strings.

@@ -198,19 +198,32 @@ function SidebarContent({
     <>
       {/* Brand row — logo links to home.
           - Drawer mode (onClose set): close button on the right.
-          - Persistent rail (onToggle set): collapse/expand button on the
-            right. When collapsed, only the logo + toggle are shown. */}
+          - Persistent rail, expanded (onToggle set, !compact): logo +
+            title on the left, collapse button on the right.
+          - Persistent rail, collapsed (onToggle set, compact): by default
+            only a centered logo is shown. On hover the logo disappears
+            and the expand button takes its place — this keeps the
+            minibar clean while still making the expand affordance
+            discoverable. */}
       <div
         className={cn(
-          "flex h-16 items-center border-b border-white/5",
-          compact && !onClose && !onToggle ? "justify-center px-2" : "gap-2 px-3"
+          "group/brand flex h-16 items-center border-b border-white/5 relative",
+          // When collapsed (persistent rail, no close button), center
+          // the logo and use tight padding so it sits in the middle of
+          // the 64px-wide minibar.
+          compact && !onClose ? "justify-center px-2" : "gap-2 px-3"
         )}
       >
+        {/* Logo — centered when collapsed. Hidden on hover when collapsed
+            so the expand button can take its slot. */}
         <Link
           href="/"
           className={cn(
-            "flex items-center min-w-0",
-            compact && !onClose ? "justify-center" : "gap-2 flex-1"
+            "flex items-center min-w-0 transition-opacity",
+            compact && !onClose ? "justify-center" : "gap-2 flex-1",
+            // When collapsed (persistent rail), fade out on hover so the
+            // expand button can replace it.
+            compact && onToggle && "group-hover/brand:opacity-0"
           )}
           title="LifeTree"
         >
@@ -239,9 +252,20 @@ function SidebarContent({
         {onToggle && (
           <button
             onClick={onToggle}
-            className="shrink-0 flex items-center justify-center rounded-md text-zinc-500 hover:bg-white/5 hover:text-zinc-200 h-8 w-8"
             aria-label={compact ? "Expand sidebar" : "Collapse sidebar"}
             title={compact ? t("sidebar.expand") : t("sidebar.collapse")}
+            className={cn(
+              "flex items-center justify-center rounded-md text-zinc-500 hover:bg-white/5 hover:text-zinc-200 h-8 w-8",
+              !compact && "shrink-0 ml-auto",
+              // When collapsed, the button is invisible by default and
+              // fades in on hover, overlaying the logo slot (absolute
+              // positioning centers it within the brand row). When
+              // expanded, the button is always visible.
+              compact && [
+                "absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2",
+                "opacity-0 group-hover/brand:opacity-100",
+              ]
+            )}
           >
             {compact ? (
               <PanelLeftOpen className="h-4 w-4" />

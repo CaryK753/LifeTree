@@ -492,6 +492,12 @@ function groupByDate(items: Conversation[]): DateGroup[] {
         "chat.history.thisWeek": "Diese Woche",
         "chat.history.earlier": "Früher",
       },
+      fr: {
+        "chat.history.today": "Aujourd'hui",
+        "chat.history.yesterday": "Hier",
+        "chat.history.thisWeek": "Cette semaine",
+        "chat.history.earlier": "Plus tôt",
+      },
     };
     return dict[locale]?.[k] ?? dict["zh-CN"][k] ?? k;
   };

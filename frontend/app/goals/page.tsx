@@ -34,6 +34,18 @@ import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 
 const SCENARIO_VALUES = ["fsw", "uk-study", "job-switch", "house", "generic"] as const;
 
+// Returns today's date as a `YYYY-MM-DD` string in the user's local timezone,
+// suitable for the `min` attribute of <input type="date">. Using local date
+// (not UTC) avoids marking today as out-of-range when the user is east of
+// the prime meridian.
+function todayLocalISO(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 type StatusFilter = "all" | GoalStatus;
 type ScenarioFilter = "all" | (typeof SCENARIO_VALUES)[number];
 
@@ -81,6 +93,16 @@ export default function GoalsPage() {
 
   async function handleCreate() {
     if (!form.title) return;
+    // Reject past target dates — goals are forward-looking by definition,
+    // and the API would otherwise silently accept them.
+    if (form.target_date && form.target_date < todayLocalISO()) {
+      toast({
+        title: t("goals.toast.createFailed"),
+        description: t("goals.error.targetDatePast"),
+        variant: "error",
+      });
+      return;
+    }
     setSaving(true);
     try {
       await api.createGoal({
@@ -166,6 +188,7 @@ export default function GoalsPage() {
                 <Input
                   type="date"
                   value={form.target_date}
+                  min={todayLocalISO()}
                   onChange={(e) => setForm({ ...form, target_date: e.target.value })}
                 />
               </div>

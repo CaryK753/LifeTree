@@ -85,10 +85,12 @@ export function OAuthCallbackHandler({ provider }: { provider: string }) {
     }
 
     if (!effectiveProvider || !code) {
-      const msg = "Missing provider or code in OAuth callback";
-      setError(msg);
-      const base = isBindFlow ? t("auth.oauth.bindFailed") : t("auth.loginFailed");
-      toast({ title: base, description: msg, variant: "error" });
+      const msg = isBindFlow
+        ? t("auth.oauth.bindFailed")
+        : t("auth.loginFailed");
+      const desc = t("auth.oauth.missingParams");
+      setError(desc);
+      toast({ title: msg, description: desc, variant: "error" });
       setTimeout(() => router.replace(isBindFlow ? "/settings" : "/"), 1500);
       return;
     }

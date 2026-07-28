@@ -106,8 +106,10 @@ export function AsciiTreeBackground() {
     let rafId = 0;
     let lastTick = 0;
     const TICK_MS = 80; // 约 12fps
-    let phase: "growing" | "meteor" | "pause" = "growing";
-    let phaseEndAt = 0;
+    // growing: 树林生长中
+    // meteor: 树林长完，持续循环流星动画（不再重新生长树木）
+    let phase: "growing" | "meteor" = "growing";
+    let nextMeteorAt = 0;
 
     function resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -261,16 +263,13 @@ export function AsciiTreeBackground() {
     }
 
     function spawnMeteor() {
-      // 从屏幕左上或右上角附近出发，斜向下
-      const fromLeft = Math.random() < 0.5;
-      const startX = fromLeft
-        ? -2
-        : cols + 2;
-      const startY = 1 + Math.floor(Math.random() * Math.max(1, Math.floor(rows * 0.35)));
-      const speed = 0.8 + Math.random() * 0.6;
-      const angle = fromLeft
-        ? Math.PI * 0.18 + Math.random() * 0.1 // 右下方向
-        : Math.PI - Math.PI * 0.18 - Math.random() * 0.1; // 左下方向
+      // 统一方向：从右上往左下坠落
+      // 起始位置：右上角附近，高度尽量高（屏幕顶部 0~25% 区域）
+      const startX = cols + 2 + Math.random() * 4;
+      const startY = Math.floor(Math.random() * Math.max(1, Math.floor(rows * 0.25)));
+      const speed = 0.9 + Math.random() * 0.6;
+      // 角度：左下方向（π - 0.2 左右），即 cos<0, sin>0
+      const angle = Math.PI - Math.PI * 0.16 - Math.random() * 0.08;
       const life = 40 + Math.floor(Math.random() * 30);
       meteors.push({
         x: startX,
@@ -367,27 +366,18 @@ export function AsciiTreeBackground() {
       if (phase === "growing") {
         for (const t of trees) growTree(t);
         if (allTreesDone()) {
-          // 树林长完 → 进入流星阶段
+          // 树林长完 → 进入流星阶段，之后只循环流星，不再重生树木
           phase = "meteor";
-          phaseEndAt = now + 8000; // 流星阶段持续 8 秒
-          // 立刻放第一颗流星
-          spawnMeteor();
+          nextMeteorAt = now + 200; // 200ms 后放第一颗流星
         }
       } else if (phase === "meteor") {
-        // 间歇性放流星
-        if (meteors.length < 2 && Math.random() < 0.08) {
+        // 随机间歇性放流星：上一颗流星飞完后随机等待 1.5~4 秒再放下一颗
+        if (meteors.length === 0 && now >= nextMeteorAt) {
           spawnMeteor();
+          // 下一次流星的随机间隔
+          nextMeteorAt = now + 1500 + Math.random() * 2500;
         }
         updateMeteors();
-        if (now > phaseEndAt && meteors.length === 0) {
-          phase = "pause";
-          phaseEndAt = now + 3000; // 暂停 3 秒后重新生长
-        }
-      } else if (phase === "pause") {
-        if (now > phaseEndAt) {
-          phase = "growing";
-          plantForest();
-        }
       }
       render();
     }
@@ -396,7 +386,7 @@ export function AsciiTreeBackground() {
       resize();
       plantForest();
       phase = "growing";
-      phaseEndAt = 0;
+      nextMeteorAt = 0;
       cancelAnimationFrame(rafId);
       lastTick = 0;
       rafId = requestAnimationFrame(tick);
