@@ -295,6 +295,15 @@ export function AsciiTreeBackground() {
           colorTag[idx] === TAG_SOIL)
       )
         return;
+      // 已有底部场景（路灯/长凳/人）的格子不被树枝/叶子覆盖
+      // —— 路灯/长凳/人是前景物体，应在树之前面
+      if (
+        (tag === TAG_TREE || tag === TAG_LEAF) &&
+        (colorTag[idx] === TAG_BENCH ||
+          colorTag[idx] === TAG_LAMP ||
+          colorTag[idx] === TAG_PERSON)
+      )
+        return;
       grid[idx] = ch;
       colorTag[idx] = tag;
     }
@@ -908,10 +917,10 @@ export function AsciiTreeBackground() {
           nextFireflyAt = now + 1500;
         }
       } else if (phase === "alive") {
+        // 先画树（背景），再画底部场景（前景覆盖在树之上）
+        drawTreesWithSway(tickCount);
         clearBottomSceneCells();
         drawBottomScene(themeName, 1, tickCount);
-
-        drawTreesWithSway(tickCount);
 
         if (themeName === "dark") {
           drawStars(tickCount);
