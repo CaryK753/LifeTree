@@ -6,11 +6,13 @@ import { api } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/toast";
+import { useT } from "@/lib/i18n/provider";
 
 export function UserServicePolicyCard() {
   const [enabled, setEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
   const toast = useToast();
+  const t = useT();
 
   useEffect(() => {
     api.getUserServicePolicy().then((value) => setEnabled(value.enabled)).catch(() => undefined);
@@ -21,11 +23,11 @@ export function UserServicePolicyCard() {
     try {
       const result = await api.setUserServicePolicy(next);
       setEnabled(result.enabled);
-      toast({ title: "用户服务配置权限已更新" });
+      toast({ title: t("admin.userPolicy.updated") });
     } catch (error) {
       toast({
-        title: "更新失败",
-        description: error instanceof Error ? error.message : "请稍后重试",
+        title: t("admin.userPolicy.updateFailed"),
+        description: error instanceof Error ? error.message : t("admin.userPolicy.retryLater"),
         variant: "error",
       });
     } finally {
@@ -37,16 +39,16 @@ export function UserServicePolicyCard() {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <UserCog className="h-4 w-4 text-brand-500" />普通用户服务配置
+          <UserCog className="h-4 w-4 text-brand-500" />{t("admin.userPolicy.title")}
         </CardTitle>
         <CardDescription>
-          管理员服务仅展示公开模型与“管理员提供”标签，不向普通用户暴露地址或密钥。
+          {t("admin.userPolicy.description")}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex items-center justify-between gap-4">
         <div>
-          <div className="text-sm font-medium">允许普通用户自己配置服务</div>
-          <div className="mt-1 text-xs text-zinc-500">LLM、Tavily、MinerU 与默认模型按用户隔离。</div>
+          <div className="text-sm font-medium">{t("admin.userPolicy.allowTitle")}</div>
+          <div className="mt-1 text-xs text-zinc-500">{t("admin.userPolicy.allowDesc")}</div>
         </div>
         <Switch checked={enabled} disabled={saving} onCheckedChange={update} />
       </CardContent>

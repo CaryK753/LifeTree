@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toast";
+import { useT } from "@/lib/i18n/provider";
 
 const EMPTY: MCPServerCreate = { name: "", protocol: "http", description: "", url: "" };
 
@@ -28,6 +29,7 @@ function KeyValueEditor({
   keyPlaceholder: string;
   valuePlaceholder: string;
 }) {
+  const t = useT();
   function update(idx: number, field: "key" | "value", v: string) {
     const next = pairs.map((p, i) => (i === idx ? { ...p, [field]: v } : p));
     onChange(next);
@@ -66,7 +68,7 @@ function KeyValueEditor({
         </div>
       ))}
       <Button size="sm" variant="outline" className="h-7 text-xs w-full" onClick={add}>
-        <Plus className="h-3 w-3 mr-1" /> 添加
+        <Plus className="h-3 w-3 mr-1" /> {t("settings.mcp.add")}
       </Button>
     </div>
   );
@@ -94,6 +96,7 @@ export function McpSettingsCard() {
   const [bodyPairs, setBodyPairs] = useState<Array<{ key: string; value: string }>>([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const toast = useToast();
+  const t = useT();
 
   function resetForm() {
     setForm(EMPTY);
@@ -114,9 +117,9 @@ export function McpSettingsCard() {
       await mutate();
       resetForm();
       setOpen(false);
-      toast({ title: "MCP 服务已添加" });
+      toast({ title: t("settings.mcp.added") });
     } catch (error) {
-      toast({ title: "添加失败", description: error instanceof Error ? error.message : "请检查配置", variant: "error" });
+      toast({ title: t("settings.mcp.addFailed"), description: error instanceof Error ? error.message : t("settings.mcp.checkConfig"), variant: "error" });
     } finally {
       setSaving(false);
     }
@@ -127,16 +130,16 @@ export function McpSettingsCard() {
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <div>
-            <CardTitle className="flex items-center gap-2"><Network className="h-4 w-4 text-brand-500" />MCP 服务</CardTitle>
-            <CardDescription className="mt-1">启用后，智能助手会在任务需要时调用这些工具。</CardDescription>
+            <CardTitle className="flex items-center gap-2"><Network className="h-4 w-4 text-brand-500" />{t("settings.mcp.title")}</CardTitle>
+            <CardDescription className="mt-1">{t("settings.mcp.description")}</CardDescription>
           </div>
           <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) resetForm(); }}>
-            <DialogTrigger asChild><Button size="sm"><Plus className="mr-1.5 h-4 w-4" />添加</Button></DialogTrigger>
+            <DialogTrigger asChild><Button size="sm"><Plus className="mr-1.5 h-4 w-4" />{t("settings.mcp.add")}</Button></DialogTrigger>
             <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
-              <DialogHeader><DialogTitle>添加 MCP 服务</DialogTitle></DialogHeader>
+              <DialogHeader><DialogTitle>{t("settings.mcp.addTitle")}</DialogTitle></DialogHeader>
               <div className="space-y-3">
-                <Input placeholder="服务名称" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-                <Input placeholder="用途描述（帮助助手判断何时调用）" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+                <Input placeholder={t("settings.mcp.namePlaceholder")} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                <Input placeholder={t("settings.mcp.descPlaceholder")} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
                 <Select value={form.protocol} onValueChange={(protocol: "http" | "sse" | "stdio") => { setForm({ ...EMPTY, name: form.name, description: form.description, protocol }); setHeaderPairs([]); setBodyPairs([]); }}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -145,8 +148,8 @@ export function McpSettingsCard() {
                 </Select>
                 {form.protocol === "stdio" ? (
                   <>
-                    <Input placeholder="可执行命令，例如 npx" value={form.command ?? ""} onChange={(e) => setForm({ ...form, command: e.target.value })} />
-                    <Input placeholder="参数，以空格分隔" value={(form.args ?? []).join(" ")} onChange={(e) => setForm({ ...form, args: e.target.value.split(/\s+/).filter(Boolean) })} />
+                    <Input placeholder={t("settings.mcp.commandPlaceholder")} value={form.command ?? ""} onChange={(e) => setForm({ ...form, command: e.target.value })} />
+                    <Input placeholder={t("settings.mcp.argsPlaceholder")} value={(form.args ?? []).join(" ")} onChange={(e) => setForm({ ...form, args: e.target.value.split(/\s+/).filter(Boolean) })} />
                   </>
                 ) : (
                   <Input type="url" placeholder="https://example.com/mcp" value={form.url ?? ""} onChange={(e) => setForm({ ...form, url: e.target.value })} />
@@ -160,30 +163,30 @@ export function McpSettingsCard() {
                       className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-300"
                       onClick={() => setShowAdvanced(!showAdvanced)}
                     >
-                      <span>高级配置（自定义请求头 / 请求字段）</span>
+                      <span>{t("settings.mcp.advanced")}</span>
                       {showAdvanced ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                     </button>
                     {showAdvanced && (
                       <div className="space-y-4 px-3 pb-3">
                         <div className="space-y-1.5">
-                          <Label className="text-xs text-zinc-500">自定义请求头 (Headers)</Label>
+                          <Label className="text-xs text-zinc-500">{t("settings.mcp.headers")}</Label>
                           <KeyValueEditor
                             pairs={headerPairs}
                             onChange={setHeaderPairs}
-                            keyPlaceholder="Header 名称，例如 Authorization"
-                            valuePlaceholder="值，例如 Bearer xxx"
+                            keyPlaceholder={t("settings.mcp.headerKeyPlaceholder")}
+                            valuePlaceholder={t("settings.mcp.headerValuePlaceholder")}
                           />
                         </div>
                         <div className="space-y-1.5">
-                          <Label className="text-xs text-zinc-500">自定义请求字段 (Extra Body)</Label>
+                          <Label className="text-xs text-zinc-500">{t("settings.mcp.extraBody")}</Label>
                           <KeyValueEditor
                             pairs={bodyPairs}
                             onChange={setBodyPairs}
-                            keyPlaceholder="字段名，例如 apiKey"
-                            valuePlaceholder="值"
+                            keyPlaceholder={t("settings.mcp.bodyKeyPlaceholder")}
+                            valuePlaceholder={t("settings.mcp.bodyValuePlaceholder")}
                           />
                           <p className="text-[10px] text-zinc-400">
-                            这些字段会合并到每个 JSON-RPC 请求体中。
+                            {t("settings.mcp.extraBodyHint")}
                           </p>
                         </div>
                       </div>
@@ -191,18 +194,18 @@ export function McpSettingsCard() {
                   </div>
                 )}
               </div>
-              <DialogFooter><Button onClick={add} disabled={saving || !form.name || (form.protocol === "stdio" ? !form.command : !form.url)}>保存</Button></DialogFooter>
+              <DialogFooter><Button onClick={add} disabled={saving || !form.name || (form.protocol === "stdio" ? !form.command : !form.url)}>{t("settings.mcp.save")}</Button></DialogFooter>
             </DialogContent>
           </Dialog>
         </div>
       </CardHeader>
       <CardContent className="space-y-2">
-        {servers.length === 0 ? <div className="py-6 text-center text-sm text-zinc-500">尚未配置 MCP 服务</div> : servers.map((server) => (
+        {servers.length === 0 ? <div className="py-6 text-center text-sm text-zinc-500">{t("settings.mcp.empty")}</div> : servers.map((server) => (
           <div key={server.id} className="flex items-center gap-3 rounded-md border border-black/10 px-3 py-2 dark:border-white/10">
             <Badge variant="default" className="font-mono text-[10px] uppercase">{server.protocol}</Badge>
-            <div className="min-w-0 flex-1"><div className="truncate text-sm font-medium">{server.name}</div><div className="truncate text-xs text-zinc-500">{server.description || "未填写描述"}</div></div>
+            <div className="min-w-0 flex-1"><div className="truncate text-sm font-medium">{server.name}</div><div className="truncate text-xs text-zinc-500">{server.description || t("settings.mcp.noDesc")}</div></div>
             <Switch checked={server.enabled} onCheckedChange={async (enabled) => { await api.toggleMcpServer(server.id, enabled); await mutate(); }} />
-            <Button variant="ghost" size="icon" title="删除" onClick={async () => { await api.deleteMcpServer(server.id); await mutate(); }}><Trash2 className="h-4 w-4 text-red-500" /></Button>
+            <Button variant="ghost" size="icon" title={t("settings.mcp.delete")} onClick={async () => { await api.deleteMcpServer(server.id); await mutate(); }}><Trash2 className="h-4 w-4 text-red-500" /></Button>
           </div>
         ))}
       </CardContent>

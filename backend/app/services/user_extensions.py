@@ -65,13 +65,25 @@ async def _invoke_legacy_sse(
     raise ValueError("MCP SSE server did not return a tool result")
 
 
-def skill_context(db: Session, user_id: str) -> str:
+def skill_context(
+    db: Session,
+    user_id: str,
+    enabled_names: list[str] | None = None,
+) -> str:
+    """Build a context block from the user's enabled skills.
+
+    When ``enabled_names`` is None, all enabled skills are included (default
+    behavior). When a list is provided, only skills whose ``name`` matches
+    are included — this allows per-message skill toggling from the chat UI.
+    """
+    stmt = select(UserSkill).where(
+        UserSkill.user_id == user_id, UserSkill.enabled.is_(True)
+    )
+    if enabled_names is not None:
+        stmt = stmt.where(UserSkill.name.in_(enabled_names))
     rows = list(
         db.scalars(
-            select(UserSkill)
-            .where(UserSkill.user_id == user_id, UserSkill.enabled.is_(True))
-            .order_by(UserSkill.updated_at.desc())
-            .limit(20)
+            stmt.order_by(UserSkill.updated_at.desc()).limit(20)
         )
     )
     if not rows:
@@ -181,14 +193,23 @@ async def _invoke_stdio(server: UserMCPServer, method: str, arguments: dict[str,
     return output[:MAX_MCP_OUTPUT]
 
 
-def build_mcp_tools(db: Session, user_id: str) -> list[StructuredTool]:
-    rows = list(
-        db.scalars(
-            select(UserMCPServer).where(
-                UserMCPServer.user_id == user_id, UserMCPServer.enabled.is_(True)
-            )
-        )
+def build_mcp_tools(
+    db: Session,
+    user_id: str,
+    enabled_names: list[str] | None = None,
+) -> list[StructuredTool]:
+    """Build MCP tools for the user's enabled MCP servers.
+
+    When ``enabled_names`` is None, all enabled servers are included. When a
+    list is provided, only servers whose ``name`` matches are included — this
+    allows per-message MCP toggling from the chat UI.
+    """
+    stmt = select(UserMCPServer).where(
+        UserMCPServer.user_id == user_id, UserMCPServer.enabled.is_(True)
     )
+    if enabled_names is not None:
+        stmt = stmt.where(UserMCPServer.name.in_(enabled_names))
+    rows = list(db.scalars(stmt))
     tools: list[StructuredTool] = []
     used_names: set[str] = set()
     for row in rows:

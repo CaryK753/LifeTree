@@ -28,6 +28,8 @@
   --foreground: 24 24 27;          /* zinc-900 */
   --surface: 255 255 255;          /* white */
   --surface-2: 244 244 245;        /* zinc-100 */
+  --popover: 255 255 255;          /* white — used by shadcn dropdown/menu */
+  --popover-foreground: 24 24 27;
   --muted: 82 82 91;               /* zinc-600 */
   --border: 0 0 0;                 /* black, used with low alpha */
   --ring: 59 141 97;               /* brand-500 */
@@ -39,6 +41,8 @@
   --foreground: 230 235 232;
   --surface: 23 29 24;             /* #171d18 */
   --surface-2: 30 36 31;
+  --popover: 23 29 24;             /* same as surface — used by shadcn dropdown/menu */
+  --popover-foreground: 230 235 232;
   --muted: 156 163 160;            /* #9ca3a0 */
   --border: 255 255 255;           /* white, used with low alpha */
   --ring: 59 141 97;

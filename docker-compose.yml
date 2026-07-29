@@ -116,6 +116,8 @@ services:
       - MINIO_ENDPOINT=minio:9000
     volumes:
       - backend_plugins:/app/plugins/user_uploaded
+      - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
     restart: unless-stopped
 
   worker:

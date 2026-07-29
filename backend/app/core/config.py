@@ -135,3 +135,7 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Cached settings accessor."""
     return Settings()
+
+
+# Module-level singleton for scripts (entrypoint, alembic) that need direct import.
+settings = get_settings()

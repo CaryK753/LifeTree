@@ -272,8 +272,8 @@ async def _web_fetch(
         return "No text could be extracted from the specified URLs."
     parts: list[str] = []
     for item in fetched:
-        url = item.get("url", "unknown")
-        raw = item.get("raw_content", "") or item.get("content", "")
+        url = item.url or "unknown"
+        raw = item.content or ""
         # Truncate per document to keep LLM context reasonable
         snippet = raw[:3000] if raw else "(No text extracted)"
         parts.append(f"=== Content from {url} ===\n{snippet}")
@@ -288,6 +288,7 @@ def build_advisor_tools(
     user_id: str,
     goal_id: str | None = None,
     scenario_id: str | None = None,
+    include_web_search: bool = False,
 ) -> list[StructuredTool]:
     """Build tools bound to a specific DB session and goal/scenario context.
 
@@ -313,12 +314,6 @@ def build_advisor_tools(
     user_tavily_key = (
         user_service_config.tavily_api_key if user_service_config else None
     ) or None
-
-    async def user_web_search(query: str, max_results: int = 5) -> str:
-        return await _web_search(query, max_results, api_key=user_tavily_key)
-
-    async def user_web_fetch(urls: list[str]) -> str:
-        return await _web_fetch(urls, api_key=user_tavily_key)
 
     # ---------- Query tools ----------
 
@@ -909,6 +904,18 @@ def build_advisor_tools(
         )
         return result
 
+    # ---------- Web tools ----------
+
+    @tool("web_fetch", args_schema=WebFetchInput)
+    async def web_fetch(urls: list[str]) -> str:
+        """Extract clean text content from one or more web pages. Use this after web_search to read full articles, or when the user provides a URL. Pass up to 5 URLs."""
+        return await _web_fetch(urls, api_key=user_tavily_key)
+
+    @tool("web_search", args_schema=WebSearchInput)
+    async def web_search(query: str, max_results: int = 5) -> str:
+        """Search the web for current information using Tavily. Use this when the user asks about recent events, current facts, news, or anything not in the local knowledge graph. Returns a list of results with title, URL, and snippet."""
+        return await _web_search(query, max_results, api_key=user_tavily_key)
+
     tools: list[StructuredTool] = [
         # Query
         list_pathways,
@@ -931,19 +938,10 @@ def build_advisor_tools(
         remember,
         forget,
         # Web
-        StructuredTool.from_function(
-            coroutine=user_web_search,
-            name="web_search",
-            description="Search the web for current information using Tavily. Use this when the user asks about recent events, current facts, news, or anything not in the local knowledge graph. Returns a list of results with title, URL, and snippet.",
-            args_schema=WebSearchInput,
-        ),
-        StructuredTool.from_function(
-            coroutine=user_web_fetch,
-            name="web_fetch",
-            description="Extract clean text content from one or more web pages. Use this after web_search to read full articles, or when the user provides a URL. Pass up to 5 URLs.",
-            args_schema=WebFetchInput,
-        ),
+        web_fetch,
     ]
+    if include_web_search:
+        tools.append(web_search)
     return tools
 
 

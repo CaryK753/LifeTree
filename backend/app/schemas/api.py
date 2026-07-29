@@ -283,6 +283,15 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     tools: list[str] | None = None  # Tool names to expose
     stream: bool = True
+    web_search: bool = Field(
+        False, description="Enable web search tool for this request"
+    )
+    enabled_mcp_servers: list[str] | None = Field(
+        None, description="MCP server names to activate; None = all enabled"
+    )
+    enabled_skills: list[str] | None = Field(
+        None, description="Skill names to activate; None = all enabled"
+    )
 
 
 class ChatToolCall(BaseModel):

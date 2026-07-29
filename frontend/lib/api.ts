@@ -1515,6 +1515,9 @@ export async function* streamChat(
     scenario_id?: string;
     model_id?: string;
     messages: { role: string; content: string }[];
+    web_search?: boolean;
+    enabled_mcp_servers?: string[];
+    enabled_skills?: string[];
   },
   signal?: AbortSignal
 ): AsyncGenerator<ChatChunk> {

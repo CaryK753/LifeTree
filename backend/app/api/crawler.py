@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.services.crawler import CrawlerService
 
 router = APIRouter(prefix="/crawler", tags=["crawler"])
-_service = CrawlerService()
 
 
 @router.get("/search")
@@ -20,12 +21,13 @@ async def search(
     days: int | None = None,
 ) -> list[dict]:
     """Run a Tavily search and return normalized results."""
-    if not _service.available:
+    service = CrawlerService()
+    if not service.available:
         return []
-    results = await _service.search(
+    results = await service.search(
         q, max_results=max_results, topic=topic, region=region, days=days
     )
-    return [r.__dict__ for r in results]
+    return [dataclasses.asdict(r) for r in results]
 
 
 class ExtractRequest(BaseModel):
@@ -57,9 +59,10 @@ async def extract(body: ExtractRequest) -> list[dict]:
     Use this when ``/search`` returned only a snippet and the user wants the
     full article text.
     """
-    if not _service.available:
+    service = CrawlerService()
+    if not service.available:
         raise HTTPException(503, "Tavily API key not configured")
-    results = await _service.extract(
+    results = await service.extract(
         body.urls,
         query=body.query,
         extract_depth=body.extract_depth,
@@ -68,7 +71,7 @@ async def extract(body: ExtractRequest) -> list[dict]:
         format=body.format,
         timeout=body.timeout,
     )
-    return [r.__dict__ for r in results]
+    return [dataclasses.asdict(r) for r in results]
 
 
 class CrawlRequest(BaseModel):
@@ -89,9 +92,10 @@ class CrawlRequest(BaseModel):
 @router.post("/crawl")
 async def crawl(body: CrawlRequest) -> list[dict]:
     """Graph-based crawl from a base URL. Returns many pages."""
-    if not _service.available:
+    service = CrawlerService()
+    if not service.available:
         raise HTTPException(503, "Tavily API key not configured")
-    results = await _service.crawl(
+    results = await service.crawl(
         body.url,
         instructions=body.instructions,
         max_depth=body.max_depth,
@@ -103,4 +107,4 @@ async def crawl(body: CrawlRequest) -> list[dict]:
         exclude_paths=body.exclude_paths,
         timeout=body.timeout,
     )
-    return [r.__dict__ for r in results]
+    return [dataclasses.asdict(r) for r in results]

@@ -93,17 +93,26 @@ def get_embedding_sync_client() -> tuple[OpenAI, str]:
 
 
 def get_instructor_sync() -> instructor.Instructor:
-    """Instructor-wrapped sync client for structured output (chat role)."""
+    """Instructor-wrapped sync client for structured output (chat role).
+
+    Uses ``Mode.JSON`` instead of the default ``Mode.TOOLS`` because
+    thinking-mode models (e.g. DeepSeek-R1) reject ``tool_choice``.
+    JSON mode is universally supported by OpenAI-compatible APIs and
+    works with both thinking and non-thinking models.
+    """
     resolved = get_chat_model()
     client = _build_sync_openai(resolved)
-    return instructor.from_openai(client)
+    return instructor.from_openai(client, mode=instructor.Mode.JSON)
 
 
 def get_instructor_async() -> instructor.AsyncInstructor:
-    """Instructor-wrapped async client for structured output (chat role)."""
+    """Instructor-wrapped async client for structured output (chat role).
+
+    Uses ``Mode.JSON`` — see ``get_instructor_sync`` for rationale.
+    """
     resolved = get_chat_model()
     client = _build_async_openai(resolved)
-    return instructor.from_openai(client)
+    return instructor.from_openai(client, mode=instructor.Mode.JSON)
 
 
 # ---------- Backward-compat shims ----------

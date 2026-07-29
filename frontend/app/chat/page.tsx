@@ -25,7 +25,6 @@ import {
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 import { useSidebarDrawerMode } from "@/lib/use-sidebar-drawer-mode";
 import { useChatShortcuts } from "@/lib/use-chat-shortcuts";
-import { ChatModelSelector } from "@/components/chat/chat-model-selector";
 
 const SIDEBAR_KEY = "lifetree.chat.sidebarCollapsed";
 
@@ -231,11 +230,6 @@ export default function ChatPage() {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <ChatModelSelector
-              catalog={runtimeCatalog}
-              value={modelId}
-              onValueChange={handleModelChange}
-            />
             <Select
               value={goalId ?? "__none__"}
               onValueChange={(v) => {
@@ -296,6 +290,7 @@ export default function ChatPage() {
             goalId={goalId}
             scenarioId={scenarioId}
             modelId={modelId}
+            onModelChange={handleModelChange}
           />
         </div>
       </div>

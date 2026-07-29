@@ -30,6 +30,7 @@ from app.models.goal import Goal, Pathway, Requirement, RiskFactor
 from app.models.memory import UserMemory
 from app.models.scenario import Scenario
 from app.models.user import UserProfile
+from app.models.user_runtime import UserServiceConfig
 from app.schemas.api import ChatRequest, ChatResponseChunk
 from app.services.advisor import (
     build_advisor_graph,
@@ -378,7 +379,7 @@ async def chat_stream(
             raise HTTPException(403, "You do not have access to this scenario")
 
     context_block = _build_context_block(db, user, goal, scenario)
-    user_skills = skill_context(db, user.id)
+    user_skills = skill_context(db, user.id, payload.enabled_skills)
     if user_skills:
         context_block = f"{context_block}\n\n{user_skills}"
 
@@ -389,8 +390,17 @@ async def chat_stream(
         user_id=user.id,
         goal_id=payload.goal_id,
         scenario_id=payload.scenario_id,
+        include_web_search=payload.web_search,
     )
-    tools.extend(build_mcp_tools(db, user.id))
+    # Conditionally include MCP tools based on the request. When
+    # enabled_mcp_servers is None, all enabled servers are included (default
+    # behavior). When a list is provided, only matching servers are loaded.
+    if payload.enabled_mcp_servers is not None:
+        mcp_tools = build_mcp_tools(db, user.id, payload.enabled_mcp_servers)
+    else:
+        mcp_tools = build_mcp_tools(db, user.id)
+    tools.extend(mcp_tools)
+
     graph = build_advisor_graph(
         tools=tools,
         context_block=context_block,

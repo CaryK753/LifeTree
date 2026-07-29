@@ -21,9 +21,9 @@ export const toastVariants = cva(
     // Open: slide down from top + fade in (the toast "drops in" from the
     // top edge of the viewport, where the Viewport is anchored).
     "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-4 " +
-    // Closed: slide up toward top + fade out (mirror of the open
-    // animation — feels like the toast is being "pulled back up").
-    "data-[state=closed]:animate-out data-[state=closed]:fade-out-80 data-[state=closed]:slide-out-to-top-4",
+    // Closed: slide up + fade out with a longer distance for a smooth
+    // "float upward and dissipate" effect.
+    "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-8 data-[state=closed]:duration-500",
   {
     variants: {
       variant: {

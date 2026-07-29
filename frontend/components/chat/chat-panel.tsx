@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback, useMemo, memo } from "react";
+// TooltipProvider wraps PromptInputButton tooltips
 import {
-  Send,
   Loader2,
   Paperclip,
   X,
@@ -13,16 +13,17 @@ import {
   Trash2,
   Copy,
   Check,
-  Square,
   ChevronLeft,
   ChevronRight,
   Pencil,
+  Globe,
+  Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { api, streamChat } from "@/lib/api";
 import { useT } from "@/lib/i18n/provider";
-import { useRuntimeCatalog, useUserProfile } from "@/lib/hooks";
+import { useRuntimeCatalog, useUserProfile, useMcpServers, useUserSkills } from "@/lib/hooks";
 import { useToast } from "@/components/ui/toast";
 import {
   Dialog,
@@ -34,16 +35,59 @@ import {
   DialogClose,
 } from "@/components/ui/dialog";
 import {
-  ResponseContainer,
-  ResponseMarkdown,
-  ToolInvocation,
-  ThinkingDots,
-  Thread,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import { Switch } from "@/components/ui/switch";
+import {
+  Conversation,
+  ConversationContent,
+  ConversationEmptyState,
+  ConversationScrollButton,
+} from "@/components/ai-elements/conversation";
+import {
   Message,
-  Composer,
-  StreamingCursor,
-  ReasoningPanel,
+  MessageActions,
+  MessageContent,
+  MessageResponse,
+} from "@/components/ai-elements/message";
+import {
+  Reasoning,
+  ReasoningTrigger,
+  ReasoningContent,
+} from "@/components/ai-elements/reasoning";
+import {
+  Sources,
+  SourcesTrigger,
+  SourcesContent,
+  Source,
+  parseSearchSources,
+} from "@/components/ai-elements/sources";
+import {
+  Tool,
+  ToolContent,
+  ToolHeader,
+  ToolInput,
+  ToolOutput,
+} from "@/components/ai-elements/tool";
+import {
+  PromptInput,
+  PromptInputBody,
+  PromptInputTextarea,
+  PromptInputTools,
+  PromptInputSubmit,
+  PromptInputFooter,
+  PromptInputHeader,
+  PromptInputButton,
+} from "@/components/ai-elements/prompt-input";
+import { ChatModelSelector } from "@/components/chat/chat-model-selector";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import {
   ChatMinimap,
+  StreamingCursor,
+  ThinkingDots,
 } from "@/components/chat/ai-elements";
 import {
   useChatStore,
@@ -61,9 +105,9 @@ import {
   editUserMessage,
   type ChatMessage,
   type ToolCall,
-  type PreviousReply,
 } from "@/lib/chat-store";
 import { AIAvatar } from "@/components/common/ai-avatar";
+import { useIsPwa } from "@/lib/use-pwa";
 
 interface Attachment {
   filename: string;
@@ -77,13 +121,14 @@ interface Props {
   goalId?: string;
   scenarioId?: string;
   modelId?: string;
+  onModelChange?: (modelId: string) => void;
 }
 
 function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
+export function ChatPanel({ goalId, scenarioId, modelId, onModelChange }: Props) {
   const t = useT();
   const state = useChatStore(); // re-renders on store changes
   const activeConv = getActiveConversation();
@@ -107,19 +152,36 @@ export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
     };
   }, [modelId, settings]);
 
+  const handleModelSelect = useCallback(
+    (nextModelId: string) => {
+      onModelChange?.(nextModelId);
+    },
+    [onModelChange]
+  );
+
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
-  // Track whether the user is "stickied" to the bottom of the chat.
-  // When the user scrolls up, we stop auto-scrolling so they can read
-  // earlier messages without being yanked back down on every streaming token.
-  const stickToBottomRef = useRef(true);
+  const isPwa = useIsPwa();
+
+  // --- Per-request options for the PromptInput toolbar ---
+  // Web search toggle — built-in tool, enabled by default
+  const [webSearch, setWebSearch] = useState(true);
+  // MCP servers / Skills are loaded from the user's runtime config. When
+  // `enabledMcp` / `enabledSkills` is null, ALL enabled servers/skills are
+  // active (default). When the user opens the tools panel and toggles any
+  // off, we switch to a filtered list.
+  const { data: mcpServers } = useMcpServers();
+  const { data: userSkills } = useUserSkills();
+  const [enabledMcp, setEnabledMcp] = useState<string[] | null>(null);
+  const [enabledSkillNames, setEnabledSkillNames] = useState<string[] | null>(
+    null
+  );
 
   const suggestions = useMemo(
     () => [t("chat.suggest1"), t("chat.suggest2"), t("chat.suggest3")],
@@ -130,33 +192,30 @@ export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
   // first user message — but we still need an empty state UI here.
   const messages: ChatMessage[] = activeConv?.messages ?? [];
 
-  // Smart auto-scroll: only scroll to bottom if the user is already near
-  // the bottom (within ~80px). This lets users scroll up to read earlier
-  // messages without being yanked back down on every streaming token.
-  useEffect(() => {
-    if (scrollRef.current && stickToBottomRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages, state]);
-
-  // Update stickToBottom when the user scrolls. If they're near the bottom,
-  // we re-enable auto-scroll; if they've scrolled up, we disable it.
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottomRef.current = distanceFromBottom < 80;
-  }, []);
+  // Build user message list for the minimap pill — includes edit versions.
+  const userMinimapMessages = useMemo(
+    () =>
+      messages
+        .map((m, i) => ({
+          index: i,
+          id: m.id,
+          content: m.content,
+          versions: m.previousVersions?.map((v) => ({
+            content: v.content,
+            createdAt: v.createdAt,
+          })),
+        }))
+        .filter((m) => messages[m.index]?.role === "user"),
+    [messages]
+  );
 
   // Jump to a specific message by index — used by the minimap.
+  // Uses document.querySelector since the Vercel Conversation component
+  // manages its own scroll container internally.
   const handleJumpTo = useCallback((index: number) => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const target = el.querySelector(`[data-message-index="${index}"]`);
+    const target = document.querySelector(`[data-message-index="${index}"]`);
     if (target) {
       target.scrollIntoView({ behavior: "smooth", block: "start" });
-      // Disable stick-to-bottom since the user is jumping to a specific spot
-      stickToBottomRef.current = false;
     }
   }, []);
 
@@ -336,6 +395,9 @@ export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
           scenario_id: scenarioId,
           model_id: modelId,
           messages: apiMessages,
+          web_search: webSearch,
+          enabled_mcp_servers: enabledMcp ?? undefined,
+          enabled_skills: enabledSkillNames ?? undefined,
         },
         controller.signal
       );
@@ -630,7 +692,7 @@ export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
 
   return (
     <div
-      className="flex flex-col h-full relative"
+      className="flex flex-col h-full relative min-w-0 overflow-hidden"
       onDragOver={(e) => {
         e.preventDefault();
         setDragOver(true);
@@ -638,11 +700,10 @@ export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
     >
-      {/* Messages — uses <Thread> from ai-elements.
-          The sidebar toggle and conversation title have been migrated
-          to the top-level title bar in app/chat/page.tsx. */}
-      <div className="flex-1 flex min-h-0">
-        <Thread autoScrollRef={scrollRef} onScroll={handleScroll}>
+      {/* Messages — uses Vercel <Conversation> which handles
+          stick-to-bottom scrolling automatically. */}
+      <Conversation className="flex-1">
+        <ConversationContent className="px-4 sm:px-5 py-4 gap-4">
           {isEmpty ? (
             <EmptyState
               suggestions={suggestions}
@@ -672,111 +733,232 @@ export function ChatPanel({ goalId, scenarioId, modelId }: Props) {
               </div>
             ))
           )}
-        </Thread>
-        {!isEmpty && messages.length > 2 && (
+        </ConversationContent>
+        <ConversationScrollButton />
+        {/* Floating minimap pill — hidden in PWA mode (screen too narrow) */}
+        {!isEmpty && !isPwa && userMinimapMessages.length > 0 && (
           <ChatMinimap
-            messages={messages}
+            userMessages={userMinimapMessages}
             onJumpTo={handleJumpTo}
           />
         )}
-      </div>
+      </Conversation>
 
-      {/* Attachment preview row */}
-      {attachments.length > 0 && (
-        <div className="px-4 pt-3 flex flex-wrap gap-2 border-t border-white/5">
-          {attachments.map((a) => (
-            <div
-              key={a.sourceId}
-              className="group relative flex items-center gap-2 bg-white/5 border border-white/10 rounded-md pl-1.5 pr-7 py-1.5"
-            >
-              {a.isImage && a.previewUrl ? (
-                <img
-                  src={a.previewUrl}
-                  alt={a.filename}
-                  className="h-7 w-7 rounded object-cover"
-                />
-              ) : (
-                <div className="h-7 w-7 rounded bg-brand-500/15 flex items-center justify-center">
-                  {a.isImage ? (
-                    <ImageIcon className="h-3.5 w-3.5 text-brand-300" />
+      {/* PromptInput — floating input box, no wrapper div.
+          Structure follows the official Vercel AI Elements docs:
+          PromptInputHeader (attachments) > PromptInputBody (textarea) >
+          PromptInputFooter (tools + submit). The InputGroup inside
+          PromptInput switches to flex-col via the block-end addon. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={handleFileInput}
+        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv"
+      />
+      <TooltipProvider>
+      <PromptInput
+        onSubmit={() => {
+          handleSend();
+        }}
+        className="w-auto mx-4 mb-3 bg-black/[0.03] dark:bg-white/5 border-black/10 dark:border-white/10"
+      >
+        {attachments.length > 0 && (
+          <PromptInputHeader>
+            <div className="flex flex-wrap gap-1.5">
+              {attachments.map((a) => (
+                <div
+                  key={a.sourceId}
+                  className="relative flex items-center gap-1.5 bg-black/[0.04] dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-md pl-1 pr-5 py-1"
+                >
+                  {a.isImage && a.previewUrl ? (
+                    <img
+                      src={a.previewUrl}
+                      alt={a.filename}
+                      className="h-6 w-6 rounded object-cover"
+                    />
                   ) : (
-                    <FileText className="h-3.5 w-3.5 text-brand-300" />
+                    <div className="h-6 w-6 rounded bg-brand-500/15 flex items-center justify-center">
+                      {a.isImage ? (
+                        <ImageIcon className="h-3 w-3 text-brand-600 dark:text-brand-300" />
+                      ) : (
+                        <FileText className="h-3 w-3 text-brand-600 dark:text-brand-300" />
+                      )}
+                    </div>
                   )}
+                  <span className="text-[11px] text-zinc-700 dark:text-zinc-300 max-w-[140px] truncate">
+                    {a.filename}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeAttachment(a.sourceId)}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-red-300"
+                    title={t("chat.removeAttachment")}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
                 </div>
-              )}
-              <span className="text-xs text-zinc-300 max-w-[160px] truncate">
-                {a.filename}
-              </span>
-              <button
-                onClick={() => removeAttachment(a.sourceId)}
-                className="absolute right-1 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-red-300"
-                title={t("chat.removeAttachment")}
-              >
-                <X className="h-3 w-3" />
-              </button>
+              ))}
             </div>
-          ))}
-        </div>
-      )}
-
-      {/* Input area — uses <Composer> from ai-elements */}
-      <div className="px-4 py-3 border-t border-white/5 bg-white/[0.02]">
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={handleFileInput}
-          accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv"
-        />
-        <Composer
-          value={input}
-          onChange={setInput}
-          onSubmit={handleSend}
-          disabled={busy}
-          placeholder={t("chat.placeholder")}
-          textareaRef={textareaRef}
-          className="bg-black/[0.03] dark:bg-white/5 border-black/10 dark:border-white/10"
-          leading={
-            <Button
+          </PromptInputHeader>
+        )}
+        <PromptInputBody>
+          <PromptInputTextarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder={t("chat.placeholder")}
+            disabled={busy}
+            ref={textareaRef}
+          />
+        </PromptInputBody>
+        <PromptInputFooter className="flex-wrap gap-1">
+          <PromptInputTools className="flex-wrap">
+            {/* Attachment button — uses our external file input, not
+                PromptInput's internal state, so handleFile can upload
+                to the backend and track sourceId. */}
+            <PromptInputButton
               variant="ghost"
-              size="icon"
-              className="h-9 w-9 shrink-0 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 ml-1 rounded-full"
+              size="icon-sm"
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading || busy}
-              title={t("chat.attachFile")}
+              tooltip={t("chat.attachFile")}
             >
               {uploading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <Paperclip className="h-4 w-4" />
               )}
-            </Button>
-          }
-          trailing={
-            busy ? (
-              <button
-                type="button"
-                onClick={handleStop}
-                title={t("chat.stop")}
-                className="h-9 w-9 shrink-0 p-0 mr-1 flex items-center justify-center text-red-500 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+            </PromptInputButton>
+
+            {/* Web search toggle — built-in tool, always available. */}
+            <PromptInputButton
+              onClick={() => setWebSearch((v) => !v)}
+              variant={webSearch ? "default" : "ghost"}
+              size="icon-sm"
+              tooltip={t("chat.webSearch")}
+            >
+              <Globe className="h-4 w-4" />
+            </PromptInputButton>
+
+            {/* MCP / Skills selector — uses native button to avoid Radix
+                Slot props conflict when nested through PromptInputButton. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-md text-zinc-400 hover:bg-black/[0.04] dark:hover:bg-white/5 transition-colors"
+                  title={t("chat.tools")}
+                >
+                  <Wrench className="h-4 w-4" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="start"
+                className="w-64 max-h-80 overflow-y-auto"
               >
-                <Square className="h-4 w-4 fill-current" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleSend}
-                disabled={busy || (!input.trim() && attachments.length === 0)}
-                title={t("chat.send")}
-                className="h-9 w-9 shrink-0 p-0 mr-1 flex items-center justify-center text-zinc-400 hover:text-brand-500 dark:hover:text-brand-400 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-              >
-                <Send className="h-4 w-4" />
-              </button>
-            )
-          }
-        />
-      </div>
+                {(mcpServers ?? []).length > 0 ? (
+                  <>
+                    <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
+                      MCP Servers
+                    </div>
+                    {(mcpServers ?? []).map((srv) => {
+                      const checked = enabledMcp
+                        ? enabledMcp.includes(srv.name)
+                        : srv.enabled;
+                      return (
+                        <div
+                          key={srv.id}
+                          className="flex items-center justify-between px-2 py-1.5"
+                        >
+                          <span className="text-xs truncate flex-1">
+                            {srv.name}
+                          </span>
+                          <Switch
+                            checked={checked}
+                            onCheckedChange={(on) =>
+                              setEnabledMcp((prev) => {
+                                const all = (mcpServers ?? [])
+                                  .filter((s) => s.enabled)
+                                  .map((s) => s.name);
+                                const current = prev ?? all;
+                                return on
+                                  ? Array.from(new Set([...current, srv.name]))
+                                  : current.filter((n) => n !== srv.name);
+                              })
+                            }
+                            className="scale-75"
+                          />
+                        </div>
+                      );
+                    })}
+                  </>
+                ) : (
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                    No MCP servers configured
+                  </div>
+                )}
+                <DropdownMenuSeparator />
+                {(userSkills ?? []).length > 0 ? (
+                  <>
+                    <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
+                      Skills
+                    </div>
+                    {(userSkills ?? []).map((skill) => {
+                      const checked = enabledSkillNames
+                        ? enabledSkillNames.includes(skill.name)
+                        : skill.enabled;
+                      return (
+                        <div
+                          key={skill.id}
+                          className="flex items-center justify-between px-2 py-1.5"
+                        >
+                          <span className="text-xs truncate flex-1">
+                            {skill.name}
+                          </span>
+                          <Switch
+                            checked={checked}
+                            onCheckedChange={(on) =>
+                              setEnabledSkillNames((prev) => {
+                                const all = (userSkills ?? [])
+                                  .filter((s) => s.enabled)
+                                  .map((s) => s.name);
+                                const current = prev ?? all;
+                                return on
+                                  ? Array.from(new Set([...current, skill.name]))
+                                  : current.filter((n) => n !== skill.name);
+                              })
+                            }
+                            className="scale-75"
+                          />
+                        </div>
+                      );
+                    })}
+                  </>
+                ) : (
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                    No skills configured
+                  </div>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* Model selector — reuses the same ChatModelSelector as the
+                top bar, with provider-grouped list and model avatars. */}
+            <ChatModelSelector
+              catalog={settings}
+              value={modelId}
+              onValueChange={handleModelSelect}
+            />
+          </PromptInputTools>
+          <PromptInputSubmit
+            status={busy ? "streaming" : "ready"}
+            onStop={handleStop}
+            disabled={busy || (!input.trim() && attachments.length === 0)}
+          />
+        </PromptInputFooter>
+      </PromptInput>
+      </TooltipProvider>
 
       {/* Drag overlay */}
       {dragOver && (
@@ -847,8 +1029,12 @@ function EmptyState({
   onPick: (s: string) => void;
 }) {
   const t = useT();
+  // Vercel ConversationEmptyState provides the centered full-size layout
+  // (flex size-full flex-col items-center justify-center gap-3 p-8
+  // text-center). We override gap/padding to preserve the existing
+  // margin-based spacing and keep the scrollable rich content.
   return (
-    <div className="h-full flex flex-col items-center justify-center text-center py-8 animate-fade-in overflow-y-auto">
+    <ConversationEmptyState className="animate-fade-in overflow-y-auto gap-0 px-0 py-8">
       <div className="h-12 w-12 rounded-full bg-gradient-to-br from-brand-400 to-brand-700 flex items-center justify-center shadow-lg shadow-brand-900/40 mb-4">
         <Sparkles className="h-5 w-5 text-white" />
       </div>
@@ -882,7 +1068,58 @@ function EmptyState({
           ))}
         </div>
       </div>
-    </div>
+    </ConversationEmptyState>
+  );
+}
+
+/** Detect failure from result shape: backend tools return {"error": ...}. */
+function resultIsError(result: unknown): boolean {
+  if (result && typeof result === "object" && "error" in result) {
+    const v = (result as Record<string, unknown>).error;
+    return typeof v === "string" && v.length > 0;
+  }
+  return false;
+}
+
+/**
+ * Renders a single tool call using Vercel AI Elements `Tool` components.
+ * The Vercel `Tool` provides the collapsible structure, header (with
+ * status badge), and input/output formatting. `mb-0` overrides the
+ * default `mb-4` since spacing is handled by the parent flex gap.
+ */
+function ToolCallView({ tool }: { tool: ToolCall }) {
+  const resultHasError = resultIsError(tool.result);
+  const failed = !!tool.error || resultHasError;
+  const running = tool.result === null && !tool.error;
+  const state: "input-available" | "output-available" | "output-error" = failed
+    ? "output-error"
+    : running
+    ? "input-available"
+    : "output-available";
+  const errorMessage = tool.error
+    ? tool.error
+    : resultHasError
+    ? String((tool.result as Record<string, unknown>).error)
+    : undefined;
+
+  return (
+    <Tool className="mb-0">
+      <ToolHeader
+        type="dynamic-tool"
+        state={state}
+        toolName={tool.name}
+        title={tool.name}
+      />
+      <ToolContent>
+        {Object.keys(tool.args).length > 0 && (
+          <ToolInput input={tool.args} />
+        )}
+        <ToolOutput
+          output={failed ? null : tool.result}
+          errorText={errorMessage}
+        />
+      </ToolContent>
+    </Tool>
   );
 }
 
@@ -929,14 +1166,15 @@ function InterleavedBody({
     const offset = Math.min(tc.contentOffset ?? 0, content.length);
     if (offset > cursor) {
       segments.push(
-        <ResponseMarkdown
+        <MessageResponse
           key={`text-${tc.id}`}
-          content={content.slice(cursor, offset)}
-          streaming={false}
-        />
+          parseIncompleteMarkdown={streaming}
+        >
+          {content.slice(cursor, offset)}
+        </MessageResponse>
       );
     }
-    segments.push(<ToolInvocation key={`tool-${tc.id}`} tool={tc} />);
+    segments.push(<ToolCallView key={`tool-${tc.id}`} tool={tc} />);
     cursor = offset;
   }
   // Tail segment — the remaining text after the last positioned tool
@@ -944,31 +1182,35 @@ function InterleavedBody({
   if (cursor < content.length || (streaming && positioned.length === 0)) {
     const tail = content.slice(cursor);
     segments.push(
-      <ResponseContainer key="text-tail">
+      <div key="text-tail" className="flex flex-col gap-1.5 animate-fade-in">
         {tail ? (
-          <ResponseMarkdown content={tail} streaming={streaming} />
+          <MessageResponse parseIncompleteMarkdown={streaming}>
+            {tail}
+          </MessageResponse>
         ) : streaming ? (
           <ThinkingDots />
         ) : null}
         {streaming && tail ? <StreamingCursor /> : null}
-      </ResponseContainer>
+      </div>
     );
   }
   // Legacy tool calls (no offset) — appended after the body.
   for (const tc of legacy) {
-    segments.push(<ToolInvocation key={`tool-legacy-${tc.id}`} tool={tc} />);
+    segments.push(<ToolCallView key={`tool-legacy-${tc.id}`} tool={tc} />);
   }
 
   // Empty content but streaming — show thinking dots.
   if (!content && streaming && segments.length === 0) {
     return (
-      <ResponseContainer>
+      <div className="flex flex-col gap-1.5 animate-fade-in">
         <ThinkingDots />
-      </ResponseContainer>
+      </div>
     );
   }
 
-  return <ResponseContainer>{segments}</ResponseContainer>;
+  return (
+    <div className="flex flex-col gap-1.5 animate-fade-in">{segments}</div>
+  );
 }
 
 /**
@@ -1008,9 +1250,7 @@ const MessageBubble = memo(function MessageBubble({
 }) {
   const t = useT();
   const isUser = message.role === "user";
-  const hasTools = (message.toolCalls?.length ?? 0) > 0;
   const isStreaming = !!message.streaming;
-  const isEmpty = !message.content && !hasTools;
   const [copied, setCopied] = useState(false);
   const [editDraft, setEditDraft] = useState("");
 
@@ -1062,10 +1302,21 @@ const MessageBubble = memo(function MessageBubble({
   }
 
   return (
-    <Message
-      role={message.role}
-      avatar={
-        isUser ? (
+    <div
+      className={cn(
+        "flex gap-3 animate-fade-in",
+        isUser ? "flex-row-reverse" : "flex-row"
+      )}
+    >
+      <div
+        className={cn(
+          "h-7 w-7 rounded-full shrink-0 flex items-center justify-center text-[10px] font-medium",
+          isUser
+            ? "bg-brand-500/20 text-brand-200 border border-brand-500/30"
+            : "bg-white dark:bg-zinc-800 border border-black/10 dark:border-white/10 shadow-sm"
+        )}
+      >
+        {isUser ? (
           userAvatarUrl ? (
             <img
               src={userAvatarUrl}
@@ -1084,56 +1335,64 @@ const MessageBubble = memo(function MessageBubble({
             size={14}
             className="h-3.5 w-3.5"
           />
-        )
-      }
-    >
-      {/* Attachments */}
+        )}
+      </div>
+      <Message
+        from={message.role}
+        className={cn(
+          "flex-1 max-w-[80%] sm:max-w-[75%] gap-1.5",
+          isUser ? "items-end ml-0 justify-start" : "items-start"
+        )}
+      >
+      {/* Attachments — wrapped in Vercel MessageContent so user
+          attachments inherit the user-bubble styling. */}
       {message.attachments && message.attachments.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {message.attachments.map((a) => (
-            <div
-              key={a.sourceId}
-              className="flex items-center gap-1.5 bg-black/[0.04] dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-md pl-1 pr-2 py-1"
-            >
-              {a.isImage && a.previewUrl ? (
-                <img
-                  src={a.previewUrl}
-                  alt={a.filename}
-                  className="h-6 w-6 rounded object-cover"
-                />
-              ) : (
-                <div className="h-6 w-6 rounded bg-brand-500/15 flex items-center justify-center">
-                  {a.isImage ? (
-                    <ImageIcon className="h-3 w-3 text-brand-600 dark:text-brand-300" />
-                  ) : (
-                    <FileText className="h-3 w-3 text-brand-600 dark:text-brand-300" />
-                  )}
-                </div>
-              )}
-              <span className="text-[11px] text-zinc-700 dark:text-zinc-300 max-w-[140px] truncate">
-                {a.filename}
-              </span>
-            </div>
-          ))}
-        </div>
+        <MessageContent>
+          <div className="flex flex-wrap gap-1.5">
+            {message.attachments.map((a) => (
+              <div
+                key={a.sourceId}
+                className="flex items-center gap-1.5 bg-black/[0.04] dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-md pl-1 pr-2 py-1"
+              >
+                {a.isImage && a.previewUrl ? (
+                  <img
+                    src={a.previewUrl}
+                    alt={a.filename}
+                    className="h-6 w-6 rounded object-cover"
+                  />
+                ) : (
+                  <div className="h-6 w-6 rounded bg-brand-500/15 flex items-center justify-center">
+                    {a.isImage ? (
+                      <ImageIcon className="h-3 w-3 text-brand-600 dark:text-brand-300" />
+                    ) : (
+                      <FileText className="h-3 w-3 text-brand-600 dark:text-brand-300" />
+                    )}
+                  </div>
+                )}
+                <span className="text-[11px] text-zinc-700 dark:text-zinc-300 max-w-[140px] truncate">
+                  {a.filename}
+                </span>
+              </div>
+            ))}
+          </div>
+        </MessageContent>
       )}
 
-      {/* Text content — user messages keep a tinted bubble; AI messages
-          are displayed flat (no bubble wrapper) so markdown content like
-          tables, code blocks, and charts can use the full available width
-          without being squeezed by bubble padding/border.
+      {/* Content — Vercel MessageContent is the structural wrapper.
+          For user messages it auto-applies the bubble (bg-secondary,
+          rounded, padding); AI messages render flat so markdown tables,
+          code blocks, and charts use the full available width.
 
-          For AI messages, tool calls are interleaved with the text body
-          at the exact positions where the model invoked them (tracked via
-          `toolCall.contentOffset`). The body is rendered fully without
-          an internal scrollbar — long responses simply extend the
-          conversation scroll, which is what users expect from a chat.
+          AI reasoning (CoT) uses the Vercel Reasoning component as a
+          sibling of MessageContent. Tool calls are interleaved with the
+          text body at the exact positions where the model invoked them
+          (tracked via `toolCall.contentOffset`).
 
-          When editing a user message, the bubble is replaced with a
-          textarea + Save/Cancel controls. The original content is
-          preserved as a previousVersion so the user can flip back. */}
+          When editing a user message, MessageContent wraps the textarea
+          + Save/Cancel controls. The original content is preserved as a
+          previousVersion so the user can flip back. */}
       {isEditing && isUser ? (
-        <div className="rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed bg-brand-500/15 dark:bg-brand-500/20 text-brand-900 dark:text-brand-50 border border-brand-500/40 dark:border-brand-500/50">
+        <MessageContent>
           <textarea
             autoFocus
             value={editDraft}
@@ -1148,9 +1407,9 @@ const MessageBubble = memo(function MessageBubble({
               }
             }}
             rows={Math.min(8, Math.max(1, editDraft.split("\n").length))}
-            className="w-full bg-transparent resize-none outline-none text-sm leading-relaxed text-brand-900 dark:text-brand-50 placeholder:text-brand-700/50 dark:placeholder:text-brand-200/50"
+            className="w-full bg-transparent resize-none outline-none text-sm leading-relaxed text-foreground placeholder:text-muted-foreground"
           />
-          <div className="flex items-center justify-end gap-1.5 mt-1.5">
+          <div className="flex items-center justify-end gap-1.5">
             <Button
               variant="ghost"
               size="sm"
@@ -1169,32 +1428,71 @@ const MessageBubble = memo(function MessageBubble({
               {t("chat.action.save")}
             </Button>
           </div>
-        </div>
-      ) : snapshot.content || isStreaming ? (
-        isUser ? (
-          <div className="rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed bg-brand-500/15 dark:bg-brand-500/20 text-brand-900 dark:text-brand-50 border border-brand-500/20 dark:border-brand-500/30">
-            <div className="whitespace-pre-wrap break-words">
-              {snapshot.content}
-              {isStreaming && <StreamingCursor />}
-            </div>
-          </div>
-        ) : (
-          <div className="text-sm leading-relaxed text-zinc-800 dark:text-zinc-200">
-            {snapshot.reasoning && (
-              <ReasoningPanel
-                reasoning={snapshot.reasoning}
-                streaming={isStreaming}
-                hasContent={!!snapshot.content}
-              />
-            )}
+        </MessageContent>
+      ) : isUser ? (
+        (snapshot.content || isStreaming) && (
+          <MessageContent>
+            {snapshot.content ? (
+              <MessageResponse
+                parseIncompleteMarkdown={isStreaming}
+              >
+                {snapshot.content}
+              </MessageResponse>
+            ) : isStreaming ? (
+              <StreamingCursor />
+            ) : null}
+          </MessageContent>
+        )
+      ) : (snapshot.content || isStreaming) ? (
+        <>
+          {snapshot.reasoning && (
+            <Reasoning
+              isStreaming={isStreaming && !snapshot.content}
+              className="mb-2"
+            >
+              <ReasoningTrigger />
+              <ReasoningContent>{snapshot.reasoning}</ReasoningContent>
+            </Reasoning>
+          )}
+          <MessageContent>
             <InterleavedBody
               content={snapshot.content}
               toolCalls={snapshot.toolCalls}
               streaming={isStreaming}
             />
-          </div>
-        )
-      ) : isEmpty && !hasToolsNow ? null : null}
+          </MessageContent>
+          {/* Sources — when the assistant used web_search or web_fetch,
+              parse the tool output for URLs and display them as
+              collapsible source citations below the message. */}
+          {!isStreaming && (() => {
+            const searchTools = (snapshot.toolCalls ?? []).filter(
+              (tc) => tc.name === "web_search" || tc.name === "web_fetch"
+            );
+            const allUrls: { title: string; url: string }[] = [];
+            for (const tc of searchTools) {
+              const output = typeof tc.result === "string" ? tc.result : "";
+              if (output) allUrls.push(...parseSearchSources(output));
+            }
+            if (allUrls.length === 0) return null;
+            return (
+              <Sources className="mt-1">
+                <SourcesTrigger count={allUrls.length} />
+                <SourcesContent>
+                  {allUrls.map((s, i) => (
+                    <Source
+                      key={`${s.url}-${i}`}
+                      href={s.url}
+                      title={s.title}
+                    >
+                      {s.title}
+                    </Source>
+                  ))}
+                </SourcesContent>
+              </Sources>
+            );
+          })()}
+        </>
+      ) : null}
 
       {/* Version navigator — `← n / sum →` style. Only shown when the
           assistant message has been retried at least once. Clicking ←
@@ -1213,14 +1511,13 @@ const MessageBubble = memo(function MessageBubble({
         />
       )}
 
-      {/* Action bar — appears under every AI / user message that has content.
+      {/* Action bar — Vercel MessageActions is the structural container.
           Hidden while streaming and when the global `disabled` flag is set
-          (e.g. another reply is in flight). Hover-to-show on touch screens
-          would be ideal, but for desktop-first usage always-on is fine. */}
+          (e.g. another reply is in flight). */}
       {showActions && !isEditing && (
-        <div
+        <MessageActions
           className={cn(
-            "flex items-center gap-0.5 mt-0.5",
+            "mt-0.5 gap-0.5",
             isUser ? "justify-end" : "justify-start"
           )}
         >
@@ -1254,9 +1551,10 @@ const MessageBubble = memo(function MessageBubble({
             onClick={() => onDelete(message, viewingVersion)}
             danger
           />
-        </div>
+        </MessageActions>
       )}
-    </Message>
+      </Message>
+    </div>
   );
 });
 
