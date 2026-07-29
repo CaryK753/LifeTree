@@ -188,7 +188,7 @@ export const ChainOfThoughtSearchResult = ({
   ...props
 }: ChainOfThoughtSearchResultProps) => (
   <Badge
-    variant="secondary"
+    variant="default"
     className={cn("gap-1 text-[10px]", className)}
     {...props}
   >
