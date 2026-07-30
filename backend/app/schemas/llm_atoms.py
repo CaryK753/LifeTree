@@ -7,16 +7,13 @@ Each is a strict, LLM-fillable schema that Instructor uses to enforce output.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-
 RiskLevel = Literal["low", "medium", "high"]
 RiskUrgency = Literal["normal", "elevated", "urgent"]
-RiskType = Literal[
-    "policy", "economic", "security", "political", "health", "operational", "other"
-]
+RiskType = Literal["policy", "economic", "security", "political", "health", "operational", "other"]
 
 
 class RiskFlag(BaseModel):
@@ -26,9 +23,7 @@ class RiskFlag(BaseModel):
         default="low", description="Severity of the risk implied by this atom."
     )
     type: RiskType = Field(default="other", description="Category of risk.")
-    urgency: RiskUrgency = Field(
-        default="normal", description="How soon the user must act."
-    )
+    urgency: RiskUrgency = Field(default="normal", description="How soon the user must act.")
     rationale: str = Field(default="", description="One-sentence justification.")
 
 
@@ -38,9 +33,7 @@ class EventAtom(BaseModel):
     subject: str = Field(..., description="Actor / entity doing the action.")
     action: str = Field(..., description="What the subject did.")
     object: str | None = Field(None, description="Target of the action, if any.")
-    occurred_at: datetime | None = Field(
-        None, description="When the event happened (ISO 8601)."
-    )
+    occurred_at: datetime | None = Field(None, description="When the event happened (ISO 8601).")
     effective_at: datetime | None = Field(
         None,
         description="When the event takes legal/practical effect, if different.",
@@ -76,7 +69,11 @@ class AssertionAtom(BaseModel):
     """An unconfirmed claim, possibly conflicting with prior assertions."""
 
     subject: str = Field(...)
+    predicate: str = Field("claims", description="Normalized relation or property name.")
     claim: str = Field(..., description="The proposition being asserted.")
+    object_value: Any | None = Field(None, description="Structured claimed value when available.")
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     conflicts_with: str | None = Field(
         None,
@@ -104,12 +101,8 @@ class RelationshipAtom(BaseModel):
     ] = Field(...)
     object_id: str | None = Field(None)
     object_name: str = Field(...)
-    type: Literal[
-        "AFFECTS", "REQUIRES", "ALTERNATIVE_TO", "WARNS", "EQUALS", "CAUSES"
-    ] = Field(...)
-    weight: float = Field(
-        default=0.0, ge=-1.0, le=1.0, description="Edge weight [-1, +1]."
-    )
+    type: Literal["AFFECTS", "REQUIRES", "ALTERNATIVE_TO", "WARNS", "EQUALS", "CAUSES"] = Field(...)
+    weight: float = Field(default=0.0, ge=-1.0, le=1.0, description="Edge weight [-1, +1].")
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
 

@@ -58,8 +58,10 @@ SET e.subject = $subject, e.action = $action, e.object = $object,
     e.risk_level = $risk_level, e.risk_type = $risk_type, e.risk_urgency = $urgency,
     e.occurred_at = $occurred_at
 WITH e
-MATCH (s:InformationSource {id: $source_id})
-MERGE (s)-[:EMITTED]->(e)
+OPTIONAL MATCH (s:InformationSource {id: $source_id})
+FOREACH (_ IN CASE WHEN s IS NULL THEN [] ELSE [1] END |
+  MERGE (s)-[:EMITTED]->(e)
+)
 """
 
 MERGE_SOURCE = """
@@ -87,6 +89,11 @@ SET sc.name = $name, sc.status = $status, sc.parent_id = $parent_id
 LINK_PATHWAY_TO_SCENARIO = """
 MATCH (p:Pathway {id: $pathway_id}), (sc:Scenario {id: $scenario_id})
 MERGE (p)-[:BELONGS_TO]->(sc)
+"""
+
+LINK_EXPECTED_EVENT_TO_SCENARIO = """
+MATCH (e:Event {id: $event_id}), (sc:Scenario {id: $scenario_id})
+MERGE (e)-[:EXPECTED_IN]->(sc)
 """
 
 PROPAGATE_RISK_FROM_EVENT = """
@@ -231,6 +238,18 @@ class GraphService:
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("graph.link_event_risk_failed", error=str(exc))
+
+    def link_expected_event_to_scenario(
+        self, event_id: str, scenario_id: str
+    ) -> None:
+        try:
+            self._run(
+                LINK_EXPECTED_EVENT_TO_SCENARIO,
+                event_id=event_id,
+                scenario_id=scenario_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("graph.link_expected_event_failed", error=str(exc))
 
     def upsert_scenario(self, scenario: Scenario) -> None:
         try:

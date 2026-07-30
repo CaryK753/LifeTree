@@ -32,7 +32,14 @@ class BayesianResult:
 
 
 class BayesianEstimator:
-    """Explainable requirement-readiness and risk-survival estimator."""
+    """Explainable requirement-readiness and risk-survival estimator.
+
+    Per project plan §11.2 缺口 G: all aggregation constants are sourced
+    from a ``params`` snapshot (built by
+    ``app.services.model_params.build_param_snapshot``) rather than
+    hardcoded. When ``params`` is None the pre-externalization heuristics
+    are used as defaults so existing callers keep working.
+    """
 
     def estimate(
         self,
@@ -42,6 +49,7 @@ class BayesianEstimator:
         risk_factors: list[RiskFactor],
         scenario: Scenario | None = None,
         evidence_scores: dict[str, float] | None = None,
+        params: dict[str, Any] | None = None,
     ) -> BayesianResult:
         evidence_scores = evidence_scores or {}
         contribs: list[dict[str, Any]] = []
@@ -50,7 +58,7 @@ class BayesianEstimator:
         risk_survivals: list[float] = []
 
         for req in requirements:
-            probability = self._req_success_prob(req)
+            probability = self._req_success_prob(req, params)
             weight = max(0.05, min(2.0, float(req.weight or 1.0)))
             requirement_probs.append(probability)
             requirement_weights.append(weight)
@@ -66,7 +74,7 @@ class BayesianEstimator:
             )
 
         for risk in risk_factors:
-            failure_probability = self._risk_failure_prob(risk, scenario)
+            failure_probability = self._risk_failure_prob(risk, scenario, params)
             risk_survivals.append(1.0 - failure_probability)
             contribs.append(
                 {
@@ -92,6 +100,7 @@ class BayesianEstimator:
                 np.asarray(requirement_probs, dtype=float),
                 requirement_weights,
                 np.asarray(risk_survivals, dtype=float),
+                params,
             )
         )
         contribs.sort(key=lambda item: item["contribution"], reverse=True)
@@ -121,19 +130,24 @@ class BayesianEstimator:
 
     # ---------------- Helpers ----------------
 
-    def _req_success_prob(self, req: Requirement) -> float:
+    def _req_success_prob(
+        self, req: Requirement, params: dict[str, Any] | None = None
+    ) -> float:
         """P(user satisfies this requirement) based on gap_status.
 
-        "missing" means the user hasn't demonstrated it yet — uncertain,
-        not unlikely. The base reflects "could go either way if the user
-        works toward it", not a 20% coin flip.
+        Base probabilities are sourced from ``params`` (keys
+        ``requirement_base_prob.{met,partial,missing,unknown}``) so admins
+        can tune per goal_type/region and so real outcomes can calibrate
+        them. Defaults mirror the pre-externalization heuristics.
         """
+        p = params or {}
         base = {
-            "met": 0.92,
-            "partial": 0.60,
-            "missing": 0.40,
-            "unknown": 0.50,
-        }.get(req.gap_status, 0.5)
+            "met": p.get("requirement_base_prob.met", 0.92),
+            "partial": p.get("requirement_base_prob.partial", 0.60),
+            "missing": p.get("requirement_base_prob.missing", 0.40),
+            "unknown": p.get("requirement_base_prob.unknown", 0.50),
+        }.get(req.gap_status, p.get("requirement_base_prob.unknown", 0.5))
+        base = float(base)
         # Weight: high-weight requirements matter more, so a missing
         # high-weight one should pull success prob down more. We blend
         # the base prob toward its "failure complement" proportional to
@@ -142,23 +156,38 @@ class BayesianEstimator:
         weight = max(0.0, min(1.0, float(req.weight or 1.0)))
         # Pull base toward 1.0 for low-weight requirements (they drag
         # less), and toward base itself for high-weight ones.
-        return float(base + (1.0 - base) * (1.0 - weight) * 0.2)
+        blend = float(p.get("requirement_weight_blend", 0.2))
+        return float(base + (1.0 - base) * (1.0 - weight) * blend)
 
     def _risk_failure_prob(
-        self, rf: RiskFactor, scenario: Scenario | None
+        self,
+        rf: RiskFactor,
+        scenario: Scenario | None,
+        params: dict[str, Any] | None = None,
     ) -> float:
-        """P(this risk materializes and breaks the path)."""
-        level_to_p = {"low": 0.08, "medium": 0.20, "high": 0.40}
-        p = level_to_p.get(rf.level, 0.20)
+        """P(this risk materializes and breaks the path).
+
+        Level→probability mapping is sourced from ``params`` (keys
+        ``risk_level_p.{low,medium,high}``); the level/explicit-probability
+        blend uses ``risk_level_blend`` (default 0.5).
+        """
+        p = params or {}
+        level_to_p = {
+            "low": p.get("risk_level_p.low", 0.08),
+            "medium": p.get("risk_level_p.medium", 0.20),
+            "high": p.get("risk_level_p.high", 0.40),
+        }
+        prob = float(level_to_p.get(rf.level, p.get("risk_level_p.medium", 0.20)))
         if rf.probability is not None:
-            p = 0.5 * p + 0.5 * float(rf.probability)
+            blend = float(p.get("risk_level_blend", 0.5))
+            prob = blend * prob + (1.0 - blend) * float(rf.probability)
         if rf.impact is not None:
-            p *= max(0.1, min(1.0, float(rf.impact)))
+            prob *= max(0.1, min(1.0, float(rf.impact)))
 
         # Scenario-level assumption overrides
         if scenario is not None:
             overrides = (scenario.assumptions or {}).get("risk_overrides", {})
             if rf.id in overrides:
-                p = float(overrides[rf.id])
+                prob = float(overrides[rf.id])
 
-        return float(max(0.0, min(1.0, p)))
+        return float(max(0.0, min(1.0, prob)))

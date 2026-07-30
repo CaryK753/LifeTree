@@ -7,6 +7,7 @@ atoms to PostgreSQL + Neo4j. Per project plan §4.1.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -39,6 +40,82 @@ Given a raw document, extract structured "information atoms":
 - assertions: unconfirmed claims
 - relationships: causal / correlation edges between ontology entities
 
+You MUST respond with a single valid JSON object conforming EXACTLY to this
+schema (no markdown fences, no commentary, no prose outside the JSON):
+{
+  "events": [
+    {
+      "subject": "<entity doing the action>",
+      "action": "<verb phrase>",
+      "object": "<entity acted upon, or empty string>",
+      "occurred_at": "<ISO 8601 date or null>",
+      "effective_at": "<ISO 8601 date or null>",
+      "old_value": "<string or null>",
+      "new_value": "<string or null>",
+      "risk_flag": {
+        "level": "<one of: low | medium | high>",
+        "type": "<one of: policy | economic | security | political | health | operational | other>",
+        "urgency": "<one of: normal | elevated | urgent>",
+        "rationale": "<short string>"
+      },
+      "extraction_confidence": <float 0-1>,
+      "summary": "<one-sentence summary>"
+    }
+  ],
+  "metrics": [
+    {
+      "name": "<metric name>",
+      "region": "<region code or null>",
+      "value": <number>,
+      "unit": "<unit string or null>",
+      "captured_at": "<ISO 8601 date or null>",
+      "risk_flag": { "level": "...", "type": "...", "urgency": "...", "rationale": "..." }
+    }
+  ],
+  "assertions": [
+    {
+      "subject": "<entity making the claim>",
+      "predicate": "<relationship verb>",
+      "claim": "<the claim text>",
+      "object_value": "<any value or null>",
+      "valid_from": "<ISO 8601 or null>",
+      "valid_to": "<ISO 8601 or null>",
+      "confidence": <float 0-1>,
+      "conflicts_with": ["<other assertion predicate>", ...],
+      "risk_flag": { "level": "...", "type": "...", "urgency": "...", "rationale": "..." }
+    }
+  ],
+  "relationships": [
+    {
+      "subject_type": "<one of: goal | pathway | scenario | event | metric | assertion | requirement | document | source | user>",
+      "subject_id": "<id or null>",
+      "subject_name": "<name>",
+      "object_type": "<one of: goal | pathway | scenario | event | metric | assertion | requirement | document | source | user>",
+      "object_id": "<id or null>",
+      "object_name": "<name>",
+      "type": "<one of: AFFECTS | REQUIRES | ALTERNATIVE_TO | WARNS | EQUALS | CAUSES>",
+      "weight": <float -1 to +1>,
+      "confidence": <float 0-1>
+    }
+  ],
+  "source_summary": "<1-2 sentence summary of the source>",
+  "language": "<ISO 639-1 code e.g. en, zh, es, de, fr>",
+  "overall_confidence": <float 0-1>
+}
+
+Field requirements:
+- events: discrete things that happened (subject/action/object/time/old→new).
+- metrics: numeric data points (e.g. CRS cutoff = 510).
+- assertions: unconfirmed claims.
+- relationships: causal / correlation edges between ontology entities.
+  - type must be one of: AFFECTS, REQUIRES, ALTERNATIVE_TO, WARNS, EQUALS, CAUSES.
+  - subject_type / object_type must be one of: goal, pathway, scenario, event,
+    metric, assertion, requirement, document, source, user.
+- risk_flag (when present) must contain level, type, urgency, rationale.
+  - level: one of low / medium / high.
+  - type: one of policy / economic / security / political / health / operational / other.
+  - urgency: one of normal / elevated / urgent.
+
 Rules:
 - Be conservative: only emit an atom if the source supports it directly.
 - Mark risk_flag.level = high only for events likely to materially change
@@ -46,6 +123,13 @@ Rules:
 - Use ISO 8601 for all timestamps.
 - If a field is unknown, omit it (do not invent values).
 - extraction_confidence reflects how clearly the source supports the atom.
+
+Output rules:
+- Return ONLY the JSON object. No markdown, no code fences, no prefix/suffix text.
+- All top-level keys (events, metrics, assertions, relationships, source_summary,
+  language, overall_confidence) must be present; use empty arrays when no items
+  of a given type were found.
+- Do not invent fields beyond the schema above.
 """
 
 
@@ -247,9 +331,19 @@ class StructuringService:
             self.db.add(
                 Assertion(
                     source_id=source.id,
+                    user_id=user_id,
                     subject=atom.subject,
+                    predicate=atom.predicate,
                     claim=atom.claim,
+                    object_value=atom.object_value,
                     confidence=atom.confidence,
+                    valid_from=atom.valid_from,
+                    valid_to=atom.valid_to,
+                    observed_at=datetime.now(timezone.utc),
+                    content_hash=hashlib.sha256(
+                        f"{atom.subject}|{atom.predicate}|{atom.claim}".encode()
+                    ).hexdigest(),
+                    source_excerpt=atom.claim[:1000],
                 )
             )
 

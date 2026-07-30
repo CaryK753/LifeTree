@@ -2,6 +2,16 @@
 
 The facade persists a ScenarioRun record per execution and returns the
 composite result dict cached on the Scenario.
+
+Per project plan §11.2 缺口 G: the engine builds a parameter snapshot
+via ``ModelParamStore.build_param_snapshot`` at the start of each run and
+threads it through the Bayesian / Monte Carlo / survival estimators so
+no aggregation constant is hardcoded. The result dict carries
+``calibration_status`` so the frontend can render the '未校准' badge
+while parameters remain heuristic.
+Per §11.2 缺口 C: the engine also persists structured ``Action`` rows
+derived from ``optimal_action_sequence`` so the /actions page and the
+LangGraph agent can track / complete them.
 """
 
 from __future__ import annotations
@@ -15,14 +25,18 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.models.event import Event, InformationSource, Relationship
-from app.models.goal import Pathway, Requirement, RiskFactor
+from app.models.goal import Goal, Pathway, Requirement, RiskFactor
 from app.models.scenario import Scenario, ScenarioRun
+from app.services.model_params import build_param_snapshot
+from app.services.reasoning.action_persistence import persist_recommended_actions
 from app.services.reasoning.bayesian import BayesianEstimator
 from app.services.reasoning.evidence import build_decision_evidence
-from app.services.reasoning.factor_model import MODEL_VERSION
+from app.services.reasoning.factor_model import MODEL_VERSION, aggregate_risk_exposure
 from app.services.reasoning.monte_carlo import MonteCarloSimulator
 from app.services.reasoning.risk_propagation import RiskPropagationEngine
 from app.services.reasoning.survival import SurvivalEstimator
+from app.services.risk_scope import risk_scope_clause
+from app.services.scenario_pathway import resolve_scenario_pathway
 
 log = get_logger(__name__)
 
@@ -61,6 +75,16 @@ class ReasoningEngine:
             if goal is None:
                 raise RuntimeError("scenario has no associated goal/pathway")
 
+            # §11.2 缺口 G: build the param snapshot once per run and
+            # thread it through every estimator. Scope by goal.scenario
+            # tag (goal_type) and pathway.region so per-domain tuning +
+            # calibration take effect.
+            goal_type = getattr(goal, "scenario", None) or "__global__"
+            region = getattr(pathway, "region", None) or "__global__"
+            params = build_param_snapshot(
+                self.db, goal_type=goal_type, region=region
+            )
+
             evidence = build_decision_evidence(
                 self.db,
                 {factor.id for factor in [*requirements, *risk_factors]},
@@ -74,6 +98,7 @@ class ReasoningEngine:
                 risk_factors,
                 scenario,
                 evidence_scores=evidence.scores,
+                params=params,
             )
 
             # 2. Monte Carlo distribution
@@ -84,10 +109,19 @@ class ReasoningEngine:
                 risk_factors,
                 scenario,
                 evidence_scores=evidence.scores,
+                params=params,
             )
 
+            probability_bias = float(params.get("calibration_probability_bias", 0.0))
+            adjusted = {
+                "p10": max(0.0, min(1.0, mc.p10 + probability_bias)),
+                "p50": max(0.0, min(1.0, mc.p50 + probability_bias)),
+                "p90": max(0.0, min(1.0, mc.p90 + probability_bias)),
+                "bayesian": max(0.0, min(1.0, bayes.p_success + probability_bias)),
+            }
+
             # 3. Survival curve
-            surv = self.survival.estimate(goal, mc.p50)
+            surv = self.survival.estimate(goal, adjusted["p50"], params=params)
 
             # 4. Aggregate key risk factors
             key_risks = self._aggregate_key_risks(
@@ -113,7 +147,7 @@ class ReasoningEngine:
                 )
 
             # Compute Risk Controllability Grade to avoid raw win-rate anxiety
-            p50 = mc.p50
+            p50 = adjusted["p50"]
             if p50 >= 0.75:
                 grade, label = "robust", "稳健"
             elif p50 >= 0.45:
@@ -121,15 +155,43 @@ class ReasoningEngine:
             else:
                 grade, label = "vulnerable", "高风险脆弱"
 
+            # §11.2 缺口 C: persist structured Action rows from the
+            # optimal_action_sequence so the /actions page + agent can
+            # track them. We keep the text list in the result for
+            # backward compat / display, but the Action rows are the
+            # source of truth going forward.
+            action_rows = persist_recommended_actions(
+                self.db,
+                goal=goal,
+                pathway=pathway,
+                scenario=scenario,
+                run_id=run_id,
+                recommendations=mc.optimal_action_sequence,
+                requirements=requirements,
+            )
+
+            risk_exposure = aggregate_risk_exposure(
+                [
+                    float(contribution["p"])
+                    for contribution in bayes.factor_contributions
+                    if contribution.get("type") == "risk_factor"
+                ],
+                params,
+            )
+
+            # Calibration metadata (缺口 G) — surfaces in the UI badge.
+            calibrated = bool(params.get("__calibrated__", False))
+            sample_size = int(params.get("__calibration_sample_size__", 0))
+
             result = {
                 "success_probability": {
-                    "p10": mc.p10,
-                    "p50": mc.p50,
-                    "p90": mc.p90,
-                    "bayesian_point": bayes.p_success,
+                    "p10": adjusted["p10"],
+                    "p50": adjusted["p50"],
+                    "p90": adjusted["p90"],
+                    "bayesian_point": adjusted["bayesian"],
                     "p_by_target_date": surv.p_by_target_date,
                 },
-                "overall_risk": 1.0 - mc.p50,
+                "overall_risk": risk_exposure,
                 "controllability_grade": grade,
                 "controllability_label": label,
                 "key_risk_factors": key_risks,
@@ -138,14 +200,25 @@ class ReasoningEngine:
                 "median_time_months": surv.median_time_months,
                 "key_risk_times": mc.key_risk_times,
                 "optimal_action_sequence": mc.optimal_action_sequence,
+                "action_ids": [a.id for a in action_rows],
                 "explanation": bayes.explanation,
                 "iterations": mc.iterations,
                 "model_version": MODEL_VERSION,
+                "calibration_status": {
+                    "calibrated": calibrated,
+                    "sample_size": sample_size,
+                    "goal_type": goal_type,
+                    "region": region,
+                    # Honest framing until real outcomes are collected.
+                    "label": "已校准" if calibrated else "未校准（启发式估计）",
+                },
                 "assumptions": [
                     "Requirements are jointly needed and use weighted geometric readiness.",
                     "Risk hazards are partially correlated rather than fully independent.",
                     "Evidence quality controls uncertainty, not the direction of an estimate.",
                     "Outputs compare scenarios and are not calibrated guarantees.",
+                    "Aggregation parameters are sourced from model_params; "
+                    "they are heuristic until calibrated from real outcomes.",
                 ],
                 "evidence_summary": evidence.summary,
                 "graph_paths": [
@@ -169,6 +242,7 @@ class ReasoningEngine:
                 run_id=run.id,
                 p50=mc.p50,
                 ms=run.duration_ms,
+                calibrated=calibrated,
             )
             return run
 
@@ -187,41 +261,53 @@ class ReasoningEngine:
     def _load_context(
         self, scenario: Scenario
     ) -> tuple[Pathway | None, list[Requirement], list[RiskFactor]]:
-        # Find the primary pathway linked to this scenario
-        pathway = self.db.scalar(
-            select(Pathway).where(Pathway.scenario_id == scenario.id)
-        )
-        if pathway is None:
-            # Fall back to the goal's first pathway
-            pathway = self.db.scalar(
-                select(Pathway)
-                .where(Pathway.goal_id == scenario.goal_id)
-                .order_by(Pathway.created_at.asc())
-            )
+        goal = self.db.get(Goal, scenario.goal_id)
+        if goal is None:
+            return None, [], []
+        pathway = resolve_scenario_pathway(self.db, scenario)
 
         requirements: list[Requirement] = []
-        if pathway is not None:
-            requirements = list(
-                self.db.scalars(
-                    select(Requirement)
-                    .where(Requirement.pathway_id == pathway.id)
-                    .order_by(Requirement.weight.desc())
-                )
-            )
+        risk_factors: list[RiskFactor] = []
 
-        # Load risk factors — filter by region when the pathway has one,
-        # so that a Canada FSW scenario doesn't pick up Australia/UK risks.
-        # RiskFactors with no region (global risks like "Policy Shift") are
-        # always included.
-        rf_stmt = select(RiskFactor)
-        if pathway is not None and pathway.region:
-            rf_stmt = rf_stmt.where(
-                (RiskFactor.region == pathway.region)
-                | (RiskFactor.region.is_(None))
+        if pathway is not None:
+            # §11.3: Load requirements from the pathway_requirements M2M table.
+            # Fall back to legacy pathway_id column if no M2M rows exist (e.g.
+            # pre-migration data).
+            from app.models.goal import pathway_requirements, pathway_risk_factors
+
+            req_stmt = (
+                select(Requirement)
+                .join(pathway_requirements, pathway_requirements.c.requirement_id == Requirement.id)
+                .where(pathway_requirements.c.pathway_id == pathway.id)
+                .order_by(Requirement.weight.desc())
             )
-        risk_factors = list(
-            self.db.scalars(rf_stmt.order_by(RiskFactor.level.desc()).limit(5))
-        )
+            requirements = list(self.db.scalars(req_stmt))
+
+            # Legacy fallback: if no M2M rows, use pathway_id column
+            if not requirements and pathway is not None:
+                requirements = list(
+                    self.db.scalars(
+                        select(Requirement)
+                        .where(Requirement.pathway_id == pathway.id)
+                        .order_by(Requirement.weight.desc())
+                    )
+                )
+
+            # §11.3 bug fix: Load risk factors from the pathway_risk_factors
+            # M2M table. Previously risk factors were loaded globally by region
+            # with limit(5), causing every branch in the same region to show
+            # the same key_risk_factors. Now each pathway has its own set.
+            rf_stmt = (
+                select(RiskFactor)
+                .join(pathway_risk_factors, pathway_risk_factors.c.risk_factor_id == RiskFactor.id)
+                .where(
+                    pathway_risk_factors.c.pathway_id == pathway.id,
+                    RiskFactor.deleted_at.is_(None),
+                    risk_scope_clause(goal.user_id),
+                )
+                .order_by(RiskFactor.level.desc())
+            )
+            risk_factors = list(self.db.scalars(rf_stmt))
 
         return pathway, requirements, risk_factors
 

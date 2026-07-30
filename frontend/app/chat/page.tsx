@@ -217,10 +217,18 @@ export default function ChatPage() {
             </Button>
             <div className="flex items-center gap-1.5 min-w-0">
               <Sparkles className="h-3.5 w-3.5 text-brand-500 dark:text-brand-400 shrink-0" />
-              <span className="text-xs font-medium text-zinc-700 dark:text-zinc-200 shrink-0 hidden sm:inline">
-                {t("chat.advisorTitle")}
-              </span>
-              <span className="text-zinc-300 dark:text-zinc-600 select-none hidden sm:inline">·</span>
+              {/* In PWA / drawer mode the "AI advisor" label is hidden to
+                  keep the top bar compact; the conversation title is the
+                  primary identifier. The "·" separator follows the same
+                  rule. */}
+              {!drawerMode && (
+                <>
+                  <span className="text-xs font-medium text-zinc-700 dark:text-zinc-200 shrink-0 hidden sm:inline">
+                    {t("chat.advisorTitle")}
+                  </span>
+                  <span className="text-zinc-300 dark:text-zinc-600 select-none hidden sm:inline">·</span>
+                </>
+              )}
               <EditableTitle
                 value={activeConv?.title ?? ""}
                 placeholder={t("chat.titlePlaceholder")}

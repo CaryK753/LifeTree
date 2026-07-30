@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field, computed_field
 
 from app.schemas.entities import ORMModel
-
 
 # ---------- Information sources ----------
 
@@ -90,6 +89,7 @@ class EventRead(EventBase, ORMModel):
 
 class ScenarioBase(BaseModel):
     name: str
+    pathway_id: str | None = None
     description: str | None = None
     status: Literal["draft", "active", "dormant", "merged", "closed"] = "draft"
     parent_scenario_id: str | None = None
@@ -126,6 +126,7 @@ class ScenarioUpdate(BaseModel):
     status: Literal["draft", "active", "dormant", "merged", "closed"] | None = None
     assumptions: dict[str, Any] | None = None
     impact_threshold: float | None = None
+    pathway_id: str | None = None
 
 
 class ScenarioRunRead(ORMModel):
@@ -346,3 +347,74 @@ class DashboardSummary(BaseModel):
     key_risk_times: list[dict[str, Any]] = []
     reasoning_run_id: str | None = None
     reasoning_iterations: int | None = None
+
+
+# ---------- Actions (P0-线B a2/a3) ----------
+
+class ActionBase(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    description: str | None = None
+    stage: str | None = None
+    due_at: date | None = None
+    recurrence: Literal["", "daily", "weekly", "monthly"] = ""
+    cost: float = Field(0.5, ge=0.0, le=1.0)
+    expected_prob_lift: float = Field(0.0, ge=0.0, le=1.0)
+    scenario_id: str | None = None
+    pathway_id: str | None = None
+    requirement_id: str | None = None
+    risk_factor_id: str | None = None
+
+
+class ActionCreate(ActionBase):
+    goal_id: str
+
+
+class ActionUpdate(BaseModel):
+    title: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = None
+    stage: str | None = None
+    status: Literal[
+        "pending", "in_progress", "completed", "skipped", "deferred"
+    ] | None = None
+    due_at: date | None = None
+    recurrence: Literal["", "daily", "weekly", "monthly"] | None = None
+    cost: float | None = Field(None, ge=0.0, le=1.0)
+    expected_prob_lift: float | None = Field(None, ge=0.0, le=1.0)
+    scenario_id: str | None = None
+    pathway_id: str | None = None
+    requirement_id: str | None = None
+    risk_factor_id: str | None = None
+    meta: dict[str, Any] | None = None
+
+
+class ActionRead(ActionBase, ORMModel):
+    id: str
+    user_id: str
+    goal_id: str
+    status: Literal[
+        "pending", "in_progress", "completed", "skipped", "deferred"
+    ] = "pending"
+    completed_at: datetime | None = None
+    actual_cost: float | None = None
+    actual_prob_lift: float | None = None
+    source: str = "manual"
+    source_run_id: str | None = None
+    recurrence_parent_id: str | None = None
+    occurrence_key: str | None = None
+    reminder_sent_at: datetime | None = None
+    meta: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+    @computed_field
+    @property
+    def roi(self) -> float:
+        """ROI = expected_prob_lift / max(cost, 0.01)."""
+        return (self.expected_prob_lift or 0.0) / max(self.cost or 0.0, 0.01)
+
+
+class ActionROISort(BaseModel):
+    """Response wrapper for ``GET /actions/roi`` — top actions by ROI desc."""
+
+    actions: list[ActionRead]
+    count: int

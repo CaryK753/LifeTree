@@ -68,6 +68,15 @@ class Settings(BaseSettings):
     smtp_password: SecretStr = SecretStr("")
     smtp_from: str = "notify@lifetree.local"
 
+    # ---------- Optional notification gateways ----------
+    sms_provider: Literal["none", "twilio"] = "none"
+    twilio_account_sid: str = ""
+    twilio_auth_token: SecretStr = SecretStr("")
+    twilio_from_number: str = ""
+    vapid_private_key: SecretStr = SecretStr("")
+    vapid_public_key: str = ""
+    vapid_contact: str = "mailto:admin@lifetree.local"
+
     # ---------- Plugins ----------
     # Directory where user-uploaded plugin .py files are stored.
     # Relative to the backend working directory; created on demand.

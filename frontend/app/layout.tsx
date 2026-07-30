@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
 import { cookies } from "next/headers";
 import "./globals.css";
 import { ToastProvider } from "@/components/ui/toast";
@@ -13,8 +12,6 @@ import {
   isLocale,
   type Locale,
 } from "@/lib/i18n/messages";
-
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 async function resolveLocaleFromCookie(): Promise<Locale> {
   const cookieStore = await cookies();
@@ -101,7 +98,7 @@ export default async function RootLayout({
           }}
         />
       </head>
-      <body className={`${inter.variable} font-sans antialiased`}>
+      <body className="font-sans antialiased">
         <ThemeProvider>
           <I18nProvider>
             <ToastProvider>

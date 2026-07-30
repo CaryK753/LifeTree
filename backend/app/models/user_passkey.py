@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -33,6 +33,9 @@ class UserPasskey(UUIDPkMixin, Base):
     """A registered WebAuthn passkey credential owned by a user."""
 
     __tablename__ = "user_passkeys"
+    __table_args__ = (
+        UniqueConstraint("credential_id", name="uq_user_passkey_credential_id"),
+    )
 
     user_id: Mapped[str] = mapped_column(
         String(36),
@@ -42,7 +45,7 @@ class UserPasskey(UUIDPkMixin, Base):
     )
     # Base64url-encoded credential id. Unique so the same credential can't
     # be bound to two LifeTree users.
-    credential_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True, index=True)
+    credential_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     # Base64url-encoded COSE public key (CBOR-encoded).
     public_key: Mapped[str] = mapped_column(Text, nullable=False)
     # Server-side signature counter — starts at 0, bumped on each successful

@@ -11,7 +11,7 @@
  * Versioned via SW_VERSION — bump to invalidate old caches on next activation.
  */
 
-const SW_VERSION = "lifetree-v3";
+const SW_VERSION = "lifetree-v4";
 const APP_SHELL = [
   "/",
   "/auth",
@@ -170,6 +170,33 @@ async function handleNavigation(req) {
 // ---------- Message: skipWaiting on user prompt ----------
 self.addEventListener("message", (event) => {
   if (event.data === "SKIP_WAITING") self.skipWaiting();
+});
+
+self.addEventListener("push", (event) => {
+  let payload = { title: "LifeTree", body: "有新的风险提醒" };
+  try {
+    payload = { ...payload, ...event.data.json() };
+  } catch (_) {
+    if (event.data) payload.body = event.data.text();
+  }
+  event.waitUntil(
+    self.registration.showNotification(payload.title, {
+      body: payload.body,
+      icon: "/media/icon-192.png",
+      badge: "/media/icon-192.png",
+      data: { url: "/notifications" },
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      const existing = clients.find((client) => client.url.includes("/notifications"));
+      return existing ? existing.focus() : self.clients.openWindow("/notifications");
+    })
+  );
 });
 
 const OFFLINE_HTML = `<!DOCTYPE html>

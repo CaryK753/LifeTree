@@ -8,6 +8,7 @@ optimal-action sequence suggestion.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -50,6 +51,7 @@ class MonteCarloSimulator:
         iterations: int = 2000,
         seed: int | None = 42,
         evidence_scores: dict[str, float] | None = None,
+        params: dict[str, Any] | None = None,
     ) -> MonteCarloResult:
         rng = np.random.default_rng(seed)
         evidence_scores = evidence_scores or {}
@@ -73,7 +75,7 @@ class MonteCarloSimulator:
                 [
                     rng.beta(
                         *self._p_to_beta(
-                            self.bayesian._req_success_prob(req),
+                            self.bayesian._req_success_prob(req, params),
                             concentration=4.0 + 12.0 * evidence_scores.get(req.id, 0.0),
                         ),
                         size=iterations,
@@ -88,7 +90,7 @@ class MonteCarloSimulator:
                 [
                     rng.beta(
                         *self._p_to_beta(
-                            1.0 - self.bayesian._risk_failure_prob(risk, scenario),
+                            1.0 - self.bayesian._risk_failure_prob(risk, scenario, params),
                             concentration=3.0 + 9.0 * evidence_scores.get(risk.id, 0.0),
                         ),
                         size=iterations,
@@ -102,6 +104,7 @@ class MonteCarloSimulator:
                 requirement_samples,
                 requirement_weights,
                 risk_survival_samples,
+                params,
                 axis=1,
             )
         )

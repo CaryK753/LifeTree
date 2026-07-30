@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -34,6 +34,12 @@ class Scenario(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
 
     goal_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("goals.id", ondelete="CASCADE"), index=True
+    )
+    pathway_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("pathways.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

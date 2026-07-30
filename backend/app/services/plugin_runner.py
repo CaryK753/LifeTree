@@ -34,7 +34,9 @@ from dataclasses import asdict
 from typing import Any
 
 from app.core.logging import get_logger
+from app.services.plugin_ingest import ingest_and_pack
 from app.services.plugins import Plugin, PluginManifest
+from app.services.user_plugin_execution import run_isolated_user_plugin
 
 log = get_logger(__name__)
 
@@ -100,24 +102,15 @@ def list_plugins() -> list[PluginManifest]:
     # Builtin plugins — skip the user_uploaded subpackage explicitly so
     # we don't double-scan it.
     out = _scan_package(_PLUGINS_PACKAGE, skip={"user_uploaded"})
-    # User-uploaded plugins
-    out.extend(_scan_package(_USER_PLUGINS_PACKAGE))
     return out
 
 
 def get_plugin(plugin_id: str) -> Any | None:
-    """Import and return the plugin module, or None if missing/broken.
-
-    Tries the builtin package first; on ImportError falls back to the
-    user_uploaded subpackage.
-    """
+    """Import a trusted builtin plugin; user plugins use a subprocess."""
     try:
         return importlib.import_module(f"{_PLUGINS_PACKAGE}.{plugin_id}")
     except ImportError:
-        try:
-            return importlib.import_module(f"{_USER_PLUGINS_PACKAGE}.{plugin_id}")
-        except ImportError:
-            return None
+        return None
     except Exception as exc:  # noqa: BLE001
         # Module exists but raised during import (e.g. syntax error at runtime).
         # Log and treat as missing so callers see a 404 instead of a 500.
@@ -126,18 +119,10 @@ def get_plugin(plugin_id: str) -> Any | None:
 
 
 def is_user_plugin(plugin_id: str) -> bool:
-    """Return True if ``plugin_id`` resolves to a module under user_uploaded."""
-    try:
-        importlib.import_module(f"{_PLUGINS_PACKAGE}.{plugin_id}")
-        return False
-    except ImportError:
-        try:
-            importlib.import_module(f"{_USER_PLUGINS_PACKAGE}.{plugin_id}")
-            return True
-        except ImportError:
-            return False
-    except Exception:  # noqa: BLE001
-        return False
+    """Return True when an uploaded plugin file exists on disk."""
+    from app.services.plugin_upload import user_plugins_root
+
+    return (user_plugins_root() / f"{plugin_id}.py").is_file()
 
 
 # ---------- Execution ----------
@@ -150,6 +135,7 @@ def run_plugin(
     title: str | None = None,
     skip_llm: bool = False,
     db=None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """Run a plugin end-to-end.
 
@@ -175,27 +161,23 @@ def run_plugin(
         "warning": None,
     }
 
+    if is_user_plugin(plugin_id):
+        return run_isolated_user_plugin(
+            plugin_id,
+            params,
+            title=title,
+            skip_llm=skip_llm,
+            db=db,
+            user_id=user_id,
+            out=out,
+        )
+
     module = get_plugin(plugin_id)
     if module is None or not hasattr(module, "Plugin"):
         out["error"] = f"插件不存在或未实现 Plugin 类: {plugin_id}"
         return out
 
     plugin: Plugin = module.Plugin
-
-    # If this is a user-uploaded plugin, enforce the DB enabled flag.
-    if is_user_plugin(plugin_id):
-        if db is None:
-            from app.db.postgres import SessionLocal
-            check_db = SessionLocal()
-            try:
-                enabled = _user_plugin_enabled(plugin_id, check_db)
-            finally:
-                check_db.close()
-        else:
-            enabled = _user_plugin_enabled(plugin_id, db)
-        if enabled is False:
-            out["error"] = f"插件已禁用: {plugin_id}"
-            return out
 
     try:
         manifest = plugin.manifest()
@@ -252,97 +234,10 @@ def run_plugin(
         from app.db.postgres import SessionLocal
         db = SessionLocal()
         try:
-            return _ingest_and_pack(db, text, final_title, skip_llm, out)
+            return ingest_and_pack(db, text, final_title, skip_llm, out)
         finally:
             db.close()
-    return _ingest_and_pack(db, text, final_title, skip_llm, out)
-
-
-def _user_plugin_enabled(plugin_id: str, db) -> bool | None:
-    """Look up the enabled flag for a user plugin. Returns None if row missing."""
-    from sqlalchemy import select
-
-    from app.models.user_plugin import UserPlugin
-
-    row = db.scalar(
-        select(UserPlugin).where(
-            UserPlugin.plugin_id == plugin_id,
-            UserPlugin.deleted_at.is_(None),
-        )
-    )
-    if row is None:
-        return None
-    return bool(row.enabled)
-
-
-def _ingest_and_pack(db, text: str, title: str, skip_llm: bool, out: dict) -> dict:
-    from sqlalchemy import select
-
-    from app.models.event import Event
-    from app.models.user import UserProfile
-    from app.services.notification import NotificationService
-    from app.services.reasoning.risk_propagation import RiskPropagationEngine
-    from app.services.structuring import StructuringService
-
-    try:
-        service = StructuringService(db)
-        source, extraction = service.ingest_text(
-            text=text,
-            title=title or "Untitled",
-            source_kind="public",
-            skip_llm=skip_llm,
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.error("plugins.ingest_failed", error=str(exc))
-        out["error"] = f"入库失败: {exc}"
-        return out
-
-    out["source_id"] = source.id
-
-    if extraction is None:
-        out["ok"] = True
-        return out
-
-    out["events_created"] = len(extraction.events)
-    out["metrics_created"] = len(extraction.metrics)
-    out["assertions_created"] = len(extraction.assertions)
-    out["relationships_created"] = len(extraction.relationships)
-    out["extraction_confidence"] = extraction.overall_confidence
-
-    notifications = 0
-    propagation = RiskPropagationEngine(db)
-    notif_service = NotificationService(db)
-    high_risk_events = list(
-        db.scalars(
-            select(Event)
-            .where(Event.source_id == source.id, Event.risk_flag_level == "high")
-        )
-    )
-    for ev in high_risk_events:
-        for a in propagation.propagate_from_event(ev):
-            user = a.user if hasattr(a, "user") else None
-            if user is None:
-                user = db.get(UserProfile, a.user_id)
-            if user is None:
-                continue
-            notif_service.notify(
-                user,
-                title=f"High-risk event: {ev.subject} {ev.action}",
-                body=getattr(ev, "summary", "") or f"Risk level {ev.risk_flag_level} detected.",
-                severity="critical" if ev.risk_flag_urgency == "urgent" else "warning",
-                event_id=ev.id,
-                risk_factor_id=None,
-                impact_summary={
-                    "goal_id": a.goal_id,
-                    "overall_risk": a.overall_risk,
-                    "factor_scores": a.factor_scores,
-                },
-            )
-            notifications += 1
-
-    out["notifications_triggered"] = notifications
-    out["ok"] = True
-    return out
+    return ingest_and_pack(db, text, final_title, skip_llm, out)
 
 
 # ---------- Serialization ----------

@@ -77,6 +77,9 @@ interface ScenarioTreeProps {
   onSelect?: (scenario: ScenarioNodeData | null) => void;
   onRerun?: () => void;
   selectedId?: string | null;
+  /** When true, the parent renders a right-side detail panel ~384px wide;
+   *  clicked nodes are centered in the remaining left area. */
+  panelOpen?: boolean;
 }
 
 // ---------- Layout (dagre) ----------
@@ -361,10 +364,11 @@ function ScenarioTreeInner({
   onSelect,
   onRerun,
   selectedId,
+  panelOpen,
 }: ScenarioTreeProps) {
   const t = useT();
   const toast = useToast();
-  const { fitView } = useReactFlow();
+  const { fitView, setCenter } = useReactFlow();
   const [running, setRunning] = useState<string | null>(null);
 
   const handleSelect = useCallback(
@@ -428,18 +432,77 @@ function ScenarioTreeInner({
 
   // Apply dagre layout directly — no separate node state needed for a
   // read-only auto-laid-out tree. React Flow handles pan/zoom internally.
-  const { nodes, edges } = useMemo(
+  const { nodes: laidOutNodes, edges: laidOutEdges } = useMemo(
     () => layoutTree(initialNodes, initialEdges),
     [initialNodes, initialEdges]
   );
 
-  // Fit view whenever the layout changes.
+  // IMPORTANT: useNodesState / useEdgesState + onNodesChange / onEdgesChange
+  // are required for the MiniMap to render node thumbnails. Without
+  // onNodesChange, React Flow cannot write back the `measured` dimensions
+  // (DOM-measured width/height) onto the node state, so the MiniMap has no
+  // size data to draw thumbnails from. Decision-tree Canvas already does
+  // this; the scenario-tree Canvas was previously passing the memoized
+  // array directly, which is why its MiniMap appeared empty.
+  const [nodes, setNodes, onNodesChange] = useNodesState(laidOutNodes);
+  const edgesState = useEdgesState(laidOutEdges);
+  const edges = edgesState[0];
+  const setEdges = edgesState[1];
+  const onEdgesChange = edgesState[2];
+
+  // Sync the laid-out nodes/edges into state whenever the layout changes.
+  // Using useEffect (not useMemo) because we're mutating state.
+  useEffect(() => {
+    setNodes(laidOutNodes);
+  }, [laidOutNodes, setNodes]);
+  useEffect(() => {
+    setEdges(laidOutEdges);
+  }, [laidOutEdges, setEdges]);
+
+  // Build a quick id → node-position lookup so we can center the clicked
+  // node without scanning the array on every click.
+  const nodePosById = useMemo(() => {
+    const m = new Map<string, { x: number; y: number }>();
+    for (const n of nodes) m.set(n.id, n.position);
+    return m;
+  }, [nodes]);
+
+  // Fit view when the set of scenarios changes (NOT on every selection —
+  // selection is handled by the centering effect below). We intentionally
+  // exclude selectedId / running from the deps so re-fitting doesn't
+  // fight the centering logic.
+  const scenarioKey = scenarios.map((s) => s.id).join("|");
   useEffect(() => {
     const id = requestAnimationFrame(() => {
       fitView({ padding: 0.2, duration: 400 });
     });
     return () => cancelAnimationFrame(id);
-  }, [nodes, edges, fitView]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scenarioKey, fitView]);
+
+  // When the selected node changes, zoom in and pan so the node sits at
+  // the center of the left area (i.e. shifted left to leave room for the
+  // ~384px right detail panel when it's open).
+  useEffect(() => {
+    if (!selectedId) return;
+    const pos = nodePosById.get(selectedId);
+    if (!pos) return;
+    // Node center in flow coordinates (positions are top-left of the node).
+    const cx = pos.x + NODE_WIDTH / 2;
+    const cy = pos.y + NODE_HEIGHT / 2;
+    // Target zoom — 1.0 shows the node at its natural size which is big
+    // enough to read clearly without being so large the surrounding
+    // context disappears.
+    const targetZoom = 1.0;
+    // When the right panel is open, shift the center left so the node
+    // sits in the middle of the visible (non-panel) area. React Flow's
+    // setCenter takes the point in flow coords that should map to the
+    // viewport center, so we offset cx to the right by half the panel
+    // width in flow units (panelWidth / 2 / zoom).
+    const panelWidth = panelOpen ? 384 : 0;
+    const offsetX = panelWidth / 2 / targetZoom;
+    setCenter(cx + offsetX, cy, { zoom: targetZoom, duration: 450 });
+  }, [selectedId, nodePosById, panelOpen, setCenter]);
 
   if (scenarios.length === 0) {
     return null;
@@ -501,6 +564,8 @@ function ScenarioTreeInner({
         edges={edges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         onNodeClick={(_, node) => handleSelect(node.id)}
         nodesDraggable={false}
         nodesConnectable={false}

@@ -10,11 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # ---------- Shared ----------
 
+
 class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 # ---------- Users ----------
+
 
 class UserProfileBase(BaseModel):
     display_name: str
@@ -60,6 +62,7 @@ class UserProfileUpdate(BaseModel):
 
 # ---------- User memories (unbounded "remember this" channel) ----------
 
+
 class UserMemoryBase(BaseModel):
     content: str = Field(..., min_length=1, max_length=1000)
     category: str = Field("other", max_length=32)
@@ -88,12 +91,13 @@ class UserMemoryUpdate(BaseModel):
 
 # ---------- Goals ----------
 
+
 class GoalBase(BaseModel):
     title: str
     description: str | None = None
     scenario: str = "generic"
     target_date: date | None = None
-    status: Literal["draft", "active", "paused", "achieved", "abandoned"] = "draft"
+    status: Literal["draft", "active", "paused", "achieved", "abandoned"] = "active"
     meta: dict[str, Any] = {}
 
 
@@ -122,11 +126,23 @@ class GoalUpdate(BaseModel):
 
 # ---------- Pathways ----------
 
+PathwayStatusValue = Literal[
+    "candidate",
+    "selected",
+    "rejected",
+    "superseded",
+    "predicted",
+    "confirmed",
+    "in_progress",
+    "abandoned",
+]
+
+
 class PathwayBase(BaseModel):
     name: str
     description: str | None = None
     region: str | None = None
-    status: Literal["candidate", "selected", "rejected", "superseded"] = "candidate"
+    status: PathwayStatusValue = "candidate"
     eligibility: dict[str, Any] = {}
     milestones: list[dict[str, Any]] = []
     parent_pathway_id: str | None = None
@@ -149,7 +165,7 @@ class PathwayUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     region: str | None = None
-    status: Literal["candidate", "selected", "rejected", "superseded"] | None = None
+    status: PathwayStatusValue | None = None
     eligibility: dict[str, Any] | None = None
     milestones: list[dict[str, Any]] | None = None
     parent_pathway_id: str | None = None
@@ -157,6 +173,7 @@ class PathwayUpdate(BaseModel):
 
 
 # ---------- Requirements ----------
+
 
 class RequirementBase(BaseModel):
     name: str
@@ -177,7 +194,7 @@ class RequirementCreate(RequirementBase):
 
 class RequirementRead(RequirementBase, ORMModel):
     id: str
-    pathway_id: str
+    pathway_id: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -194,6 +211,7 @@ class RequirementUpdate(BaseModel):
 
 
 # ---------- RiskFactors ----------
+
 
 class RiskFactorBase(BaseModel):
     type: Literal[
@@ -216,6 +234,7 @@ class RiskFactorCreate(RiskFactorBase):
 
 class RiskFactorRead(RiskFactorBase, ORMModel):
     id: str
+    user_id: str | None = None
     created_at: datetime
     updated_at: datetime
 

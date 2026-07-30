@@ -10,6 +10,7 @@ list / toggle / soft-delete uploads without re-importing every file.
 from __future__ import annotations
 
 from sqlalchemy import Boolean, ForeignKey, Integer, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.postgres import Base
@@ -41,6 +42,7 @@ class UserPlugin(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False, index=True
     )
+    manifest: Mapped[dict] = mapped_column(JSONB, default=dict)
 
     def __repr__(self) -> str:
         return f"<UserPlugin {self.plugin_id}>"

@@ -35,6 +35,8 @@ from app.models.goal import Goal, Pathway, Requirement, RiskFactor
 from app.models.memory import UserMemory
 from app.models.scenario import Scenario, ScenarioRun
 from app.models.user import UserProfile
+from app.services.risk_scope import risk_scope_clause
+from app.services.scenario_pathway import resolve_scenario_pathway
 
 log = get_logger(__name__)
 
@@ -177,12 +179,18 @@ class EvolutionService:
                 base_p=context["base_p50"],
                 events=projection.events,
             )
+            from app.services.evolution_feedback import EvolutionFeedbackService
+
+            feedback = EvolutionFeedbackService(self.db).persist_projection(
+                scenario, user.id, projection.events
+            )
 
             result: dict[str, Any] = {
                 "projection": projection.model_dump(),
                 "trajectory": trajectory,
                 "context_summary": context["summary"],
                 "horizon_months": self.HORIZON_MONTHS,
+                "feedback": feedback,
             }
 
             # Cache on scenario.meta so subsequent GETs don't need to hit
@@ -239,49 +247,49 @@ class EvolutionService:
         # Pathway + requirements + risk_factors — reuse the same region-aware
         # loading logic as ReasoningEngine._load_context so the evolution
         # prompt sees the same filtered risk set as the Bayesian reasoning.
-        pathway = self.db.scalar(
-            select(Pathway).where(Pathway.scenario_id == scenario.id)
-        )
-        if pathway is None:
-            pathway = self.db.scalar(
-                select(Pathway)
-                .where(Pathway.goal_id == scenario.goal_id)
-                .order_by(Pathway.created_at.asc())
-            )
+        pathway = resolve_scenario_pathway(self.db, scenario)
 
         requirements: list[Requirement] = []
         if pathway is not None:
+            # §11.3: Use M2M table, fall back to legacy pathway_id
+            from app.models.goal import pathway_requirements, pathway_risk_factors
+
             requirements = list(
                 self.db.scalars(
                     select(Requirement)
-                    .where(Requirement.pathway_id == pathway.id)
+                    .join(pathway_requirements, pathway_requirements.c.requirement_id == Requirement.id)
+                    .where(pathway_requirements.c.pathway_id == pathway.id)
                     .order_by(Requirement.weight.desc())
                     .limit(self.MAX_REQUIREMENTS)
                 )
             )
+            if not requirements:
+                requirements = list(
+                    self.db.scalars(
+                        select(Requirement)
+                        .where(Requirement.pathway_id == pathway.id)
+                        .order_by(Requirement.weight.desc())
+                        .limit(self.MAX_REQUIREMENTS)
+                    )
+                )
 
+        # Risk factors are explicit per-pathway associations. Inferring by
+        # region makes sibling pathways consume identical, unrelated risks.
         risk_factors: list[RiskFactor] = []
-        if pathway is not None and pathway.region:
+        if pathway is not None:
             risk_factors = list(
                 self.db.scalars(
                     select(RiskFactor)
+                    .join(pathway_risk_factors, pathway_risk_factors.c.risk_factor_id == RiskFactor.id)
                     .where(
-                        (RiskFactor.region == pathway.region)
-                        | (RiskFactor.region.is_(None))
+                        pathway_risk_factors.c.pathway_id == pathway.id,
+                        RiskFactor.deleted_at.is_(None),
+                        risk_scope_clause(goal.user_id),
                     )
                     .order_by(RiskFactor.level.desc())
                     .limit(10)
                 )
             )
-        else:
-            risk_factors = list(
-                self.db.scalars(
-                    select(RiskFactor)
-                    .order_by(RiskFactor.level.desc())
-                    .limit(10)
-                )
-            )
-
         # User profile + memories — the "long-term accumulated data" that
         # makes the projection personal rather than generic.
         profile = self.db.get(UserProfile, user.id)
@@ -382,19 +390,42 @@ class EvolutionService:
             "You are a strategic foresight assistant inside LifeTree, a life-decision "
             "support platform. Your task is to project how the user's scenario will "
             "unfold over the next 24 months based on their long-term accumulated data.\n\n"
-            "Produce a structured projection with:\n"
-            "1. A concise summary (2-3 sentences) of how this scenario is expected to evolve.\n"
-            "2. A chronologically ordered list of 5-15 future events. Each event has:\n"
-            "   - month: 1-24 (months from now)\n"
-            "   - title: short label (max 80 chars)\n"
-            "   - type: 'milestone' (positive checkpoint), 'risk' (potential threat), "
-            "'opportunity' (external chance), 'decision' (user must choose)\n"
-            "   - description: one sentence (max 300 chars)\n"
-            "   - probability: 0-1 likelihood of occurring\n"
-            "   - impact: -1 to +1 effect on success probability if it occurs\n"
-            "   - dependencies: titles of other events that must happen first\n"
-            "3. final_probability: overall success probability at month 24\n"
-            "4. confidence: how confident you are in this projection (0-1)\n\n"
+            "You MUST respond with a single valid JSON object conforming EXACTLY to this "
+            "schema (no markdown fences, no commentary, no prose outside the JSON):\n"
+            "{\n"
+            '  "summary": "<2-3 sentence string>",\n'
+            '  "projected_events": [\n'
+            "    {\n"
+            '      "month": <int 1-36>,\n'
+            '      "title": "<string, max 80 chars>",\n'
+            '      "type": "<one of: milestone | risk | opportunity | decision>",\n'
+            '      "description": "<string, max 300 chars>",\n'
+            '      "probability": <float 0-1>,\n'
+            '      "impact": <float -1 to +1>,\n'
+            '      "dependencies": ["<title of another event in this list>", ...]\n'
+            "    }\n"
+            "  ],\n"
+            '  "final_probability": <float 0-1>,\n'
+            '  "confidence": <float 0-1>\n'
+            "}\n\n"
+            "Field requirements:\n"
+            "- summary: 2-3 sentences describing how this scenario is expected to evolve.\n"
+            "- projected_events: chronologically ordered list of 3-20 future events.\n"
+            "  - month: integer 1-36 (months from now). Spread across the full horizon.\n"
+            "  - title: short label, max 80 chars.\n"
+            "  - type: one of 'milestone' (positive checkpoint), 'risk' (potential "
+            "threat), 'opportunity' (external chance), 'decision' (user must choose).\n"
+            "  - description: one sentence, max 300 chars.\n"
+            "  - probability: float 0-1 likelihood of occurring.\n"
+            "  - impact: float -1 to +1 effect on success probability if it occurs.\n"
+            "  - dependencies: array of titles of other events in this list that must "
+            "happen first. Use an empty array if there are none.\n"
+            "- final_probability: overall success probability at month 24, float 0-1.\n"
+            "- confidence: how confident you are in this projection, float 0-1.\n\n"
+            "Output rules:\n"
+            "- Return ONLY the JSON object. No markdown, no code fences, no prefix/suffix text.\n"
+            "- All keys must be present; use empty arrays for dependencies when applicable.\n"
+            "- Do not invent fields beyond the schema above.\n\n"
             "Guidelines:\n"
             "- Ground events in the user's actual requirements, risk factors, and memories.\n"
             "- Be specific (e.g. 'Submit IELTS results' not 'Take a test').\n"
@@ -408,7 +439,8 @@ class EvolutionService:
             f"Description: {scenario.description or 'N/A'}\n"
             f"Current success probability (P50): {context['base_p50']:.1%}\n\n"
             f"Context:\n{context['summary']}\n\n"
-            f"Project the next {self.HORIZON_MONTHS} months for this scenario."
+            f"Project the next {self.HORIZON_MONTHS} months for this scenario. "
+            f"Respond with only the JSON object described in the system prompt."
         )
 
         return [

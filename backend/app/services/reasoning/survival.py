@@ -2,12 +2,18 @@
 
 Per project plan §4.6: estimates the cumulative probability of achieving
 the goal by each time t up to (and beyond) the target_date.
+
+Per §11.2 缺口 G: Weibull shape/scale offsets and horizon are sourced
+from a ``params`` snapshot (keys ``survival_shape_offset``,
+``survival_scale_offset``, ``survival_horizon_months``) so they can be
+tuned per goal_type/region and calibrated from real outcomes.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from typing import Any
 
 import numpy as np
 
@@ -29,12 +35,19 @@ class SurvivalEstimator:
         goal: Goal,
         p_success: float,
         *,
-        horizon_months: int = 36,
+        horizon_months: int | None = None,
+        params: dict[str, Any] | None = None,
     ) -> SurvivalResult:
+        p = params or {}
+        if horizon_months is None:
+            horizon_months = int(p.get("survival_horizon_months", 36))
+        shape_offset = float(p.get("survival_shape_offset", 1.0))
+        scale_offset = float(p.get("survival_scale_offset", 0.5))
+
         # Weibull shape: ambitious goals (low p_success) → concave (slow start),
         # easy goals (high p_success) → convex (fast start).
-        shape = 1.0 + (1.0 - p_success)
-        scale = max(1.0, horizon_months * (1.0 - p_success + 0.5))
+        shape = shape_offset + (1.0 - p_success)
+        scale = max(1.0, horizon_months * (1.0 - p_success + scale_offset))
 
         months = np.arange(0, horizon_months + 1)
         # Cumulative hazard H(t) = (t/scale)^shape
@@ -47,8 +60,8 @@ class SurvivalEstimator:
         cum_prob = np.clip(cum_prob, 0.0, p_success)
 
         curve = [
-            {"t": self._month_to_date(goal, int(m)), "p": float(p)}
-            for m, p in zip(months, cum_prob)
+            {"t": self._month_to_date(goal, int(m)), "p": float(p_)}
+            for m, p_ in zip(months, cum_prob)
         ]
 
         p_target = 0.0

@@ -92,7 +92,7 @@ function mergeTheme(option: Record<string, unknown>): Record<string, unknown> {
     textStyle: {
       color: "#cbd5cb",
       fontFamily:
-        'var(--font-inter), system-ui, -apple-system, sans-serif',
+        'Inter, ui-sans-serif, system-ui, -apple-system, sans-serif',
     },
     backgroundColor: "transparent",
     grid: {

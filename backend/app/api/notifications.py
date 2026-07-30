@@ -12,11 +12,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
-from app.models.notification import NotificationLog
+from app.models.notification import NotificationLog, WebPushSubscription
 from app.schemas.api import NotificationRead
 from app.services.notification import NotificationService
 
@@ -37,7 +38,81 @@ class UnreadCountResponse(BaseModel):
     count: int
 
 
+class PushSubscriptionBody(BaseModel):
+    endpoint: str = Field(..., min_length=1, max_length=4096)
+    p256dh: str = Field(..., min_length=1, max_length=4096)
+    auth: str = Field(..., min_length=1, max_length=4096)
+    user_agent: str | None = Field(None, max_length=512)
+
+
 # ---------- Specific paths (registered BEFORE /{user_id} catch-all) ----------
+
+
+@router.get("/channels/status")
+def notification_channel_status(
+    user: CurrentUser, db: Session = Depends(get_db)
+) -> dict:
+    from app.llm.registry import get_smtp_config
+    from app.services.notification_channels import NotificationChannelService
+
+    state = NotificationChannelService(db).status(user.id)
+    smtp = get_smtp_config()
+    state["email"] = {
+        "available": bool(smtp.get("host") or NotificationService(db).settings.smtp_host),
+        "recipient_configured": bool(user.email),
+    }
+    return state
+
+
+@router.post("/push-subscriptions", status_code=201)
+def upsert_push_subscription(
+    payload: PushSubscriptionBody,
+    user: CurrentUser,
+    db: Session = Depends(get_db),
+) -> dict:
+    row = db.scalar(select(WebPushSubscription).where(
+        WebPushSubscription.endpoint == payload.endpoint
+    ))
+    if row is None:
+        row = WebPushSubscription(user_id=user.id, endpoint=payload.endpoint)
+    elif row.user_id != user.id:
+        raise HTTPException(409, "Push endpoint already belongs to another user")
+    row.p256dh = payload.p256dh
+    row.auth = payload.auth
+    row.user_agent = payload.user_agent
+    row.enabled = True
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"id": row.id, "enabled": row.enabled}
+
+
+@router.get("/push-subscriptions")
+def list_push_subscriptions(
+    user: CurrentUser, db: Session = Depends(get_db)
+) -> list[dict]:
+    rows = list(db.scalars(
+        select(WebPushSubscription)
+        .where(WebPushSubscription.user_id == user.id)
+        .order_by(WebPushSubscription.created_at.desc())
+    ))
+    return [
+        {"id": row.id, "enabled": row.enabled, "user_agent": row.user_agent}
+        for row in rows
+    ]
+
+
+@router.delete("/push-subscriptions/{subscription_id}", status_code=204)
+def delete_push_subscription(
+    subscription_id: str,
+    user: CurrentUser,
+    db: Session = Depends(get_db),
+) -> None:
+    row = db.get(WebPushSubscription, subscription_id)
+    if row is None or row.user_id != user.id:
+        raise HTTPException(404, "Push subscription not found")
+    db.delete(row)
+    db.commit()
 
 
 @router.get("/unread-count", response_model=UnreadCountResponse)

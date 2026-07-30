@@ -2,19 +2,21 @@
 
 import { useState, useMemo, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { usePendingReview } from "@/lib/hooks";
+import { usePendingReview, useUnifiedReview } from "@/lib/hooks";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
+import { IntelligenceReviewSections } from "@/components/review/intelligence-review-sections";
+import { SourcesReviewTab } from "@/components/review/sources-review-tab";
+import { ConflictsTab } from "@/components/review/conflicts-tab";
 import { useToast } from "@/components/ui/toast";
 import { api, type EventRead } from "@/lib/api";
 import { useT } from "@/lib/i18n/provider";
 import { cn, formatDate } from "@/lib/utils";
-import {
-  useConfirm,
-} from "@/components/ui/confirm-dialog";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Inbox,
   Loader2,
@@ -27,39 +29,35 @@ import {
   Layers,
   Filter,
   Keyboard,
+  ShieldCheck,
+  AlertOctagon,
 } from "lucide-react";
 
 /**
- * §4.9 Review Inbox — 待审核信源事件收件箱.
+ * Review Center — unified inbox for everything that needs human review.
  *
- * Lists events with status='pending_review' (low-confidence + high-impact
- * extractions) and lets the user triage each one with three actions:
- *   采纳 (approve)    — event joins the active graph
- *   忽略 (sink)       — event is excluded from reasoning
- *   保持沉降 (keep)   — confirms sunk state (audit ack)
+ * Three tabs:
+ *   events     — pending-review events (status='pending_review') +
+ *                intelligence review sections (source proposals + risk
+ *                proposals + conflicts). The original /review inbox.
+ *   sources    — pending-credibility sources queue (moved here from
+ *                /sources so all "待我处理" items live in one place).
+ *   conflicts  — source-conclusion conflicts, isolated for focused
+ *                review.
  *
- * Per project plan §4.9: this is the human-in-the-loop gate that keeps
- * noisy LLM extractions from polluting the knowledge graph while still
- * letting high-impact signals surface for review.
- *
- * UX principles applied:
- * - Semantic theme tokens (no hard-coded dark colors) so light/dark both work
- * - Filter tabs by impact level so users can focus on what matters
- * - Batch actions (approve all / sink all) with confirmation for efficiency
- * - Approve confirmation dialog explains side effects (branch spawn, risk propagation)
- * - Keyboard shortcuts (A/S/K) for power users
- * - Helper text under each button clarifies what it does
- * - Empty state CTA guides users to scenario comparison page
+ * Total pending count is shown in the header badge so the user can see
+ * at a glance how much work is waiting.
  */
 
 type RiskFilter = "all" | "high" | "medium" | "low";
 type Action = "approve" | "sink" | "keep_sunk";
 
-export default function ReviewInboxPage() {
+export default function ReviewCenterPage() {
   const t = useT();
   const toast = useToast();
   const { confirm, ConfirmRoot } = useConfirm();
   const { data, mutate, isLoading } = usePendingReview();
+  const { data: unified } = useUnifiedReview();
   const [actingId, setActingId] = useState<string | null>(null);
   const [filter, setFilter] = useState<RiskFilter>("all");
   const [batchRunning, setBatchRunning] = useState(false);
@@ -88,6 +86,16 @@ export default function ReviewInboxPage() {
   }, [items]);
 
   const pendingCount = items.length;
+  // Total pending across all tabs — events + source proposals + risk
+  // proposals + conflicts. Sources pending count is fetched lazily by
+  // the SourcesReviewTab; we approximate the badge with what we have
+  // here to avoid an extra request in the header.
+  const intelligenceCount = unified
+    ? unified.counts.source_proposals +
+      unified.counts.risk_proposals +
+      unified.counts.conflicts
+    : 0;
+  const totalPending = pendingCount + intelligenceCount;
 
   /**
    * Single-event action handler. Approve goes through a confirmation
@@ -115,7 +123,9 @@ export default function ReviewInboxPage() {
         await api.updateEventStatus(eventId, action);
         await mutate();
         const toastKey =
-          action === "approve" ? "review.toast.approveWithBranch" : `review.toast.${action}`;
+          action === "approve"
+            ? "review.toast.approveWithBranch"
+            : `review.toast.${action}`;
         toast({
           title: t(toastKey),
           variant: "success",
@@ -146,12 +156,16 @@ export default function ReviewInboxPage() {
       if (batchRunning || filteredItems.length === 0) return;
 
       const confirmKey =
-        action === "approve" ? "review.batch.approveConfirm" : "review.batch.sinkConfirm";
+        action === "approve"
+          ? "review.batch.approveConfirm"
+          : "review.batch.sinkConfirm";
       const ok = await confirm({
         title: t("review.batch.title"),
         description: t(confirmKey, { n: filteredItems.length }),
         confirmLabel:
-          action === "approve" ? t("review.batch.approveAll") : t("review.batch.sinkAll"),
+          action === "approve"
+            ? t("review.batch.approveAll")
+            : t("review.batch.sinkAll"),
         cancelLabel: t("common.cancel"),
         variant: action === "approve" ? "default" : "danger",
       });
@@ -173,9 +187,10 @@ export default function ReviewInboxPage() {
       toast({
         title: t("review.batch.done", { success, fail }),
         variant: fail > 0 ? "warning" : "success",
-        ...(action === "approve" && success > 0 && {
-          description: t("review.emptyBranchesHint"),
-        }),
+        ...(action === "approve" &&
+          success > 0 && {
+            description: t("review.emptyBranchesHint"),
+          }),
       });
     },
     [batchRunning, filteredItems, confirm, t, toast, mutate]
@@ -198,7 +213,8 @@ export default function ReviewInboxPage() {
       const key = e.key.toLowerCase();
       if (key === "a" || key === "s" || key === "k") {
         e.preventDefault();
-        const action: Action = key === "a" ? "approve" : key === "s" ? "sink" : "keep_sunk";
+        const action: Action =
+          key === "a" ? "approve" : key === "s" ? "sink" : "keep_sunk";
         handleAction(filteredItems[0].id, action);
       }
     };
@@ -219,122 +235,164 @@ export default function ReviewInboxPage() {
           </h1>
           <p className="text-sm text-muted mt-1">{t("review.subtitle")}</p>
         </div>
-        <Badge variant="risk" riskLevel={pendingCount > 0 ? "high" : "low"}>
-          {t("review.queueCount", { n: pendingCount })}
+        <Badge variant="risk" riskLevel={totalPending > 0 ? "high" : "low"}>
+          {t("review.queueCount", { n: totalPending })}
         </Badge>
       </header>
 
-      {/* Filter tabs + batch actions */}
-      {pendingCount > 0 && (
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-1 p-1 rounded-lg bg-surface-2/60 border border-border/10">
-            <Filter className="h-3.5 w-3.5 text-muted mx-1.5" />
-            <FilterTab
-              active={filter === "all"}
-              onClick={() => setFilter("all")}
-              label={t("review.filter.all")}
-              count={counts.all}
-            />
-            <FilterTab
-              active={filter === "high"}
-              onClick={() => setFilter("high")}
-              label={t("review.filter.high")}
-              count={counts.high}
-            />
-            <FilterTab
-              active={filter === "medium"}
-              onClick={() => setFilter("medium")}
-              label={t("review.filter.medium")}
-              count={counts.medium}
-            />
-            <FilterTab
-              active={filter === "low"}
-              onClick={() => setFilter("low")}
-              label={t("review.filter.low")}
-              count={counts.low}
-            />
-          </div>
+      <Tabs defaultValue="events">
+        <TabsList>
+          <TabsTrigger value="events" className="gap-1.5">
+            <Inbox className="h-3.5 w-3.5" />
+            {t("review.tab.events")}
+            {pendingCount > 0 && (
+              <span className="ml-1 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-white text-[9px] font-medium">
+                {pendingCount}
+              </span>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="sources" className="gap-1.5">
+            <ShieldCheck className="h-3.5 w-3.5" />
+            {t("review.tab.sources")}
+          </TabsTrigger>
+          <TabsTrigger value="conflicts" className="gap-1.5">
+            <AlertOctagon className="h-3.5 w-3.5" />
+            {t("review.tab.conflicts")}
+            {unified && unified.counts.conflicts > 0 && (
+              <span className="ml-1 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-white text-[9px] font-medium">
+                {unified.counts.conflicts}
+              </span>
+            )}
+          </TabsTrigger>
+        </TabsList>
 
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => handleBatch("sink")}
-              disabled={batchRunning || filteredItems.length === 0}
-              className="gap-1.5"
-            >
-              {batchRunning ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Layers className="h-3.5 w-3.5" />
-              )}
-              {t("review.batch.sinkAll")}
-            </Button>
-            <Button
-              size="sm"
-              variant="default"
-              onClick={() => handleBatch("approve")}
-              disabled={batchRunning || filteredItems.length === 0}
-              className="gap-1.5"
-            >
-              {batchRunning ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Check className="h-3.5 w-3.5" />
-              )}
-              {t("review.batch.approveAll")}
-            </Button>
-          </div>
-        </div>
-      )}
+        {/* Events Tab — original review inbox + intelligence sections */}
+        <TabsContent value="events" className="space-y-6">
+          <IntelligenceReviewSections />
 
-      {isLoading ? (
-        <div className="space-y-3">
-          {[0, 1, 2].map((i) => (
-            <Card key={i} className="opacity-80">
-              <CardContent className="p-4 space-y-3">
-                <div className="flex items-start justify-between gap-2">
-                  <Skeleton className="h-4 w-1/2" />
-                  <Skeleton className="h-5 w-20 rounded-full" />
-                </div>
-                <Skeleton className="h-3 w-full" />
-                <Skeleton className="h-3 w-2/3" />
-                <div className="flex gap-2 pt-2">
-                  <Skeleton className="h-7 w-20" />
-                  <Skeleton className="h-7 w-20" />
-                </div>
+          {/* Filter tabs + batch actions */}
+          {pendingCount > 0 && (
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-1 p-1 rounded-lg bg-surface-2/60 border border-border/10">
+                <Filter className="h-3.5 w-3.5 text-muted mx-1.5" />
+                <FilterTab
+                  active={filter === "all"}
+                  onClick={() => setFilter("all")}
+                  label={t("review.filter.all")}
+                  count={counts.all}
+                />
+                <FilterTab
+                  active={filter === "high"}
+                  onClick={() => setFilter("high")}
+                  label={t("review.filter.high")}
+                  count={counts.high}
+                />
+                <FilterTab
+                  active={filter === "medium"}
+                  onClick={() => setFilter("medium")}
+                  label={t("review.filter.medium")}
+                  count={counts.medium}
+                />
+                <FilterTab
+                  active={filter === "low"}
+                  onClick={() => setFilter("low")}
+                  label={t("review.filter.low")}
+                  count={counts.low}
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleBatch("sink")}
+                  disabled={batchRunning || filteredItems.length === 0}
+                  className="gap-1.5"
+                >
+                  {batchRunning ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Layers className="h-3.5 w-3.5" />
+                  )}
+                  {t("review.batch.sinkAll")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={() => handleBatch("approve")}
+                  disabled={batchRunning || filteredItems.length === 0}
+                  className="gap-1.5"
+                >
+                  {batchRunning ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Check className="h-3.5 w-3.5" />
+                  )}
+                  {t("review.batch.approveAll")}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {isLoading ? (
+            <div className="space-y-3">
+              {[0, 1, 2].map((i) => (
+                <Card key={i} className="opacity-80">
+                  <CardContent className="p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <Skeleton className="h-4 w-1/2" />
+                      <Skeleton className="h-5 w-20 rounded-full" />
+                    </div>
+                    <Skeleton className="h-3 w-full" />
+                    <Skeleton className="h-3 w-2/3" />
+                    <div className="flex gap-2 pt-2">
+                      <Skeleton className="h-7 w-20" />
+                      <Skeleton className="h-7 w-20" />
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : items.length === 0 ? (
+            <EmptyReviewState />
+          ) : filteredItems.length === 0 ? (
+            <Card>
+              <CardContent className="py-10 text-center text-sm text-muted">
+                {t("review.noFiltered")}
               </CardContent>
             </Card>
-          ))}
-        </div>
-      ) : items.length === 0 ? (
-        <EmptyReviewState />
-      ) : filteredItems.length === 0 ? (
-        <Card>
-          <CardContent className="py-10 text-center text-sm text-muted">
-            {t("review.noFiltered")}
-          </CardContent>
-        </Card>
-      ) : (
-        <>
-          {/* Keyboard shortcut hint — only shows when there are items */}
-          <div className="flex items-center gap-1.5 text-[11px] text-muted">
-            <Keyboard className="h-3 w-3" />
-            <span>{t("review.shortcut.hint")}</span>
-          </div>
-          <div className="space-y-3">
-            {filteredItems.map((ev, idx) => (
-              <ReviewCard
-                key={ev.id}
-                event={ev}
-                acting={actingId === ev.id}
-                onAction={(a) => handleAction(ev.id, a)}
-                highlight={idx === 0 && !actingId && !batchRunning}
-              />
-            ))}
-          </div>
-        </>
-      )}
+          ) : (
+            <>
+              {/* Keyboard shortcut hint — only shows when there are items */}
+              <div className="flex items-center gap-1.5 text-[11px] text-muted">
+                <Keyboard className="h-3 w-3" />
+                <span>{t("review.shortcut.hint")}</span>
+              </div>
+              <div className="space-y-3">
+                {filteredItems.map((ev, idx) => (
+                  <ReviewCard
+                    key={ev.id}
+                    event={ev}
+                    acting={actingId === ev.id}
+                    onAction={(a) => handleAction(ev.id, a)}
+                    highlight={idx === 0 && !actingId && !batchRunning}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+        </TabsContent>
+
+        {/* Sources Tab — pending-credibility sources queue */}
+        <TabsContent value="sources">
+          <SourcesReviewTab />
+        </TabsContent>
+
+        {/* Conflicts Tab — source-conclusion conflicts */}
+        <TabsContent value="conflicts">
+          <ConflictsTab />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
@@ -366,7 +424,9 @@ function FilterTab({
       <span
         className={cn(
           "tabular-nums rounded-full px-1.5 py-0.5 text-[10px]",
-          active ? "bg-brand-500/15 text-brand-600 dark:text-brand-400" : "bg-border/10 text-muted"
+          active
+            ? "bg-brand-500/15 text-brand-600 dark:text-brand-400"
+            : "bg-border/10 text-muted"
         )}
       >
         {count}
@@ -393,7 +453,7 @@ function EmptyReviewState() {
             </Link>
           </Button>
           <Button asChild variant="ghost" size="sm">
-            <Link href="/scenarios">
+            <Link href="/goals">
               <GitBranch className="h-3.5 w-3.5 mr-1.5" />
               {t("review.viewBranches")}
             </Link>
@@ -452,7 +512,12 @@ function ReviewCard({
               <span className="text-sm font-medium text-foreground truncate">
                 {event.subject ?? t("review.unlabeled")}
               </span>
-              <Badge variant="risk" riskLevel={level === "high" ? "high" : level === "medium" ? "medium" : "low"}>
+              <Badge
+                variant="risk"
+                riskLevel={
+                  level === "high" ? "high" : level === "medium" ? "medium" : "low"
+                }
+              >
                 {t(`review.riskLevel.${level}`)}
               </Badge>
             </div>
@@ -469,7 +534,9 @@ function ReviewCard({
           <div className="text-[10px] text-muted text-right shrink-0 space-y-0.5">
             <div>{formatDate(event.created_at)}</div>
             {occurredAt && (
-              <div className="opacity-70">{t("review.occurred", { date: formatDate(occurredAt) })}</div>
+              <div className="opacity-70">
+                {t("review.occurred", { date: formatDate(occurredAt) })}
+              </div>
             )}
           </div>
         </div>
@@ -520,7 +587,11 @@ function ReviewCard({
               className="gap-1.5"
               title={t("review.actionHint.approve")}
             >
-              {acting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              {acting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Check className="h-3.5 w-3.5" />
+              )}
               {t("review.approve")}
               <kbd className="ml-1 hidden sm:inline-flex items-center rounded border border-white/20 bg-white/10 px-1 text-[9px] font-mono">
                 A

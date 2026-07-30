@@ -17,12 +17,11 @@ from __future__ import annotations
 
 import ast
 import hashlib
-import importlib.util
 import os
 import re
 import sys
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -33,7 +32,8 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.postgres import SessionLocal
 from app.models.user_plugin import UserPlugin
-from app.services.plugins import PluginManifest
+from app.services.plugin_sandbox import inspect_plugin
+from app.services.plugins import PluginManifest, PluginParam
 
 log = get_logger(__name__)
 
@@ -204,36 +204,16 @@ def safe_import_for_validation(plugin_id: str, source: str) -> PluginManifest:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(source)
 
-        module_name = f"_plugin_validate_{plugin_id}"
-        spec = importlib.util.spec_from_file_location(module_name, tmp_path)
-        if spec is None or spec.loader is None:
-            raise ValueError(f"无法为 {plugin_id} 创建模块加载器")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
         try:
-            spec.loader.exec_module(module)
+            data = inspect_plugin(Path(tmp_path))
         except Exception as exc:  # noqa: BLE001
-            raise ValueError(f"导入时执行失败: {exc}") from exc
-
-        plugin_cls = getattr(module, "Plugin", None)
-        if plugin_cls is None:
-            raise ValueError("模块未定义顶层 `Plugin` 类")
-        manifest_fn = getattr(plugin_cls, "manifest", None)
-        if manifest_fn is None:
-            raise ValueError("Plugin 类未实现 manifest()")
-        try:
-            manifest = manifest_fn()
-        except Exception as exc:  # noqa: BLE001
-            raise ValueError(f"manifest() 调用失败: {exc}") from exc
-        if not isinstance(manifest, PluginManifest):
-            raise ValueError(
-                f"manifest() 返回类型错误: 期望 PluginManifest，实际 {type(manifest).__name__}"
-            )
+            raise ValueError(f"隔离校验执行失败: {exc}") from exc
+        params = [PluginParam(**item) for item in data.get("params", [])]
+        manifest = PluginManifest(**{**data, "params": params})
         # Force the id to match the filename stem so runners can find it.
         manifest.id = plugin_id
         return manifest
     finally:
-        sys.modules.pop(module_name, None)
         try:
             os.unlink(tmp_path)
         except OSError:
@@ -290,6 +270,7 @@ def store_plugin(
         existing.source_sha256 = result.sha256
         existing.size_bytes = result.size_bytes
         existing.enabled = True
+        existing.manifest = asdict(manifest)
         existing.deleted_at = None
         row = existing
     else:
@@ -300,6 +281,7 @@ def store_plugin(
             size_bytes=result.size_bytes,
             enabled=True,
             user_id=user_id,
+            manifest=asdict(manifest),
         )
         db.add(row)
 

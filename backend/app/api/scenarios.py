@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
-from app.models.goal import Goal
+from app.models.goal import Goal, Pathway
 from app.models.scenario import Scenario, ScenarioRun
 from app.schemas.api import (
     EvolutionProjectionRead,
@@ -55,6 +55,10 @@ def create_scenario(
     payload: ScenarioCreate, user: CurrentUser, db: Session = Depends(get_db)
 ) -> ScenarioRead:
     _verify_goal_owner(payload.goal_id, user, db)
+    if payload.pathway_id:
+        pathway = db.get(Pathway, payload.pathway_id)
+        if pathway is None or pathway.goal_id != payload.goal_id:
+            raise HTTPException(422, "Pathway does not belong to the scenario goal")
     return ScenarioService(db).create(**payload.model_dump())
 
 
@@ -74,6 +78,37 @@ def list_scenarios(
     return [svc.to_read_with_curve(s) for s in svc.list_for_goal(goal_id)]
 
 
+@router.post("/evolve-all")
+def evolve_all_scenarios(
+    goal_id: str, user: CurrentUser, db: Session = Depends(get_db)
+) -> dict:
+    """Evolve every active pathway scenario for one owned goal."""
+    from app.services.evolution import EvolutionService
+
+    _verify_goal_owner(goal_id, user, db)
+    scenarios = list(db.scalars(select(Scenario).where(
+        Scenario.goal_id == goal_id,
+        Scenario.status.in_(["active", "draft"]),
+    )))
+    results = []
+    for scenario in scenarios:
+        try:
+            projection = EvolutionService(db).evolve(scenario, user)
+            results.append({"scenario_id": scenario.id, "ok": True, "result": projection})
+        except Exception as exc:  # noqa: BLE001
+            results.append({"scenario_id": scenario.id, "ok": False, "error": str(exc)})
+    return {"goal_id": goal_id, "count": len(results), "results": results}
+
+
+@router.get("/evolution/calibration")
+def evolution_calibration(
+    user: CurrentUser, db: Session = Depends(get_db)
+) -> dict:
+    from app.services.evolution_feedback import EvolutionFeedbackService
+
+    return EvolutionFeedbackService(db).calibration(user.id)
+
+
 @router.get("/{scenario_id}", response_model=ScenarioRead)
 def get_scenario(
     scenario_id: str, user: CurrentUser, db: Session = Depends(get_db)
@@ -91,7 +126,11 @@ def update_scenario(
     user: CurrentUser,
     db: Session = Depends(get_db),
 ) -> ScenarioRead:
-    _verify_scenario_owner(scenario_id, user, db)
+    scenario = _verify_scenario_owner(scenario_id, user, db)
+    if payload.pathway_id:
+        pathway = db.get(Pathway, payload.pathway_id)
+        if pathway is None or pathway.goal_id != scenario.goal_id:
+            raise HTTPException(422, "Pathway does not belong to the scenario goal")
     return ScenarioService(db).update(scenario_id, **payload.model_dump(exclude_unset=True))
 
 

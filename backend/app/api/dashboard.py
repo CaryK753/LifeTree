@@ -18,13 +18,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
 from app.models.event import Event, InformationSource
-from app.models.goal import Goal, Pathway, RiskFactor
+from app.models.goal import Goal, Pathway, RiskFactor, pathway_risk_factors
 from app.models.notification import NotificationLog, RiskAssessment
 from app.models.scenario import Scenario, ScenarioRun, ScenarioStatus
 from app.schemas.api import (
@@ -32,6 +32,7 @@ from app.schemas.api import (
     DashboardSummary,
     EventRead,
 )
+from app.services.risk_scope import risk_scope_clause
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -49,6 +50,7 @@ def get_dashboard(
     # the default user, so this is backward compatible.
     if goal.user_id != user.id and user.role != "admin":
         raise HTTPException(403, "You do not have access to this goal")
+    owner_user_id = goal.user_id
 
     # ---- Goal fields (so the compass card can render without a second fetch) ----
     goal_title = goal.title
@@ -149,17 +151,37 @@ def get_dashboard(
 
     # ---- Recent events ----
     recent_events = list(db.scalars(
-        select(Event).order_by(Event.created_at.desc()).limit(10)
+        select(Event)
+        .where(or_(Event.user_id == owner_user_id, Event.user_id.is_(None)))
+        .order_by(Event.created_at.desc())
+        .limit(10)
     ))
 
     # ---- Risk heatmap (grouped by type + level) ----
-    rfs = list(db.scalars(select(RiskFactor)))
+    pathway_ids = [p.id for p in pathways]
+    rfs = []
+    if pathway_ids:
+        rfs = list(
+            db.scalars(
+                select(RiskFactor)
+                .join(
+                    pathway_risk_factors,
+                    pathway_risk_factors.c.risk_factor_id == RiskFactor.id,
+                )
+                .where(
+                    pathway_risk_factors.c.pathway_id.in_(pathway_ids),
+                    RiskFactor.deleted_at.is_(None),
+                    risk_scope_clause(owner_user_id),
+                )
+                .distinct()
+            )
+        )
     heatmap: dict[tuple[str, str], int] = {}
     for rf in rfs:
         heatmap[(rf.type, rf.level)] = heatmap.get((rf.type, rf.level), 0) + 1
     risk_heatmap = [
-        {"type": t, "level": l, "count": c}
-        for (t, l), c in sorted(heatmap.items())
+        {"type": risk_type, "level": level, "count": count}
+        for (risk_type, level), count in sorted(heatmap.items())
     ]
 
     # ---- Active scenarios count ----
@@ -178,6 +200,12 @@ def get_dashboard(
 
     rows = db.execute(
         select(InformationSource.credibility, func.count())
+        .where(
+            or_(
+                InformationSource.user_id == owner_user_id,
+                InformationSource.user_id.is_(None),
+            )
+        )
         .group_by(InformationSource.credibility)
     ).all()
     counts = {row[0]: row[1] for row in rows}
@@ -185,7 +213,10 @@ def get_dashboard(
     private_count = db.scalar(
         select(func.count())
         .select_from(InformationSource)
-        .where(InformationSource.kind == "user_upload")
+        .where(
+            InformationSource.user_id == owner_user_id,
+            InformationSource.kind == "user_upload",
+        )
     ) or 0
 
     credibility = CredibilityDistribution(
@@ -203,7 +234,9 @@ def get_dashboard(
     # Count trailing days (ending today, in user's local timezone-ish UTC) on
     # which the user had ANY activity: scenario runs, notifications, or events
     # they ingested. This is the "连续规划天数" positive-progress signal.
-    consecutive_planning_days = _compute_consecutive_planning_days(db, goal_id, user.id)
+    consecutive_planning_days = _compute_consecutive_planning_days(
+        db, goal_id, owner_user_id
+    )
 
     return DashboardSummary(
         goal_id=goal_id,
@@ -275,7 +308,10 @@ def _compute_consecutive_planning_days(
     event_dates = {
         d.date()
         for (d,) in db.execute(
-            select(Event.created_at).where(Event.created_at >= horizon)
+            select(Event.created_at).where(
+                Event.user_id == user_id,
+                Event.created_at >= horizon,
+            )
         ).all()
         if d is not None
     }

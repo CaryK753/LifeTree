@@ -73,30 +73,16 @@ class NotificationService:
             if channel == "email":
                 self._send_email(user, title, body)
             elif channel == "sms":
-                # SMS gateway not yet wired (§4.5 P2 — pending Twilio/阿里云
-                # integration). Mark as FAILED rather than pretending we sent
-                # it, so the user isn't silently misled. The in-app channel
-                # still receives the message via the SSE push below.
-                log.warning(
-                    "notification.sms_not_configured",
-                    user_id=user.id,
-                    title=title,
-                )
-                return self._log(
-                    user,
-                    channel="sms",
-                    status=NotificationStatus.FAILED.value,
-                    title=title,
-                    body=body,
-                    severity=severity,
-                    event_id=event_id,
-                    risk_factor_id=risk_factor_id,
-                    impact_summary=impact_summary or {},
-                )
-            # in_app / push: stored, frontend polls
+                from app.services.notification_channels import NotificationChannelService
+
+                NotificationChannelService(self.db).send_sms(user, title, body)
+            elif channel == "push":
+                from app.services.notification_channels import NotificationChannelService
+
+                NotificationChannelService(self.db).send_web_push(user, title, body)
         except Exception as exc:  # noqa: BLE001
             log.error("notification.dispatch_failed", error=str(exc), channel=channel)
-            return self._log(
+            self._log(
                 user,
                 channel=channel,
                 status=NotificationStatus.FAILED.value,
@@ -107,6 +93,9 @@ class NotificationService:
                 risk_factor_id=risk_factor_id,
                 impact_summary=impact_summary or {},
             )
+            # External delivery failure must remain visible in the audit log,
+            # while the user still receives a real in-app/SSE fallback.
+            channel = "in_app"
 
         record = self._log(
             user,
@@ -164,6 +153,8 @@ class NotificationService:
         prefs = user.notify_channels or {"in_app": True}
         if severity == "critical" and prefs.get("sms"):
             return "sms"
+        if prefs.get("push"):
+            return "push"
         if prefs.get("email"):
             return "email"
         return "in_app"
@@ -233,7 +224,7 @@ class NotificationService:
         host = smtp["host"] or self.settings.smtp_host
         if not host:
             log.info("notification.email_skipped_no_smtp", user_id=user.id)
-            return
+            raise RuntimeError("smtp_not_configured")
 
         port = smtp["port"] if smtp["host"] else self.settings.smtp_port
         smtp_user = smtp["user"] if smtp["host"] else self.settings.smtp_user

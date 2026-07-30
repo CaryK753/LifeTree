@@ -16,7 +16,7 @@
  * nodes the user can explore.
  */
 
-import { useState, useMemo, useEffect, type FC } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback, type FC } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -33,6 +33,7 @@ import {
   MarkerType,
   useNodesState,
   useEdgesState,
+  useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
@@ -47,12 +48,21 @@ import {
   TrendingDown,
   Clock,
   X,
+  History,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
 import { api, type EvolutionProjection, type ProjectedEvent } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 // ---------- Constants ----------
 
@@ -294,11 +304,73 @@ function EvolutionFlow({
 }: ScenarioEvolutionProps) {
   const t = useT();
   const toast = useToast();
+  const { fitView, setCenter } = useReactFlow();
   const [projection, setProjection] = useState<EvolutionProjection | null>(
     initialProjection ?? null
   );
   const [loading, setLoading] = useState(false);
   const [selectedTitle, setSelectedTitle] = useState<string | null>(null);
+
+  // ---- History (saved projections) ----
+  // Persist every generated projection to localStorage so the user can
+  // revisit previous evolution results without re-running the LLM.
+  const HISTORY_KEY = `lifetree.evolution.${scenarioId}`;
+  const [history, setHistory] = useState<EvolutionProjection[]>([]);
+
+  // Load history + cached projection on mount / when scenario changes.
+  useEffect(() => {
+    // Reset state when switching scenarios.
+    setProjection(null);
+    setSelectedTitle(null);
+    setHistory([]);
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY);
+      if (raw) {
+        const parsed: EvolutionProjection[] = JSON.parse(raw);
+        setHistory(parsed);
+        // Auto-load the most recent saved projection so the user sees
+        // their last result immediately without re-generating.
+        if (parsed.length > 0) {
+          setProjection(parsed[0]);
+        }
+      }
+    } catch {
+      // ignore parse errors
+    }
+    // If no history, try fetching the server-cached projection.
+    if (!initialProjection) {
+      api
+        .getEvolution(scenarioId)
+        .then((cached) => {
+          if (cached) {
+            setProjection(cached);
+          }
+        })
+        .catch(() => {
+          // 404 = never evolved; silently ignore
+        });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scenarioId]);
+
+  const saveToHistory = useCallback(
+    (proj: EvolutionProjection) => {
+      setHistory((prev) => {
+        // Dedupe by evolved_at timestamp; cap at 10 entries.
+        const filtered = prev.filter(
+          (h) => h.evolved_at !== proj.evolved_at
+        );
+        const next = [proj, ...filtered].slice(0, 10);
+        try {
+          localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+        } catch {
+          // storage full — ignore
+        }
+        return next;
+      });
+    },
+    [HISTORY_KEY]
+  );
 
   const { nodes, edges } = useMemo(() => {
     if (!projection) return { nodes: [], edges: [] };
@@ -327,11 +399,59 @@ function EvolutionFlow({
     setEdges(edges);
   }, [edges, setEdges]);
 
+  // Fit view when the projection (node set) changes — NOT on every
+  // selection (selection is handled by the centering effect below).
+  const projectionKey = projection?.evolved_at ?? "none";
+  useEffect(() => {
+    if (!projection) return;
+    const id = requestAnimationFrame(() => {
+      fitView({ padding: 0.15, maxZoom: 1.2, duration: 400 });
+    });
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectionKey, fitView]);
+
+  // Track live node positions in a ref so the centering effect reads the
+  // current position without re-firing on every `nodesState` update.
+  const nodePositionsRef = useRef<Map<string, { x: number; y: number }>>(
+    new Map()
+  );
+  useEffect(() => {
+    const m = new Map<string, { x: number; y: number }>();
+    for (const n of nodesState) m.set(n.id, n.position);
+    nodePositionsRef.current = m;
+  }, [nodesState]);
+
+  // When a node is selected, zoom in and pan so the node sits at the
+  // center of the left area (leaving room for the ~288px right sidebar).
+  useEffect(() => {
+    if (!selectedTitle) return;
+    const target = nodesState.find(
+      (n) =>
+        n.type === "event" &&
+        (n.data as unknown as ProjectedEvent).title === selectedTitle
+    );
+    if (!target) return;
+    const cx = target.position.x + NODE_WIDTH / 2;
+    const cy = target.position.y + NODE_HEIGHT / 2;
+    const targetZoom = 1.1;
+    // The event detail sidebar is w-72 (288px). Shift the centering
+    // point right by half the sidebar width (in flow units) so the node
+    // lands in the middle of the visible (non-sidebar) area.
+    const sidebarWidth = 288;
+    const offsetX = sidebarWidth / 2 / targetZoom;
+    setCenter(cx + offsetX, cy, { zoom: targetZoom, duration: 450 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTitle, setCenter]);
+
   async function handleEvolve() {
     setLoading(true);
     try {
       const result = await api.evolveScenario(scenarioId);
       setProjection(result);
+      setSelectedTitle(null);
+      // Persist the new result to history.
+      saveToHistory(result);
       toast({
         title: t("scenarioEvolution.evolved"),
         variant: "success",
@@ -345,6 +465,30 @@ function EvolutionFlow({
     } finally {
       setLoading(false);
     }
+  }
+
+  // Restore a historical projection from the saved list.
+  function handleSelectHistory(proj: EvolutionProjection) {
+    setProjection(proj);
+    setSelectedTitle(null);
+  }
+
+  // Delete a historical projection from the saved list.
+  function handleDeleteHistory(evolvedAt: string | null) {
+    setHistory((prev) => {
+      const next = prev.filter((h) => h.evolved_at !== evolvedAt);
+      try {
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      // If we're deleting the currently-viewed projection, clear it or
+      // switch to the next available one.
+      if (projection?.evolved_at === evolvedAt) {
+        setProjection(next.length > 0 ? next[0] : null);
+      }
+      return next;
+    });
   }
 
   const selectedEvent = projection?.projected_events.find(
@@ -439,6 +583,56 @@ function EvolutionFlow({
           <span className="inline-flex items-center gap-1 text-zinc-500 dark:text-zinc-400">
             {t("scenarioEvolution.eventsCount", { count: projection.projected_events.length })}
           </span>
+          {history.length > 0 && (
+            <Select
+              value={projection.evolved_at ?? "__none__"}
+              onValueChange={(v) => {
+                if (v === "__none__") return;
+                const found = history.find((h) => h.evolved_at === v);
+                if (found) handleSelectHistory(found);
+              }}
+            >
+              <SelectTrigger className="h-6 w-[140px] text-[11px] gap-1 px-2">
+                <History className="h-3 w-3 shrink-0" />
+                <SelectValue placeholder={t("scenarioEvolution.history")} />
+              </SelectTrigger>
+              <SelectContent>
+                {history.map((proj) => (
+                  <SelectItem
+                    key={proj.evolved_at ?? "none"}
+                    value={proj.evolved_at ?? "__none__"}
+                    className="text-[11px] py-1"
+                  >
+                    <div className="flex items-center justify-between gap-2 w-full pr-1">
+                      <span className="truncate tabular-nums">
+                        {proj.evolved_at
+                          ? new Date(proj.evolved_at).toLocaleString(undefined, {
+                              month: "2-digit",
+                              day: "2-digit",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })
+                          : t("scenarioEvolution.cached")}
+                      </span>
+                      <button
+                        type="button"
+                        className="shrink-0 rounded p-0.5 text-zinc-400 hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleDeleteHistory(proj.evolved_at);
+                        }}
+                        title={t("scenarioEvolution.deleteHistory")}
+                        aria-label={t("scenarioEvolution.deleteHistory")}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
       </div>
 

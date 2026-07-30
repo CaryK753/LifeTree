@@ -8,11 +8,10 @@ from typing import Any
 
 from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.postgres import Base
 from app.models.base import TimestampMixin, UUIDPkMixin
-
 
 # ---------- Notifications ----------
 
@@ -59,6 +58,21 @@ class NotificationLog(UUIDPkMixin, TimestampMixin, Base):
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+
+
+class WebPushSubscription(UUIDPkMixin, TimestampMixin, Base):
+    """Browser push subscription owned by one user and endpoint."""
+
+    __tablename__ = "web_push_subscriptions"
+
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("user_profiles.id", ondelete="CASCADE"), index=True
+    )
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    p256dh: Mapped[str] = mapped_column(Text, nullable=False)
+    auth: Mapped[str] = mapped_column(Text, nullable=False)
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    enabled: Mapped[bool] = mapped_column(default=True)
 
 
 # ---------- Risk Assessment ----------
@@ -120,4 +134,5 @@ class RiskPropagationLog(UUIDPkMixin, TimestampMixin, Base):
 
 
 Index("ix_notifications_user_status", NotificationLog.user_id, NotificationLog.status)
+Index("ix_web_push_user_enabled", WebPushSubscription.user_id, WebPushSubscription.enabled)
 Index("ix_risk_assessments_user_goal", RiskAssessment.user_id, RiskAssessment.goal_id)

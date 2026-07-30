@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
-from enum import Enum
-from typing import Any
+from datetime import datetime
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Index, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.postgres import Base
 from app.models.base import SoftDeleteMixin, TimestampMixin, UUIDPkMixin
 
+if TYPE_CHECKING:
+    from app.models.goal import Goal
 
-class RiskTolerance(str, Enum):
+
+class RiskTolerance(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
@@ -40,7 +43,9 @@ class UserProfile(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     # "admin" | "user". Admins can access /admin/* endpoints and manage
     # global config. Role is also enforced via env override
     # (LIFETREE_ADMIN_USER_IDS) so a user can be promoted without DB edits.
-    role: Mapped[str] = mapped_column(String(16), default="user", server_default="user")
+    role: Mapped[str] = mapped_column(
+        String(16), default="user", server_default="user", index=True
+    )
     # Whether the user account is enabled. Disabled users can't log in.
     is_enabled: Mapped[bool] = mapped_column(default=True, server_default="true")
     accepted_terms_at: Mapped[datetime | None] = mapped_column(
@@ -54,7 +59,9 @@ class UserProfile(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
 
     # Preferences
     primary_goal_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("goals.id", ondelete="SET NULL"), nullable=True
+        String(36),
+        ForeignKey("goals.id", ondelete="SET NULL", use_alter=True),
+        nullable=True,
     )
     preferred_pathway_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     priority_factors: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
@@ -70,10 +77,10 @@ class UserProfile(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     notify_channels: Mapped[dict[str, bool]] = mapped_column(JSONB, default=dict)
     quiet_hours: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
 
-    goals: Mapped[list["Goal"]] = relationship(  # type: ignore[name-defined]
+    goals: Mapped[list[Goal]] = relationship(
         back_populates="user", cascade="all, delete-orphan", foreign_keys="Goal.user_id"
     )
-    primary_goal: Mapped["Goal | None"] = relationship(  # type: ignore[name-defined]
+    primary_goal: Mapped[Goal | None] = relationship(
         foreign_keys="UserProfile.primary_goal_id", post_update=True
     )
 
@@ -124,7 +131,7 @@ class UserUpload(UUIDPkMixin, TimestampMixin, Base):
 
     legal_acknowledged: Mapped[bool] = mapped_column(default=False)
 
-    user: Mapped["UserProfile"] = relationship(back_populates="uploads")  # type: ignore[name-defined]
+    user: Mapped[UserProfile] = relationship(back_populates="uploads")
 
 
 # Add reverse relationship on UserProfile

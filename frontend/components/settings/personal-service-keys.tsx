@@ -23,7 +23,7 @@ export function PersonalServiceKeys() {
   if (!catalog?.allow_user_service_config) return null;
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex-col sm:flex-row">
         <CardTitle className="flex items-center gap-2"><KeyRound className="h-4 w-4 text-brand-500" />{t("settings.personalKeys.title")}</CardTitle>
         <CardDescription>{t("settings.personalKeys.description")}</CardDescription>
       </CardHeader>

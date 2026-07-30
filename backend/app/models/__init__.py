@@ -4,6 +4,7 @@ Importing this package ensures every model is registered on Base.metadata
 before Alembic or service code touches it.
 """
 
+from app.models.action import Action, ActionStatus
 from app.models.event import (
     Assertion,
     Event,
@@ -28,12 +29,22 @@ from app.models.llm_config import (
     LLMProvider,
 )
 from app.models.memory import UserMemory
+from app.models.model_params import ModelParam, PredictionOutcome
+from app.models.intelligence import (
+    CalibrationReport,
+    ConflictResolution,
+    EvolutionMilestone,
+    RiskProposal,
+    SourceAccuracyLog,
+)
+from app.models.source_proposal import SourceProposal
 from app.models.notification import (
     NotificationChannel,
     NotificationLog,
     NotificationStatus,
     RiskAssessment,
     RiskPropagationLog,
+    WebPushSubscription,
 )
 from app.models.scenario import (
     Scenario,
@@ -60,6 +71,9 @@ __all__ = [
     "RequirementType",
     "RiskFactor",
     "RiskFactorType",
+    # Actions
+    "Action",
+    "ActionStatus",
     # Events
     "Event",
     "EventFingerprint",
@@ -71,6 +85,14 @@ __all__ = [
     "Scenario",
     "ScenarioRun",
     "ScenarioStatus",
+    # Model params & prediction outcomes (缺口 G)
+    "ModelParam",
+    "PredictionOutcome",
+    "CalibrationReport",
+    "ConflictResolution",
+    "EvolutionMilestone",
+    "RiskProposal",
+    "SourceAccuracyLog",
     # Users
     "UserProfile",
     "UserUpload",
@@ -88,8 +110,11 @@ __all__ = [
     "NotificationStatus",
     "RiskAssessment",
     "RiskPropagationLog",
+    "WebPushSubscription",
     # LLM config
     "LLMProvider",
     "LLMModel",
     "AppConfig",
+    # Source auto-discovery (P1)
+    "SourceProposal",
 ]

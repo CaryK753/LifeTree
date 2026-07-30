@@ -9,8 +9,12 @@ import {
   clearTokens,
   getAccessToken,
   setTokens,
+  type ActionROISort,
+  type ActionRead,
+  type ActionStatus,
   type AdminStats,
   type AdminUserRead,
+  type ChangesSummary,
   type NotificationChannel,
   type NotificationSeverity,
   type NotificationStatus,
@@ -19,6 +23,7 @@ import {
   type PublicAuthConfig,
   type RegisterWithCodeRequest,
   type UserProfileRead,
+  type UnifiedReviewInbox,
 } from "./api";
 
 export function useGoals() {
@@ -27,6 +32,42 @@ export function useGoals() {
 
 export function useGoal(goalId?: string) {
   return useSWR(goalId ? ["goal", goalId] : null, () => api.getGoal(goalId!), swrConfig);
+}
+
+// ---------- Actions ----------
+
+/** Today's action queue: due today, overdue, or daily-recurring. */
+export function useTodayActions(goalId?: string) {
+  return useSWR<ActionRead[]>(
+    goalId ? ["actions-today", goalId] : "actions-today",
+    () => api.listTodayActions(goalId),
+    swrConfig
+  );
+}
+
+/** Top-N actions by ROI (highest-leverage first). */
+export function useROIActions(limit = 10) {
+  return useSWR<ActionROISort>(
+    ["actions-roi", limit],
+    () => api.listROIActions(limit),
+    swrConfig
+  );
+}
+
+/** Filtered action list. Pass filters as the SWR key so changes refetch. */
+export function useActions(filter?: {
+  goal_id?: string;
+  status?: ActionStatus | string;
+  stage?: string;
+  due_before?: string;
+  due_after?: string;
+  limit?: number;
+}) {
+  return useSWR<ActionRead[]>(
+    ["actions", filter ?? {}],
+    () => api.listActions(filter),
+    swrConfig
+  );
 }
 
 export function useDashboard(goalId?: string) {
@@ -60,6 +101,14 @@ export function useEvents(riskLevel?: string) {
 // §4.9 Review Inbox — pending-review queue
 export function usePendingReview(limit = 50) {
   return useSWR(["pending-review", limit], () => api.listPendingReview(limit), swrConfig);
+}
+
+export function useUnifiedReview() {
+  return useSWR<UnifiedReviewInbox>(
+    "unified-review-inbox",
+    () => api.getUnifiedReviewInbox(),
+    swrConfig
+  );
 }
 
 export function useSources() {
@@ -138,6 +187,20 @@ export function useUserSkills() {
 
 export function useSystemComponents() {
   return useSWR("system-components", () => api.getSystemComponents(), swrConfig);
+}
+
+/**
+ * useChangesSummary: since-last-visit aggregate digest for the dashboard
+ * banner. The backend defaults ``since`` to the stored last-visit
+ * timestamp (or 7 days ago) and bumps it to now() on each successful call,
+ * so subsequent calls only reflect changes after the previous visit.
+ */
+export function useChangesSummary() {
+  return useSWR<ChangesSummary>(
+    "changes-summary",
+    () => api.getChangesSummary(),
+    swrConfig
+  );
 }
 
 export function usePlugins() {

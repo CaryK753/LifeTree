@@ -47,7 +47,7 @@ export function PersonalModelSettings() {
   const userProviders = catalog.providers.filter((item) => item.managed_by === "user");
   return (
     <Card>
-      <CardHeader><CardTitle className="flex items-center gap-2"><Boxes className="h-4 w-4 text-brand-500" />{t("settings.personalModels.title")}</CardTitle><CardDescription>{t("settings.personalModels.description")}</CardDescription></CardHeader>
+      <CardHeader className="flex-col sm:flex-row"><CardTitle className="flex items-center gap-2"><Boxes className="h-4 w-4 text-brand-500" />{t("settings.personalModels.title")}</CardTitle><CardDescription>{t("settings.personalModels.description")}</CardDescription></CardHeader>
       <CardContent className="space-y-5">
         <div className="flex flex-wrap gap-2">
           <ProviderDialog open={providerOpen} setOpen={setProviderOpen} form={provider} setForm={setProvider} onSave={addProvider} />

@@ -1,0 +1,105 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Bell, BellOff, Loader2 } from "lucide-react";
+import { api, type NotificationChannelStatus } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/components/ui/toast";
+
+export function WebPushControl() {
+  const toast = useToast();
+  const [status, setStatus] = useState<NotificationChannelStatus | null>(null);
+  const [subscriptions, setSubscriptions] = useState<Array<{ id: string }>>([]);
+  const [busy, setBusy] = useState(false);
+
+  async function refresh() {
+    const [channelStatus, rows] = await Promise.all([
+      api.getNotificationChannelStatus(),
+      api.listPushSubscriptions(),
+    ]);
+    setStatus(channelStatus);
+    setSubscriptions(rows);
+  }
+
+  useEffect(() => {
+    refresh().catch(() => undefined);
+  }, []);
+
+  async function enable() {
+    if (!status?.web_push.public_key) return;
+    setBusy(true);
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") throw new Error("浏览器未授予通知权限");
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: decodeVapidKey(status.web_push.public_key),
+      });
+      const json = subscription.toJSON();
+      await api.upsertPushSubscription({
+        endpoint: subscription.endpoint,
+        p256dh: json.keys?.p256dh || "",
+        auth: json.keys?.auth || "",
+        user_agent: navigator.userAgent,
+      });
+      await refresh();
+      toast({ title: "浏览器推送已启用", variant: "success" });
+    } catch (error: any) {
+      toast({ title: "无法启用浏览器推送", description: error?.message, variant: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disable() {
+    setBusy(true);
+    try {
+      await Promise.all(subscriptions.map((row) => api.deletePushSubscription(row.id)));
+      const registration = await navigator.serviceWorker.ready;
+      const current = await registration.pushManager.getSubscription();
+      if (current) await current.unsubscribe();
+      await refresh();
+      toast({ title: "浏览器推送已停用", variant: "success" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const configured = status?.web_push.credentials_configured ?? false;
+  const enabled = subscriptions.length > 0;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between text-base">
+          <span className="flex items-center gap-2"><Bell className="h-4 w-4" />浏览器推送</span>
+          <Badge>{enabled ? "已启用" : configured ? "可启用" : "未配置"}</Badge>
+        </CardTitle>
+        <CardDescription>高优先级风险提醒将发送到当前浏览器。</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Button
+          variant={enabled ? "outline" : "default"}
+          disabled={
+            busy ||
+            !configured ||
+            typeof navigator === "undefined" ||
+            !("serviceWorker" in navigator)
+          }
+          onClick={enabled ? disable : enable}
+        >
+          {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : enabled ? <BellOff className="mr-2 h-4 w-4" /> : <Bell className="mr-2 h-4 w-4" />}
+          {enabled ? "停用推送" : "启用推送"}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function decodeVapidKey(value: string): Uint8Array {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const raw = atob((value + padding).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, (char) => char.charCodeAt(0));
+}

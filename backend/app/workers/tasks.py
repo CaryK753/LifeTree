@@ -17,6 +17,7 @@ from app.services.crawler import CrawlerService
 from app.services.notification import NotificationService
 from app.services.reasoning.risk_propagation import RiskPropagationEngine
 from app.services.scenarios import ScenarioService
+from app.services.source_reputation import SourceReputationService
 from app.services.structuring import StructuringService
 from app.workers.celery_app import celery_app
 
@@ -316,6 +317,9 @@ def refresh_due_sources(source_ids: list[str] | None = None) -> dict:
             try:
                 results = asyncio.run(crawler.extract([src.url]))
                 if not results or not results[0].content:
+                    SourceReputationService(db, src.user_id or "").record_fetch(
+                        src, succeeded=False
+                    )
                     log.info(
                         "refresh_source.empty",
                         source_id=src.id,
@@ -333,6 +337,9 @@ def refresh_due_sources(source_ids: list[str] | None = None) -> dict:
                     )
                     if extraction is not None:
                         total_events += len(extraction.events)
+                    SourceReputationService(db, src.user_id or "").record_fetch(
+                        src, succeeded=True
+                    )
 
                 # Advance the schedule
                 src.last_refreshed_at = now
@@ -341,6 +348,9 @@ def refresh_due_sources(source_ids: list[str] | None = None) -> dict:
                 )
                 refreshed += 1
             except Exception as exc:  # noqa: BLE001
+                SourceReputationService(db, src.user_id or "").record_fetch(
+                    src, succeeded=False
+                )
                 log.error(
                     "refresh_source.failed",
                     source_id=src.id,

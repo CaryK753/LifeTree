@@ -180,7 +180,7 @@ export function ScenarioCurveOverlay({ scenarios }: Props) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <EChart option={option} height={420} />
+        <EChart option={option} height={320} />
       </CardContent>
     </Card>
   );

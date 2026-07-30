@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useGoals, useGraph, useScenarios } from "@/lib/hooks";
+import { useGoals, useGraph } from "@/lib/hooks";
 import { KnowledgeGraph } from "@/components/graph/knowledge-graph";
 import {
   Select,
@@ -20,35 +20,38 @@ export default function GraphPage() {
   const { data: goals } = useGoals();
   const [goalId, setGoalId] = useState<string | undefined>();
   const selectedGoal = goalId ?? (goals as any[])?.[0]?.id;
-  const { data: scenarios } = useScenarios(selectedGoal);
-  const [scenarioId, setScenarioId] = useState<string | undefined>();
-  const { data: graph, isLoading } = useGraph(selectedGoal, scenarioId);
+  const { data: graph, isLoading } = useGraph(selectedGoal);
 
   const nodeCount = graph?.nodes?.length ?? 0;
   const edgeCount = graph?.edges?.length ?? 0;
 
   return (
-    <div className="flex flex-col h-full animate-fade-in">
+    <div className="flex h-full max-h-full min-h-0 min-w-0 flex-col overflow-hidden animate-fade-in">
       {/* Header — single flat bar: title + counts on the left,
           goal/scenario selectors on the right. No nested Card title. */}
       <header className="flex items-center justify-between gap-4 flex-wrap px-4 sm:px-6 lg:px-8 py-3 border-b border-black/5 dark:border-white/5 shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex min-w-0 items-start gap-2">
           <SidebarToggleButton />
-          <Network className="h-5 w-5 text-brand-600 dark:text-brand-400 shrink-0" />
-          <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 truncate">
-            {t("graph.title")}
-          </h1>
-          {/* Node/edge counts — shown inline next to the title once data
-              is loaded. Replaces the old nested CardDescription. */}
-          {nodeCount > 0 && (
-            <span className="text-xs text-zinc-500 dark:text-zinc-400 shrink-0">
-              {t("graph.summary", { nodes: nodeCount, edges: edgeCount })}
-            </span>
-          )}
+          <Network className="mt-0.5 h-5 w-5 shrink-0 text-brand-600 dark:text-brand-400" />
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="truncate text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+                {t("graph.title")}
+              </h1>
+              {nodeCount > 0 && (
+                <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
+                  {t("graph.summary", { nodes: nodeCount, edges: edgeCount })}
+                </span>
+              )}
+            </div>
+            <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">
+              {t("graph.subtitle")}
+            </p>
+          </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <Select value={selectedGoal ?? ""} onValueChange={(v) => setGoalId(v || undefined)}>
-            <SelectTrigger className="w-48 h-8 text-xs">
+            <SelectTrigger className="h-8 w-48 max-w-[55vw] text-xs">
               <SelectValue placeholder={t("graph.selectGoal")} />
             </SelectTrigger>
             <SelectContent>
@@ -59,28 +62,12 @@ export default function GraphPage() {
               ))}
             </SelectContent>
           </Select>
-          <Select
-            value={scenarioId ?? "__all__"}
-            onValueChange={(v) => setScenarioId(v === "__all__" ? undefined : v)}
-          >
-            <SelectTrigger className="w-44 h-8 text-xs">
-              <SelectValue placeholder={t("graph.allScenarios")} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">{t("graph.allScenarios")}</SelectItem>
-              {(scenarios as any[])?.map((s) => (
-                <SelectItem key={s.id} value={s.id}>
-                  {s.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
       </header>
 
       {/* Full-bleed graph canvas — no Card wrapper, no nested title.
           The canvas fills all remaining vertical space below the header. */}
-      <div className="flex-1 min-h-0 relative">
+      <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
         {isLoading && (
           <div className="absolute inset-0 p-6 space-y-4">
             <div className="flex items-center justify-center h-48">

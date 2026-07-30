@@ -77,6 +77,7 @@ class ScenarioService:
         return {
             "id": scenario.id,
             "goal_id": scenario.goal_id,
+            "pathway_id": scenario.pathway_id,
             "name": scenario.name,
             "description": scenario.description,
             "status": scenario.status,
@@ -104,12 +105,17 @@ class ScenarioService:
         return scenario
 
     def create_branch(
-        self, goal_id: str, name: str, description: str | None = None
+        self,
+        goal_id: str,
+        name: str,
+        description: str | None = None,
+        pathway_id: str | None = None,
     ) -> Scenario:
         """Create a new top-level or child scenario branch for a goal."""
         scenario = Scenario(
             id=str(uuid.uuid4()),
             goal_id=goal_id,
+            pathway_id=pathway_id,
             name=name,
             description=description,
             status=ScenarioStatus.ACTIVE.value,
@@ -148,6 +154,7 @@ class ScenarioService:
         branch = Scenario(
             id=str(uuid.uuid4()),
             goal_id=parent.goal_id,
+            pathway_id=parent.pathway_id,
             name=name,
             status=ScenarioStatus.DRAFT.value,
             parent_scenario_id=parent.id,
@@ -183,6 +190,8 @@ class ScenarioService:
         """Trigger the reasoning engine and cache results on the scenario."""
         scenario = self.get(scenario_id)
         run = self.reasoning.run_full(scenario)
+        if run.status != "completed":
+            return run
         # Cache key outputs back onto the scenario
         scenario.success_probability = run.result.get("success_probability", {})
         scenario.risk_score = run.result.get("overall_risk")

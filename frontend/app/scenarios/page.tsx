@@ -10,7 +10,6 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Progress } from "@/components/ui/progress";
 import {
   Dialog,
   DialogContent,
@@ -20,7 +19,7 @@ import {
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog";
-import { Loader2, Plus, X, GitBranch, Network, ListTree, LineChart, AlertTriangle, Moon, Sparkles } from "lucide-react";
+import { Loader2, Plus, GitBranch, Network, LineChart, AlertTriangle, Moon, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { useT } from "@/lib/i18n/provider";
@@ -29,7 +28,7 @@ import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 import { ScenarioCurveOverlay } from "@/components/scenarios/scenario-curve-overlay";
 import { ScenarioEvolution } from "@/components/scenarios/scenario-evolution";
 
-type ViewMode = "tree" | "grid" | "compare" | "evolve";
+type ViewMode = "tree" | "compare" | "evolve";
 
 export default function ScenariosPage() {
   const t = useT();
@@ -185,22 +184,6 @@ export default function ScenariosPage() {
               <Network className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">
                 {t("scenarioTree.viewTree")}
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("grid")}
-              className={cn(
-                "inline-flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors",
-                viewMode === "grid"
-                  ? "bg-brand-500/20 text-brand-700 dark:text-brand-300"
-                  : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100"
-              )}
-              title={t("scenarioTree.viewGrid")}
-            >
-              <ListTree className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">
-                {t("scenarioTree.viewGrid")}
               </span>
             </button>
             <button
@@ -481,249 +464,7 @@ export default function ScenariosPage() {
             </div>
           )}
         </div>
-      ) : (
-        /* Grid view — legacy comparison cards */
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {scenariosList.map((s) => (
-            <ScenarioGridCard
-              key={s.id}
-              scenario={s as ScenarioNodeData}
-              onRerun={mutate}
-            />
-          ))}
-        </div>
-      )}
+      ) : null}
     </div>
-  );
-}
-
-// ---------- Grid card (lightweight, for grid view) ----------
-
-function ScenarioGridCard({
-  scenario,
-  onRerun,
-}: {
-  scenario: ScenarioNodeData;
-  onRerun?: () => void;
-}) {
-  const t = useT();
-  const toast = useToast();
-  const [running, setRunning] = useState(false);
-  const [showBranch, setShowBranch] = useState(false);
-  const [branchName, setBranchName] = useState("");
-  const [branching, setBranching] = useState(false);
-
-  const p50 = scenario.success_probability?.p50;
-  const p10 = scenario.success_probability?.p10;
-  const p90 = scenario.success_probability?.p90;
-
-  const [updatingStatus, setUpdatingStatus] = useState(false);
-
-  async function handleToggleDormant() {
-    const nextStatus = scenario.status === "dormant" ? "active" : "dormant";
-    setUpdatingStatus(true);
-    try {
-      await api.updateScenario(scenario.id, { status: nextStatus });
-      toast({
-        title: nextStatus === "dormant" ? "分支已休眠" : "分支已激活",
-        variant: "success",
-      });
-      onRerun?.();
-    } catch (e: any) {
-      toast({
-        title: "操作失败",
-        description: e?.message,
-        variant: "error",
-      });
-    } finally {
-      setUpdatingStatus(false);
-    }
-  }
-
-  async function handleRun() {
-    setRunning(true);
-    try {
-      await api.runScenario(scenario.id);
-      onRerun?.();
-    } catch (e: any) {
-      toast({
-        title: t("scenarioTree.runFailed"),
-        description: e?.message,
-        variant: "error",
-      });
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  async function handleBranch() {
-    if (!branchName.trim()) return;
-    setBranching(true);
-    try {
-      await api.branchScenario(
-        scenario.id,
-        branchName.trim(),
-        scenario.assumptions ?? {}
-      );
-      toast({ title: t("scenarios.toast.branched"), variant: "success" });
-      setBranchName("");
-      setShowBranch(false);
-      onRerun?.();
-    } catch (e: any) {
-      toast({
-        title: t("scenarios.toast.createFailed"),
-        description: e?.message,
-        variant: "error",
-      });
-    } finally {
-      setBranching(false);
-    }
-  }
-
-  return (
-    <Card className="flex flex-col">
-      <CardHeader>
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <CardTitle className="flex items-center gap-2">
-              <GitBranch className="h-4 w-4 text-brand-600 dark:text-brand-400 shrink-0" />
-              <span className="truncate">{scenario.name}</span>
-            </CardTitle>
-            {scenario.description && (
-              <CardDescription className="mt-1 line-clamp-2">
-                {scenario.description}
-              </CardDescription>
-            )}
-          </div>
-          <Badge
-            variant="risk"
-            riskLevel={
-              scenario.status === "active"
-                ? "low"
-                : scenario.status === "draft"
-                ? "medium"
-                : "high"
-            }
-          >
-            {scenario.status}
-          </Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="flex-1 space-y-3">
-        <div>
-          <div className="text-xs text-zinc-500 dark:text-zinc-400 mb-1">
-            {t("scenarioComparison.successRange")}
-          </div>
-          <div className="text-2xl font-semibold text-brand-700 dark:text-brand-300">
-            {p50 != null ? `${Math.round(p50 * 100)}%` : "—"}
-          </div>
-          <Progress value={(p50 ?? 0) * 100} className="mt-2" />
-          <div className="flex justify-between text-[10px] text-zinc-500 dark:text-zinc-400 mt-1">
-            <span>P10 {p10 != null ? `${Math.round(p10 * 100)}%` : "—"}</span>
-            <span>P90 {p90 != null ? `${Math.round(p90 * 100)}%` : "—"}</span>
-          </div>
-        </div>
-
-        {scenario.key_risk_factors && scenario.key_risk_factors.length > 0 && (
-          <div>
-            <div className="text-xs text-zinc-500 dark:text-zinc-400 mb-1">
-              {t("scenarioComparison.keyRisks")}
-            </div>
-            <div className="space-y-1">
-              {scenario.key_risk_factors.slice(0, 3).map((rf, i) => (
-                <div key={i} className="flex justify-between text-xs">
-                  <span className="text-zinc-700 dark:text-zinc-300 truncate">{rf.name}</span>
-                  <span className="text-zinc-500 dark:text-zinc-400">
-                    {Math.round(rf.contribution * 100)}%
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {showBranch && (
-          <div className="pt-2 border-t border-black/5 dark:border-white/5 space-y-2">
-            <Input
-              value={branchName}
-              onChange={(e) => setBranchName(e.target.value)}
-              placeholder={t("scenarios.create.namePlaceholder")}
-              className="h-8 text-xs"
-              autoFocus
-            />
-            <div className="flex items-center gap-1.5">
-              <Button
-                size="sm"
-                className="h-7 text-xs"
-                onClick={handleBranch}
-                disabled={!branchName.trim() || branching}
-              >
-                {branching ? (
-                  <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                ) : (
-                  <GitBranch className="h-3 w-3 mr-1" />
-                )}
-                {t("scenarios.branch.submit")}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7 text-xs"
-                onClick={() => {
-                  setShowBranch(false);
-                  setBranchName("");
-                }}
-              >
-                <X className="h-3 w-3" />
-              </Button>
-            </div>
-          </div>
-        )}
-      </CardContent>
-
-      <div className="mt-auto pt-3 border-t border-black/5 dark:border-white/5 flex items-center gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={running}
-          onClick={handleRun}
-        >
-          {running ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <Plus className="h-3 w-3" />
-          )}
-          <span className="ml-1">{t("scenarioComparison.rerun")}</span>
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={branching}
-          onClick={() => {
-            setShowBranch(true);
-            setBranchName(`${scenario.name} (branch)`);
-          }}
-        >
-          <GitBranch className="h-3 w-3" />
-          <span className="ml-1">{t("scenarioComparison.branch")}</span>
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={updatingStatus}
-          onClick={handleToggleDormant}
-          title={scenario.status === "dormant" ? "激活分支" : "归档/休眠分支"}
-        >
-          {updatingStatus ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <Moon className="h-3 w-3" />
-          )}
-          <span className="ml-1">
-            {scenario.status === "dormant" ? "激活" : "休眠"}
-          </span>
-        </Button>
-      </div>
-    </Card>
   );
 }

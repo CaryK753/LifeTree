@@ -110,15 +110,13 @@ def list_all(user: CurrentUser, db: Session = Depends(get_db)) -> list[dict[str,
     for plugin_id, row in user_rows.items():
         if plugin_id in seen_user_ids:
             continue
+        stored_manifest = dict(row.manifest or {})
         out.append(
             {
+                **stored_manifest,
                 "id": plugin_id,
-                "name": row.original_filename,
-                "description": "(plugin failed to import)",
-                "version": "",
-                "author": "",
-                "params": [],
-                "tags": [],
+                "name": stored_manifest.get("name", row.original_filename),
+                "description": stored_manifest.get("description", ""),
                 "source": "user",
                 "enabled": row.enabled,
                 "can_delete": True,
@@ -132,7 +130,20 @@ def list_all(user: CurrentUser, db: Session = Depends(get_db)) -> list[dict[str,
 
 
 @router.get("/{plugin_id}")
-def get_one(plugin_id: str) -> dict[str, Any]:
+def get_one(
+    plugin_id: str, user: CurrentUser, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    from sqlalchemy import select
+
+    from app.models.user_plugin import UserPlugin
+
+    row = db.scalar(select(UserPlugin).where(
+        UserPlugin.plugin_id == plugin_id,
+        UserPlugin.user_id == user.id,
+        UserPlugin.deleted_at.is_(None),
+    ))
+    if row is not None:
+        return {**dict(row.manifest or {}), "id": plugin_id, "source": "user"}
     module = get_plugin(plugin_id)
     if module is None or not hasattr(module, "Plugin"):
         raise HTTPException(404, f"插件不存在: {plugin_id}")
@@ -221,5 +232,6 @@ def run_one(
         title=payload.title,
         skip_llm=payload.skip_llm,
         db=db,
+        user_id=user.id,
     )
     return PluginRunResponse(**result)

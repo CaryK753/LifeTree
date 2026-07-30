@@ -7,17 +7,13 @@ import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
   Compass,
-  Network,
   MessageSquare,
-  GitBranch,
   ShieldCheck,
   Upload,
-  Home,
   Settings,
   Plug,
   User,
   Bell,
-  Gauge,
   ShieldAlert,
   LogOut,
   LogIn,
@@ -28,6 +24,7 @@ import {
   PanelLeftOpen,
   X,
   Inbox,
+  ListTodo,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
@@ -40,7 +37,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 type NavItem = {
   href: string;
   labelKey: string;
-  icon: typeof Home;
+  icon: typeof Compass;
 };
 
 type NavGroup = {
@@ -48,28 +45,26 @@ type NavGroup = {
   items: NavItem[];
 };
 
-// Navigation is grouped into 3 logical sections so users can quickly
-// find what they need instead of scanning a flat list of 11 items:
-//   - Decisions: goal management, graph, scenarios
-//   - Insights: intelligent assistant, sources, review, risk alerts
-//   - Data: ingest, plugins
+// Navigation is grouped into 3 logical sections. The "Decisions"
+// group used to hold 7 entries (overview / dashboard / goals / actions
+// / graph / scenarios / tree); the graph/scenarios/tree views are now
+// tabs inside /goals/[id], and /dashboard redirects there, so the
+// sidebar only needs /goals + /actions. See
+// docs/specs/2026-07-30-workspace-consolidation-design.md.
 const NAV_GROUPS: NavGroup[] = [
   {
     labelKey: "nav.group.decisions",
     items: [
-      { href: "/", labelKey: "nav.overview", icon: Home },
-      { href: "/dashboard", labelKey: "nav.dashboard", icon: Gauge },
       { href: "/goals", labelKey: "nav.goals", icon: Compass },
-      { href: "/graph", labelKey: "nav.graph", icon: Network },
-      { href: "/scenarios", labelKey: "nav.scenarios", icon: GitBranch },
+      { href: "/actions", labelKey: "nav.actions", icon: ListTodo },
     ],
   },
   {
     labelKey: "nav.group.insights",
     items: [
       { href: "/chat", labelKey: "nav.chat", icon: MessageSquare },
+      { href: "/review", labelKey: "nav.reviewCenter", icon: Inbox },
       { href: "/sources", labelKey: "nav.sources", icon: ShieldCheck },
-      { href: "/review", labelKey: "nav.review", icon: Inbox },
       { href: "/notifications", labelKey: "nav.notifications", icon: Bell },
     ],
   },

@@ -13,7 +13,7 @@ import { cn, formatDate } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n/provider";
 import { useToast } from "@/components/ui/toast";
-import { Loader2, ThumbsUp, ThumbsDown, Upload, Trash2, Clock } from "lucide-react";
+import { Loader2, ThumbsUp, ThumbsDown, Upload, Trash2, Clock, Inbox } from "lucide-react";
 import Link from "next/link";
 import { SidebarToggleButton } from "@/components/layout/sidebar-toggle-button";
 import { SourceScheduleDialog } from "@/components/sources/source-schedule-dialog";
@@ -74,7 +74,6 @@ export default function SourcesPage() {
   const pendingSources = allSources.filter(
     (s) => !REVIEWED_STATES.has(s.credibility)
   );
-  const reviewedCount = allSources.length - pendingSources.length;
 
   const visibleSources =
     credFilter === "pending"
@@ -150,90 +149,21 @@ export default function SourcesPage() {
 
       <LifecyclePanel />
 
-      {/* Review Queue — highlights pending sources needing review.
-          Shows a progress indicator and quick mark buttons so the user
-          can cycle through the queue without scrolling the full list. */}
+      {/* Pending-credibility sources are reviewed in /review (审核中心).
+          Show a hint with a deep link so users know where to go instead
+          of maintaining a duplicate queue here. See
+          docs/specs/2026-07-30-workspace-consolidation-design.md §4.3. */}
       {!isLoading && pendingSources.length > 0 && (
-        <Card className="border-amber-500/30 bg-amber-500/[0.03]">
-          <CardHeader>
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  <span className="inline-block h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
-                  {t("sources.review.title")}
-                </CardTitle>
-                <CardDescription>{t("sources.review.subtitle")}</CardDescription>
-              </div>
-              <div className="text-right shrink-0">
-                <div className="text-xs text-zinc-500 dark:text-zinc-400">
-                  {t("sources.review.progress", {
-                    reviewed: reviewedCount,
-                    total: allSources.length,
-                  })}
-                </div>
-                <div className="mt-1 h-1.5 w-24 rounded-full bg-black/5 dark:bg-white/5 overflow-hidden">
-                  <div
-                    className="h-full bg-brand-500 transition-all"
-                    style={{
-                      width: `${allSources.length ? (reviewedCount / allSources.length) * 100 : 0}%`,
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {pendingSources.map((s) => (
-                <div
-                  key={s.id}
-                  className="grid grid-cols-[1fr_auto_auto] gap-3 items-center py-2 border-b border-amber-500/10 last:border-0"
-                >
-                  <div className="min-w-0">
-                    <div className="text-sm text-zinc-800 dark:text-zinc-200 truncate">{s.title}</div>
-                    <div className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-0.5">
-                      {t(`kind.${s.kind}`)} · {s.publisher ?? "—"} · {formatDate(s.published_at)}
-                    </div>
-                    {s.url && (
-                      <a href={s.url} target="_blank" rel="noopener noreferrer"
-                        className="text-[10px] text-brand-600 dark:text-brand-400 hover:underline">
-                        {s.url}
-                      </a>
-                    )}
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10"
-                    onClick={() => handleMark(s.id, "user_marked_reliable")}
-                    disabled={markingId === s.id}
-                  >
-                    {markingId === s.id ? (
-                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                    ) : (
-                      <ThumbsUp className="h-3 w-3 mr-1" />
-                    )}
-                    {t("sources.mark.reliable")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="text-red-600 dark:text-red-300 hover:bg-red-500/10"
-                    onClick={() => handleMark(s.id, "user_marked_questionable")}
-                    disabled={markingId === s.id}
-                  >
-                    <ThumbsDown className="h-3 w-3 mr-1" />
-                    {t("sources.mark.questionable")}
-                  </Button>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-      {!isLoading && pendingSources.length === 0 && allSources.length > 0 && (
-        <div className="rounded-md border border-emerald-500/20 bg-emerald-500/[0.04] px-4 py-3 text-xs text-emerald-700 dark:text-emerald-300">
-          {t("sources.review.empty")}
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/[0.04] px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-xs text-amber-800 dark:text-amber-200">
+            {t("sources.reviewHint", { count: pendingSources.length })}
+          </div>
+          <Button asChild size="sm" variant="outline" className="gap-1.5 shrink-0">
+            <Link href="/review">
+              <Inbox className="h-3.5 w-3.5" />
+              {t("sources.goReviewCenter")}
+            </Link>
+          </Button>
         </div>
       )}
 

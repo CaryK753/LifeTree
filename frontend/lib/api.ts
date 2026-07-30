@@ -6,6 +6,7 @@
  */
 
 import type { SWRConfiguration } from "swr";
+import { apiErrorMessage } from "@/lib/api-error";
 
 export const API_PREFIX = "/api/v1";
 
@@ -86,7 +87,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(
+export async function request<T>(
   path: string,
   init?: RequestInit & { skipJson?: boolean }
 ): Promise<T> {
@@ -132,7 +133,7 @@ async function request<T>(
     } catch {
       details = undefined;
     }
-    throw new ApiError(res.status, `API ${res.status} on ${path}`, details);
+    throw new ApiError(res.status, apiErrorMessage(res.status, path, details), details);
   }
   if (init?.skipJson) return undefined as T;
   return res.json() as Promise<T>;
@@ -320,6 +321,59 @@ export const api = {
   listRequirements: (pathwayId: string) =>
     request<unknown[]>(`/goals/pathways/${pathwayId}/requirements`),
 
+  // Actions — today's queue, CRUD, complete, ROI sort
+  listTodayActions: (goalId?: string) =>
+    request<ActionRead[]>(
+      `/actions/today${goalId ? `?goal_id=${encodeURIComponent(goalId)}` : ""}`
+    ),
+  listActions: (params?: {
+    goal_id?: string;
+    status?: ActionStatus | string;
+    stage?: string;
+    due_before?: string;
+    due_after?: string;
+    limit?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.goal_id) q.set("goal_id", params.goal_id);
+    if (params?.status) q.set("status", params.status);
+    if (params?.stage) q.set("stage", params.stage);
+    if (params?.due_before) q.set("due_before", params.due_before);
+    if (params?.due_after) q.set("due_after", params.due_after);
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    const qs = q.toString();
+    return request<ActionRead[]>(`/actions${qs ? `?${qs}` : ""}`);
+  },
+  createAction: (payload: ActionCreate) =>
+    request<ActionRead>(`/actions`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateAction: (id: string, payload: ActionUpdate) =>
+    request<ActionRead>(`/actions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  completeAction: (id: string) =>
+    request<ActionRead>(`/actions/${id}/complete`, { method: "POST" }),
+  deleteAction: (id: string) =>
+    request<void>(`/actions/${id}`, { method: "DELETE", skipJson: true }),
+  listROIActions: (limit = 10) =>
+    request<ActionROISort>(`/actions/roi?limit=${limit}`),
+  downloadActionCalendar: async () => {
+    const token = getAccessToken();
+    const response = await fetch(`${API_PREFIX}/actions/calendar.ics`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    if (!response.ok) throw new ApiError(response.status, "Action calendar export failed");
+    const url = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "lifetree-actions.ics";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  },
+
   // Risk factors
   listRiskFactors: () => request<unknown[]>(`/risk-factors`),
 
@@ -334,6 +388,56 @@ export const api = {
     request<unknown>(`/events/${eventId}/status`, {
       method: "PATCH",
       body: JSON.stringify({ action }),
+    }),
+  getUnifiedReviewInbox: () => request<UnifiedReviewInbox>(`/review/inbox`),
+  getNotificationChannelStatus: () =>
+    request<NotificationChannelStatus>(`/notifications/channels/status`),
+  listPushSubscriptions: () =>
+    request<Array<{ id: string; enabled: boolean; user_agent?: string | null }>>(
+      `/notifications/push-subscriptions`
+    ),
+  upsertPushSubscription: (payload: {
+    endpoint: string;
+    p256dh: string;
+    auth: string;
+    user_agent?: string;
+  }) => request<{ id: string; enabled: boolean }>(`/notifications/push-subscriptions`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }),
+  deletePushSubscription: (id: string) =>
+    request<void>(`/notifications/push-subscriptions/${id}`, {
+      method: "DELETE",
+      skipJson: true,
+    }),
+  acceptSourceProposal: (id: string) =>
+    request<unknown>(`/source-proposals/${id}/accept`, { method: "POST" }),
+  rejectSourceProposal: (id: string) =>
+    request<unknown>(`/source-proposals/${id}/reject`, { method: "POST" }),
+  rejectRiskProposal: (id: string) =>
+    request<unknown>(`/risk-discovery/proposals/${id}/reject`, { method: "POST" }),
+  adoptRiskProposal: (proposal: ReviewRiskProposal, pathwayId: string) =>
+    request<unknown>(`/risk-discovery/adopt`, {
+      method: "POST",
+      body: JSON.stringify({
+        proposal_id: proposal.id,
+        pathway_id: pathwayId,
+        name: proposal.name,
+        type: proposal.type,
+        region: proposal.region,
+        level: proposal.urgency === "urgent" ? "high" : "medium",
+        urgency: proposal.urgency,
+        description: proposal.description,
+      }),
+    }),
+  resolveSourceConflict: (conflict: ReviewConflict, sourceId: string) =>
+    request<unknown>(`/cross-validation/resolve`, {
+      method: "POST",
+      body: JSON.stringify({
+        subject_id: conflict.subject_id,
+        predicate: conflict.predicate,
+        winning_source_id: sourceId,
+      }),
     }),
 
   // Sources
@@ -361,6 +465,7 @@ export const api = {
     request<unknown[]>(`/scenarios?goal_id=${goalId}`),
   createScenario: (payload: {
     goal_id: string;
+    pathway_id?: string;
     name: string;
     description?: string;
     assumptions?: Record<string, unknown>;
@@ -590,6 +695,18 @@ export const api = {
   // System components — read-only docker service status
   getSystemComponents: () =>
     request<SystemComponentsView>(`/system/components`),
+
+  // Changes summary — since-last-visit aggregate digest
+  getChangesSummary: (since?: string) =>
+    request<ChangesSummary>(
+      `/changes-summary${since ? `?since=${encodeURIComponent(since)}` : ""}`
+    ),
+  getLastVisit: () =>
+    request<{ last_visit_at: string | null }>(`/changes-summary/last-visit`),
+
+  // Health — unauthenticated component reachability
+  getComponentsHealth: () =>
+    request<ComponentsHealth>(`/health/components`),
 
   addProvider: (body: ProviderCreate) =>
     request<LLMConfigView>(`/settings/providers`, {
@@ -870,6 +987,135 @@ export interface GoalUpdate {
   target_date?: string | null;
   status?: GoalStatus;
   meta?: Record<string, unknown> | null;
+}
+
+// ---------- Action types ----------
+
+export type ActionStatus =
+  | "pending"
+  | "in_progress"
+  | "completed"
+  | "skipped"
+  | "deferred";
+
+export const ALL_ACTION_STATUSES: ActionStatus[] = [
+  "pending",
+  "in_progress",
+  "completed",
+  "skipped",
+  "deferred",
+];
+
+export interface ActionRead {
+  id: string;
+  user_id: string;
+  goal_id: string;
+  title: string;
+  description?: string | null;
+  stage?: string | null;
+  status: ActionStatus;
+  due_at?: string | null;
+  recurrence?: string;
+  cost?: number;
+  expected_prob_lift?: number;
+  roi?: number;
+  scenario_id?: string | null;
+  pathway_id?: string | null;
+  requirement_id?: string | null;
+  risk_factor_id?: string | null;
+  source?: string;
+  completed_at?: string | null;
+  actual_cost?: number | null;
+  actual_prob_lift?: number | null;
+  source_run_id?: string | null;
+  meta?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ActionCreate {
+  goal_id: string;
+  title: string;
+  description?: string | null;
+  stage?: string | null;
+  due_at?: string | null;
+  recurrence?: string;
+  cost?: number;
+  expected_prob_lift?: number;
+  scenario_id?: string | null;
+  pathway_id?: string | null;
+  requirement_id?: string | null;
+  risk_factor_id?: string | null;
+}
+
+export interface ActionUpdate {
+  title?: string;
+  description?: string | null;
+  stage?: string | null;
+  status?: ActionStatus;
+  due_at?: string | null;
+  recurrence?: string;
+  cost?: number;
+  expected_prob_lift?: number;
+  scenario_id?: string | null;
+  pathway_id?: string | null;
+  requirement_id?: string | null;
+  risk_factor_id?: string | null;
+}
+
+export interface ActionROISort {
+  actions: ActionRead[];
+  count: number;
+}
+
+export interface ReviewSourceProposal {
+  id: string;
+  title: string;
+  url: string;
+  relevance_score: number;
+  credibility_hint: string;
+}
+
+export interface ReviewRiskProposal {
+  id: string;
+  name: string;
+  type: string;
+  region?: string | null;
+  urgency: string;
+  description: string;
+  affected_goals_count: number;
+  impact_preview: { suggested_pathway_id?: string | null };
+}
+
+export interface ReviewConflict {
+  subject_id: string;
+  predicate: string;
+  severity: string;
+  conflicting_values: Array<{
+    object_id: string;
+    source_id: string | null;
+    source_title?: string | null;
+    source_credibility: number;
+  }>;
+}
+
+export interface UnifiedReviewInbox {
+  counts: Record<"events" | "source_proposals" | "risk_proposals" | "conflicts", number>;
+  source_proposals: ReviewSourceProposal[];
+  risk_proposals: ReviewRiskProposal[];
+  conflicts: ReviewConflict[];
+}
+
+export interface NotificationChannelStatus {
+  web_push: {
+    available: boolean;
+    credentials_configured: boolean;
+    subscriptions: number;
+    public_key?: string | null;
+  };
+  sms: { available: boolean; provider: string; reason?: string | null };
+  email: { available: boolean; recipient_configured: boolean };
+  in_app: { available: boolean; transport: string };
 }
 
 export interface UserProfileRead {
@@ -1451,6 +1697,44 @@ export interface SystemComponentView {
 
 export interface SystemComponentsView {
   components: SystemComponentView[];
+}
+
+// ---------- Changes summary (since-last-visit digest) ----------
+
+export interface RiskLevelChange {
+  risk_factor_name: string;
+  old_level: string | null;
+  new_level: string | null;
+}
+
+export interface HighRiskEventSummary {
+  subject: string;
+  action: string;
+  occurred_at: string | null;
+}
+
+export interface ChangesSummary {
+  since: string;
+  new_events: number;
+  new_sources: number;
+  new_goals: number;
+  new_actions: number;
+  completed_actions: number;
+  new_risk_factors: number;
+  updated_scenarios: number;
+  new_source_proposals: number;
+  risk_level_changes: RiskLevelChange[];
+  recent_high_risk_events: HighRiskEventSummary[];
+  last_visit_at: string | null;
+}
+
+// ---------- Health (component reachability) ----------
+
+export interface ComponentsHealth {
+  database: { status: "ok" | "error" | "unknown" };
+  neo4j: { status: "ok" | "error" | "unknown" };
+  redis: { status: "ok" | "error" | "unknown" };
+  timestamp: string;
 }
 
 // ---------- Meta (about / update check) ----------

@@ -16,12 +16,13 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
+from redis.asyncio import Redis
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
-from app.db.redis import get_redis
 
 log = get_logger(__name__)
 
@@ -40,7 +41,7 @@ async def sse_stream(
       - `lifetree:risk:{user_id}` — risk alerts
       - `lifetree:scenario:{scenario_id}` — run progress (if scenario_id given)
     """
-    redis = get_redis()
+    redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
     resolved_user_id = user.id
     channels = [f"lifetree:risk:{resolved_user_id}"]
     if scenario_id:
@@ -84,7 +85,8 @@ async def sse_stream(
         finally:
             for ch in channels:
                 await pubsub.unsubscribe(ch)
-            await pubsub.close()
+            await pubsub.aclose()
+            await redis.aclose()
 
     return StreamingResponse(
         event_generator(),

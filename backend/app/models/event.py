@@ -18,7 +18,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.postgres import Base
 from app.models.base import TimestampMixin, UUIDPkMixin
 
-
 # ---------- InformationSource ----------
 
 class SourceKind(str, Enum):
@@ -193,8 +192,13 @@ class Assertion(UUIDPkMixin, TimestampMixin, Base):
     source_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("information_sources.id", ondelete="SET NULL"), index=True
     )
+    user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    predicate: Mapped[str] = mapped_column(String(128), default="claims")
     claim: Mapped[str] = mapped_column(Text, nullable=False)
+    object_value: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
 
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
     # 0..1 — credibility-weighted confidence
@@ -203,6 +207,14 @@ class Assertion(UUIDPkMixin, TimestampMixin, Base):
 
     conflicting_with_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     scenario_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_by_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
 
@@ -241,5 +253,6 @@ class Relationship(UUIDPkMixin, TimestampMixin, Base):
 
 Index("ix_events_subject_action", Event.subject, Event.action)
 Index("ix_metrics_name_region", MetricSnapshot.name, MetricSnapshot.region)
+Index("ix_assertions_temporal", Assertion.subject, Assertion.predicate, Assertion.valid_from)
 Index("ix_relationships_subject", Relationship.subject_type, Relationship.subject_id)
 Index("ix_relationships_object", Relationship.object_type, Relationship.object_id)

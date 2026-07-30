@@ -30,13 +30,13 @@ from app.models.goal import Goal, Pathway, Requirement, RiskFactor
 from app.models.memory import UserMemory
 from app.models.scenario import Scenario
 from app.models.user import UserProfile
-from app.models.user_runtime import UserServiceConfig
 from app.schemas.api import ChatRequest, ChatResponseChunk
 from app.services.advisor import (
     build_advisor_graph,
     build_advisor_tools,
     messages_to_langchain,
 )
+from app.services.risk_scope import risk_scope_clause
 from app.services.user_extensions import build_mcp_tools, skill_context
 from app.services.user_runtime import resolve_user_model
 
@@ -58,7 +58,7 @@ def _build_context_block(
     values without a tool round-trip.
     """
     parts: list[str] = [
-        f"# User Profile",
+        "# User Profile",
         f"- Name: {user.display_name}",
         f"- Risk tolerance: {user.risk_tolerance}",
         f"- Priority factors: {user.priority_factors}",
@@ -116,8 +116,17 @@ def _build_context_block(
                     f"gap={r.gap_status}"
                 )
 
+    risk_owner_id = goal.user_id if goal is not None else user.id
     rfs = list(
-        db.scalars(select(RiskFactor).order_by(RiskFactor.level.desc()).limit(8))
+        db.scalars(
+            select(RiskFactor)
+            .where(
+                RiskFactor.deleted_at.is_(None),
+                risk_scope_clause(risk_owner_id),
+            )
+            .order_by(RiskFactor.level.desc())
+            .limit(8)
+        )
     )
     if rfs:
         parts.append("\n# Top Risk Factors")
@@ -391,6 +400,7 @@ async def chat_stream(
         goal_id=payload.goal_id,
         scenario_id=payload.scenario_id,
         include_web_search=payload.web_search,
+        include_web_fetch=payload.web_search,
     )
     # Conditionally include MCP tools based on the request. When
     # enabled_mcp_servers is None, all enabled servers are included (default

@@ -48,7 +48,7 @@ const config: Config = {
         ring: "rgb(var(--ring) / <alpha-value>)",
       },
       fontFamily: {
-        sans: ["var(--font-inter)", "system-ui", "sans-serif"],
+        sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
         mono: ["ui-monospace", "monospace"],
       },
       borderRadius: {
