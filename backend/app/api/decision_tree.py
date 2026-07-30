@@ -141,27 +141,28 @@ def _build_tree_node(
     children_by_parent: dict[str, list[Pathway]],
     requirement_index: dict[str, list[Requirement]],
     risk_factor_index: dict[str, list[RiskFactor]],
-    scenario_index: dict[str, Scenario],
 ) -> dict[str, Any]:
     """Recursively build a nested tree node for a pathway.
 
     The *_index dicts are pre-built per-goal so we don't re-query the DB
     for every node (avoids N+1).
+
+    As of v0.4.0, probability data is read directly from Pathway (merged
+    from Scenario), so no scenario_index is needed.
     """
     reqs = requirement_index.get(pathway.id, [])
     rfs = risk_factor_index.get(pathway.id, [])
 
+    # Read probability directly from Pathway (merged from Scenario in v0.4.0)
     probability: dict[str, Any] | None = None
-    if pathway.scenario_id:
-        sc = scenario_index.get(pathway.scenario_id)
-        if sc is not None:
-            sp = sc.success_probability or {}
-            probability = {
-                "p50": sp.get("p50"),
-                "p10": sp.get("p10"),
-                "p90": sp.get("p90"),
-                "computed_at": sc.computed_at.isoformat() if sc.computed_at else None,
-            }
+    sp = pathway.success_probability or {}
+    if sp:
+        probability = {
+            "p50": sp.get("p50"),
+            "p10": sp.get("p10"),
+            "p90": sp.get("p90"),
+            "computed_at": pathway.computed_at.isoformat() if pathway.computed_at else None,
+        }
 
     child_pathways = children_by_parent.get(pathway.id, [])
     children = [
@@ -171,7 +172,6 @@ def _build_tree_node(
             children_by_parent,
             requirement_index,
             risk_factor_index,
-            scenario_index,
         )
         for child in child_pathways
     ]
@@ -203,12 +203,14 @@ def _load_tree_indexes(
     dict[str, list[Pathway]],
     dict[str, list[Requirement]],
     dict[str, list[RiskFactor]],
-    dict[str, Scenario],
 ]:
     """Bulk-load everything needed to serialize a goal's tree in one pass.
 
     Returns ``(children_by_parent, requirements_by_pathway,
-    risk_factors_by_pathway, scenario_by_id)``.
+    risk_factors_by_pathway)``.
+
+    As of v0.4.0, probability data is stored directly on Pathway, so the
+    scenario_index is no longer needed.
     """
     # 1. All pathways for the goal (not deleted)
     all_pathways = list(
@@ -219,7 +221,6 @@ def _load_tree_indexes(
         )
     )
     pathway_ids = [p.id for p in all_pathways]
-    scenario_ids = [p.scenario_id for p in all_pathways if p.scenario_id]
 
     # 2. Children index (parent_pathway_id → list of children)
     children_by_parent: dict[str, list[Pathway]] = {}
@@ -286,17 +287,10 @@ def _load_tree_indexes(
         for pid, rf in rows:
             risk_factors_by_pathway.setdefault(pid, []).append(rf)
 
-    # 5. Scenarios (so we can populate probability without N+1 queries)
-    scenario_by_id: dict[str, Scenario] = {}
-    if scenario_ids:
-        for sc in db.scalars(select(Scenario).where(Scenario.id.in_(scenario_ids))):
-            scenario_by_id[sc.id] = sc
-
     return (
         children_by_parent,
         requirements_by_pathway,
         risk_factors_by_pathway,
-        scenario_by_id,
     )
 
 
@@ -320,7 +314,6 @@ def get_decision_tree(
         children_by_parent,
         requirements_by_pathway,
         risk_factors_by_pathway,
-        scenario_by_id,
     ) = _load_tree_indexes(db, goal.id, goal.user_id)
 
     # Roots = pathways with no parent_pathway_id. If there are none, fall back
@@ -348,7 +341,6 @@ def get_decision_tree(
             children_by_parent,
             requirements_by_pathway,
             risk_factors_by_pathway,
-            scenario_by_id,
         )
         for p in root_pathways
     ]
@@ -368,13 +360,31 @@ def grow_branch(
 ) -> dict[str, Any]:
     """Manually add a child branch to a pathway.
 
-    Creates a new Pathway with parent_pathway_id set,
-    tree_level = parent.tree_level + 1, status='confirmed'. Also creates a
-    Scenario for the new branch if the parent has one (so the new branch can
-    be scored independently).
+    Creates a new Pathway with ``parent_pathway_id`` set,
+    ``tree_level = parent.tree_level + 1``, ``status='confirmed'``.
+
+    v0.4.0：不再创建子 Scenario。子 Pathway 直接继承父 Pathway 的
+    ``assumptions``（向后兼容：父 Pathway 没有 assumptions 时回退到关联
+    Scenario 的 assumptions）。``success_probability`` / ``risk_score`` /
+    ``key_risk_factors`` / ``computed_at`` 初始化为空，等推理引擎填充。
     """
     parent = _get_owned_pathway(pathway_id, user, db)
     goal = db.get(Goal, parent.goal_id)
+
+    # 解析父 Pathway 的 assumptions（向后兼容：回退到关联 Scenario）
+    parent_assumptions = dict(parent.assumptions or {})
+    if not parent_assumptions:
+        parent_sc = db.get(Scenario, parent.scenario_id) if parent.scenario_id else None
+        if parent_sc is None:
+            # 反查 scenarios 表
+            parent_sc = db.scalar(
+                select(Scenario).where(
+                    Scenario.pathway_id == parent.id,
+                    Scenario.goal_id == parent.goal_id,
+                ).order_by(Scenario.created_at.desc())
+            )
+        if parent_sc is not None:
+            parent_assumptions = dict(parent_sc.assumptions or {})
 
     new_pathway = Pathway(
         goal_id=parent.goal_id,
@@ -386,29 +396,17 @@ def grow_branch(
         node_type=payload.node_type or "branch",
         tree_level=(parent.tree_level or 0) + 1,
         display_order=0,
+        # 继承父 Pathway 的 assumptions
+        assumptions=parent_assumptions,
+        # 概率/风险字段初始化为空，等推理引擎填充
+        success_probability={},
+        risk_score=None,
+        key_risk_factors=[],
+        computed_at=None,
+        impact_threshold=0.05,
     )
     db.add(new_pathway)
     db.flush()
-
-    # Create a Scenario for the new branch if the parent has one — branches
-    # need their own scenario so the reasoning engine can score them
-    # independently. We mirror the parent's assumptions as a starting point.
-    if parent.scenario_id:
-        parent_sc = db.get(Scenario, parent.scenario_id)
-        new_sc = Scenario(
-            goal_id=parent.goal_id,
-            pathway_id=new_pathway.id,
-            name=f"{payload.name} (branch)",
-            description=payload.description,
-            status="draft",
-            parent_scenario_id=parent.scenario_id,
-            assumptions=dict(parent_sc.assumptions or {}) if parent_sc else {},
-            impact_threshold=0.05,
-        )
-        db.add(new_sc)
-        db.flush()
-        new_pathway.scenario_id = new_sc.id
-        db.add(new_pathway)
 
     # Link parent requirements + risk_factors to the new branch (M2M) so the
     # new branch inherits the parent's eligibility profile.
@@ -487,7 +485,8 @@ def evolve_branch_endpoint(
 ) -> dict[str, Any]:
     """Run the LLM+math evolution pipeline on a pathway (the "自生长" endpoint).
 
-    Returns the newly predicted child branches with their probability data.
+    Returns the newly predicted child branches. v0.4.0：分支的 probability
+    字段为空（None），后续由推理引擎单独填充。
     """
     from app.core.exceptions import LifeTreeError
 
@@ -504,6 +503,83 @@ def evolve_branch_endpoint(
         "parent_pathway_id": pathway.id,
         "predicted_branches": branches,
         "count": len(branches),
+    }
+
+
+@router.post("/pathways/{pathway_id}/evolve-timeline")
+def evolve_timeline_endpoint(
+    pathway_id: str, user: CurrentUser, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """Run the LLM timeline projection on a pathway (the "自演化" endpoint).
+
+    Projects future events over the next 24 months based on the user's
+    accumulated data. Results are stored directly on the Pathway
+    (success_probability, risk_score, key_risk_factors, computed_at).
+
+    v0.4.0：合并后直接基于 Pathway 工作，不再需要 Scenario 中转。
+    """
+    from app.core.exceptions import LifeTreeError
+    from app.services.evolution import EvolutionService
+
+    pathway = _get_owned_pathway(pathway_id, user, db)
+    service = EvolutionService(db)
+    try:
+        result = service.evolve(pathway, user)
+    except LifeTreeError:
+        raise
+    except Exception as exc:
+        log.error("decision_tree.evolve_timeline_failed", pathway_id=pathway_id, error=str(exc))
+        raise HTTPException(500, f"Timeline evolution failed: {exc}") from exc
+    # EvolutionService.evolve() returns a plain dict[str, Any] (projection +
+    # trajectory + feedback). FastAPI serializes it directly.
+    return result
+
+
+@router.get("/pathways/{pathway_id}/evolve-timeline")
+def get_timeline_evolution(
+    pathway_id: str, user: CurrentUser, db: Session = Depends(get_db)
+) -> dict[str, Any] | None:
+    """Get the cached timeline projection for a pathway.
+
+    Returns the last projection stored on the linked Scenario's
+    ``meta["evolution"]`` field (backward compat). Returns null if the
+    pathway has no linked Scenario or has never been evolved.
+
+    Note: Pathway itself doesn't have a ``meta`` column yet — the full
+    projection (events, trajectory, summary) is cached on the linked
+    Scenario. Numerical outputs (success_probability, risk_score, etc.)
+    are always available directly on the Pathway.
+    """
+    pathway = _get_owned_pathway(pathway_id, user, db)
+
+    # Try to read the full projection from a linked Scenario's meta.
+    scenario: Scenario | None = None
+    if pathway.scenario_id:
+        scenario = db.get(Scenario, pathway.scenario_id)
+    if scenario is None:
+        # Reverse lookup: scenarios.pathway_id → pathway.id
+        scenario = db.scalar(
+            select(Scenario).where(
+                Scenario.pathway_id == pathway.id,
+                Scenario.goal_id == pathway.goal_id,
+            ).order_by(Scenario.created_at.desc())
+        )
+    if scenario is None:
+        return None
+
+    meta = dict(scenario.meta or {})
+    cached = meta.get("evolution")
+    if not cached:
+        return None
+    return {
+        "summary": cached.get("summary", ""),
+        "projected_events": cached.get("projected_events", []),
+        "trajectory": cached.get("trajectory", []),
+        "final_probability": cached.get("final_probability", 0.0),
+        "confidence": cached.get("confidence", 0.0),
+        "evolved_at": cached.get("evolved_at"),
+        "horizon_months": 24,
+        "cached": True,
     }
 
 

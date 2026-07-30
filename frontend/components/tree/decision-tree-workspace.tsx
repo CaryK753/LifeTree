@@ -64,6 +64,7 @@ import {
   AlertTriangle,
   ShieldAlert,
   CircleDot,
+  Clock,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -89,6 +90,7 @@ import {
   collectLeaves,
   confirmBranch,
   evolveBranch,
+  evolvePathwayTimeline,
   flattenTree,
   getDecisionTree,
   growBranch,
@@ -1092,6 +1094,7 @@ function ContextMenu({
     },
     { action: "addChild", label: t("tree.addChild"), icon: Plus },
     { action: "evolve", label: t("tree.evolve"), icon: Sparkles },
+    { action: "evolveTimeline", label: t("tree.evolveTimeline"), icon: Clock },
   ];
 
   if (typeof document === "undefined") return null;
@@ -1344,6 +1347,13 @@ function SidePanel({
           onClick={() => onAction("evolve")}
           full
         />
+        <SidePanelButton
+          icon={Clock}
+          label={t("tree.evolveTimeline")}
+          disabled={busy}
+          onClick={() => onAction("evolveTimeline")}
+          full
+        />
       </div>
     </aside>
   );
@@ -1570,7 +1580,7 @@ function AddChildDialog({
 
 // ---------- Action types ----------
 
-type TreeAction = "confirm" | "select" | "abandon" | "addChild" | "evolve";
+type TreeAction = "confirm" | "select" | "abandon" | "addChild" | "evolve" | "evolveTimeline";
 
 // ---------- Main workspace component ----------
 
@@ -1694,6 +1704,21 @@ export function DecisionTreeWorkspace({
             const predicted = await evolveBranch(targetId);
             toast({
               title: t("tree.toast.evolved", { n: predicted.length }),
+              variant: "success",
+            });
+          } finally {
+            setEvolvingIds((prev) => {
+              const next = new Set(prev);
+              next.delete(targetId);
+              return next;
+            });
+          }
+        } else if (action === "evolveTimeline") {
+          setEvolvingIds((prev) => new Set(prev).add(targetId));
+          try {
+            await evolvePathwayTimeline(targetId);
+            toast({
+              title: t("tree.toast.timelineEvolved"),
               variant: "success",
             });
           } finally {

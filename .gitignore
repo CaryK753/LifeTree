@@ -35,6 +35,11 @@ ENV/
 .env.local
 .env.*.local
 
+# Docker Compose local override (dev bind mounts, port changes, etc.)
+# Created per-host by the developer; never committed.
+docker-compose.override.yml
+docker-compose.override.*.yml
+
 # LLM provider/model config (contains API keys)
 backend/.llm_config.json
 

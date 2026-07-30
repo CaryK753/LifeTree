@@ -156,6 +156,22 @@ export async function evolveBranch(
 }
 
 /**
+ * POST /api/pathways/{pathwayId}/evolve-timeline — run LLM timeline projection.
+ *
+ * Projects future events over the next 24 months. Results are stored
+ * directly on the Pathway (success_probability, risk_score, etc.).
+ * Returns the full EvolutionProjection.
+ */
+export async function evolvePathwayTimeline(
+  pathwayId: string
+): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>(
+    `/pathways/${encodeURIComponent(pathwayId)}/evolve-timeline`,
+    { method: "POST" }
+  );
+}
+
+/**
  * POST /api/pathways/{pathwayId}/confirm — predicted → confirmed.
  *
  * The user accepts an AI-predicted branch, promoting it from 虚线 to 实线.

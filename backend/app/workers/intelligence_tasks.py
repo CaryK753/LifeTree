@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from app.db.postgres import get_session
-from app.models.goal import Goal
+from app.models.goal import Goal, Pathway
 from app.models.scenario import Scenario
 from app.models.user import UserProfile
 from app.services.action_scheduler import ActionScheduler
@@ -87,7 +87,18 @@ def evolve_all_active_scenarios() -> dict:
                 continue
             user = type("WorkerUser", (), {"id": goal.user_id, "role": "user"})()
             try:
-                EvolutionService(db).evolve(scenario, user)
+                # v0.4.0：通过 scenario 解析关联 Pathway，再调用 evolve(pathway)
+                from app.services.scenario_pathway import resolve_scenario_pathway
+
+                pathway = None
+                if scenario.pathway_id:
+                    pathway = db.get(Pathway, scenario.pathway_id)
+                if pathway is None:
+                    pathway = resolve_scenario_pathway(db, scenario)
+                if pathway is None:
+                    failed += 1
+                    continue
+                EvolutionService(db).evolve(pathway, user)
                 completed += 1
             except Exception:  # noqa: BLE001
                 failed += 1

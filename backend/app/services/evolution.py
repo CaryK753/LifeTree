@@ -1,6 +1,6 @@
-"""Scenario self-evolution service.
+"""Pathway self-evolution service.
 
-Per project plan §5 "自演化": given a scenario + its pathway/requirements/
+Per project plan §5 "自演化": given a pathway + its requirements/
 risk_factors + long-term accumulated user data (profile, memories, events),
 invoke the chat-role LLM with a structured-output schema to project a
 timeline of likely future events (milestones, risks, opportunities,
@@ -9,9 +9,12 @@ decisions) for the next 24 months.
 The LLM returns a Pydantic-validated ``EvolutionProjection`` which the
 frontend renders as timeline nodes alongside the existing scenario tree.
 
-Storage: the projection is cached on ``scenario.meta["evolution"]`` and a
-``ScenarioRun(engine="evolution")`` audit record is persisted so the
-run history page can show evolution runs alongside reasoning runs.
+Storage (v0.4.0): the projection's numerical outputs are cached directly
+on ``Pathway`` (success_probability / risk_score / key_risk_factors /
+computed_at). The full projection dict is persisted on ``ScenarioRun.result``
+for audit. For backward compat, if a linked ``Scenario`` exists, the
+same outputs are also mirrored onto the Scenario (so old GET endpoints
+and the frontend scenario-comparison overlay still work).
 """
 
 from __future__ import annotations
@@ -33,9 +36,10 @@ from app.llm.client import get_instructor_sync
 from app.models.event import Event
 from app.models.goal import Goal, Pathway, Requirement, RiskFactor
 from app.models.memory import UserMemory
-from app.models.scenario import Scenario, ScenarioRun
+from app.models.scenario import Scenario, ScenarioRun, ScenarioStatus
 from app.models.user import UserProfile
 from app.services.risk_scope import risk_scope_clause
+# 保留 resolve_scenario_pathway 用于向后兼容入口（evolve_scenario_async）
 from app.services.scenario_pathway import resolve_scenario_pathway
 
 log = get_logger(__name__)
@@ -114,7 +118,7 @@ class EvolutionProjection(BaseModel):
 
 
 class EvolutionService:
-    """LLM-driven scenario timeline projection."""
+    """LLM-driven pathway timeline projection."""
 
     HORIZON_MONTHS = 24
     MAX_MEMORIES = 15
@@ -124,31 +128,41 @@ class EvolutionService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def evolve(self, scenario: Scenario, user: CurrentUser) -> dict[str, Any]:
-        """Project the next 24 months of events for ``scenario``.
+    def evolve(self, pathway: Pathway, user: CurrentUser) -> dict[str, Any]:
+        """Project the next 24 months of events for ``pathway``.
 
         Returns a dict with ``projection`` (the LLM output) and ``trajectory``
         (a month-by-month success probability list derived from the events).
+
+        v0.4.0：直接读写 Pathway 上的 success_probability / risk_score /
+        key_risk_factors / computed_at。如果存在关联的 Scenario，会同时把
+        数值镜像写回 Scenario 以保持向后兼容（老的前端 GET 端点和
+        scenario-comparison overlay 仍能工作）。
         """
         t0 = time.perf_counter()
         run_id = str(uuid.uuid4())
         started_at = datetime.now(timezone.utc)
 
-        # Persist an audit record up-front so partial failures are still
-        # visible in the run history (mirrors ReasoningEngine.run_full).
-        run = ScenarioRun(
-            id=run_id,
-            scenario_id=scenario.id,
-            engine="evolution",
-            status="running",
-            started_at=started_at,
-        )
-        self.db.add(run)
-        self.db.commit()
+        # 查找关联的 Scenario（向后兼容：审计记录与缓存仍需要 scenario_id）
+        scenario = self._resolve_linked_scenario(pathway)
+
+        # ScenarioRun.scenario_id 是 NOT NULL 的外键，所以只有当存在关联
+        # Scenario 时才写审计记录。
+        run: ScenarioRun | None = None
+        if scenario is not None:
+            run = ScenarioRun(
+                id=run_id,
+                scenario_id=scenario.id,
+                engine="evolution",
+                status="running",
+                started_at=started_at,
+            )
+            self.db.add(run)
+            self.db.commit()
 
         try:
-            context = self._build_context(scenario, user)
-            prompt_messages = self._build_prompt(scenario, context)
+            context = self._build_context(pathway, user)
+            prompt_messages = self._build_prompt(pathway, context)
 
             try:
                 instructor = get_instructor_sync()
@@ -179,11 +193,16 @@ class EvolutionService:
                 base_p=context["base_p50"],
                 events=projection.events,
             )
-            from app.services.evolution_feedback import EvolutionFeedbackService
 
-            feedback = EvolutionFeedbackService(self.db).persist_projection(
-                scenario, user.id, projection.events
-            )
+            # 反馈持久化（EvolutionFeedbackService 仍需要 Scenario）。
+            # 没有关联 Scenario 时跳过 —— milestone/counterfactual 反馈留空。
+            feedback: dict[str, Any] = {"milestones_created": 0, "branches_created": 0}
+            if scenario is not None:
+                from app.services.evolution_feedback import EvolutionFeedbackService
+
+                feedback = EvolutionFeedbackService(self.db).persist_projection(
+                    scenario, user.id, projection.events
+                )
 
             result: dict[str, Any] = {
                 "projection": projection.model_dump(),
@@ -193,103 +212,165 @@ class EvolutionService:
                 "feedback": feedback,
             }
 
-            # Cache on scenario.meta so subsequent GETs don't need to hit
-            # the ScenarioRun table. Using meta (not assumptions) keeps the
-            # LLM projection separate from user-defined assumptions that
-            # actually feed the Bayesian reasoning.
-            meta = dict(scenario.meta or {})
-            meta["evolution"] = {
-                "projected_events": [e.model_dump() for e in projection.events],
-                "trajectory": trajectory,
-                "summary": projection.summary,
-                "final_probability": projection.final_probability,
-                "confidence": projection.confidence,
-                "evolved_at": started_at.isoformat(),
-                "model": context["model_name"],
-            }
-            scenario.meta = meta
-            self.db.add(scenario)
+            # ---- v0.4.0：写入 Pathway（单一来源） ----
+            # success_probability: 合并 p50 = projection.final_probability，
+            # 保留已有的 p10/p90（如果有）。
+            sp = dict(pathway.success_probability or {})
+            sp["p50"] = projection.final_probability
+            pathway.success_probability = sp
+            # risk_score: 用风险类事件的累计期望负面影响作为启发式（0-1）
+            pathway.risk_score = self._derive_risk_score(projection.events)
+            # key_risk_factors: 抽取风险类事件，便于前端直接渲染
+            pathway.key_risk_factors = [
+                {
+                    "title": e.title,
+                    "description": e.description,
+                    "probability": e.probability,
+                    "impact": e.impact,
+                    "month": e.month,
+                }
+                for e in projection.events
+                if e.type == "risk"
+            ]
+            pathway.computed_at = datetime.now(timezone.utc)
+            self.db.add(pathway)
 
-            run.status = "completed"
-            run.result = result
-            run.iterations = 1
-            run.completed_at = datetime.now(timezone.utc)
-            run.duration_ms = int((time.perf_counter() - t0) * 1000)
-            self.db.add(run)
+            # ---- 向后兼容：把数值镜像写回关联 Scenario ----
+            # 这样老的 GET /scenarios/{id}/evolve 端点（读 scenario.meta）
+            # 和 scenario-comparison overlay（读 scenario.success_probability）
+            # 仍能正常工作。
+            if scenario is not None:
+                scenario.success_probability = sp
+                scenario.risk_score = pathway.risk_score
+                scenario.key_risk_factors = pathway.key_risk_factors
+                scenario.computed_at = pathway.computed_at
+                meta = dict(scenario.meta or {})
+                meta["evolution"] = {
+                    "projected_events": [e.model_dump() for e in projection.events],
+                    "trajectory": trajectory,
+                    "summary": projection.summary,
+                    "final_probability": projection.final_probability,
+                    "confidence": projection.confidence,
+                    "evolved_at": started_at.isoformat(),
+                    "model": context["model_name"],
+                }
+                scenario.meta = meta
+                self.db.add(scenario)
+
+            if run is not None:
+                run.status = "completed"
+                run.result = result
+                run.iterations = 1
+                run.completed_at = datetime.now(timezone.utc)
+                run.duration_ms = int((time.perf_counter() - t0) * 1000)
+                self.db.add(run)
+
             self.db.commit()
 
             log.info(
                 "evolution.completed",
-                scenario_id=scenario.id,
+                pathway_id=pathway.id,
+                scenario_id=scenario.id if scenario else None,
                 events=len(projection.events),
-                ms=run.duration_ms,
+                ms=run.duration_ms if run else int((time.perf_counter() - t0) * 1000),
             )
             return result
 
         except Exception as exc:  # noqa: BLE001
-            log.error("evolution.failed", scenario_id=scenario.id, error=str(exc))
-            run.status = "failed"
-            run.error = str(exc)
-            run.completed_at = datetime.now(timezone.utc)
-            run.duration_ms = int((time.perf_counter() - t0) * 1000)
-            self.db.add(run)
-            self.db.commit()
+            log.error(
+                "evolution.failed",
+                pathway_id=pathway.id,
+                scenario_id=scenario.id if scenario else None,
+                error=str(exc),
+            )
+            if run is not None:
+                run.status = "failed"
+                run.error = str(exc)
+                run.completed_at = datetime.now(timezone.utc)
+                run.duration_ms = int((time.perf_counter() - t0) * 1000)
+                self.db.add(run)
+                self.db.commit()
             raise
+
+    # ---------------- Scenario 反查（向后兼容） ----------------
+
+    def _resolve_linked_scenario(self, pathway: Pathway) -> Scenario | None:
+        """查找 Pathway 关联的 Scenario（向后兼容用）。
+
+        优先使用 ``pathway.scenario_id``；找不到则按 ``scenarios.pathway_id``
+        反查最新的活跃/草稿 Scenario。两者都找不到时返回 None（此时跳过
+        ScenarioRun 审计记录与 scenario.meta 缓存写入）。
+        """
+        if pathway.scenario_id:
+            sc = self.db.get(Scenario, pathway.scenario_id)
+            if sc is not None and sc.goal_id == pathway.goal_id:
+                return sc
+        sc = self.db.scalar(
+            select(Scenario)
+            .where(
+                Scenario.pathway_id == pathway.id,
+                Scenario.goal_id == pathway.goal_id,
+                Scenario.status.in_(
+                    [ScenarioStatus.ACTIVE.value, ScenarioStatus.DRAFT.value]
+                ),
+            )
+            .order_by(Scenario.created_at.desc())
+        )
+        return sc
 
     # ---------------- Context loading ----------------
 
-    def _build_context(self, scenario: Scenario, user: CurrentUser) -> dict[str, Any]:
-        """Load all long-term accumulated data that informs the projection."""
-        goal = self.db.get(Goal, scenario.goal_id)
-        if goal is None:
-            raise RuntimeError("scenario's goal not found")
+    def _build_context(self, pathway: Pathway, user: CurrentUser) -> dict[str, Any]:
+        """Load all long-term accumulated data that informs the projection.
 
-        # Pathway + requirements + risk_factors — reuse the same region-aware
-        # loading logic as ReasoningEngine._load_context so the evolution
-        # prompt sees the same filtered risk set as the Bayesian reasoning.
-        pathway = resolve_scenario_pathway(self.db, scenario)
+        v0.4.0：直接使用传入的 Pathway，不再通过 resolve_scenario_pathway
+        解析。基线 P50 优先读 Pathway.success_probability；如果 Pathway 上
+        没有数据，回退到关联 Scenario 的 success_probability（向后兼容）。
+        """
+        goal = self.db.get(Goal, pathway.goal_id)
+        if goal is None:
+            raise RuntimeError("pathway's goal not found")
+
+        # §11.3: Use M2M table, fall back to legacy pathway_id
+        from app.models.goal import pathway_requirements, pathway_risk_factors
 
         requirements: list[Requirement] = []
-        if pathway is not None:
-            # §11.3: Use M2M table, fall back to legacy pathway_id
-            from app.models.goal import pathway_requirements, pathway_risk_factors
-
+        requirements = list(
+            self.db.scalars(
+                select(Requirement)
+                .join(pathway_requirements, pathway_requirements.c.requirement_id == Requirement.id)
+                .where(pathway_requirements.c.pathway_id == pathway.id)
+                .order_by(Requirement.weight.desc())
+                .limit(self.MAX_REQUIREMENTS)
+            )
+        )
+        if not requirements:
             requirements = list(
                 self.db.scalars(
                     select(Requirement)
-                    .join(pathway_requirements, pathway_requirements.c.requirement_id == Requirement.id)
-                    .where(pathway_requirements.c.pathway_id == pathway.id)
+                    .where(Requirement.pathway_id == pathway.id)
                     .order_by(Requirement.weight.desc())
                     .limit(self.MAX_REQUIREMENTS)
                 )
             )
-            if not requirements:
-                requirements = list(
-                    self.db.scalars(
-                        select(Requirement)
-                        .where(Requirement.pathway_id == pathway.id)
-                        .order_by(Requirement.weight.desc())
-                        .limit(self.MAX_REQUIREMENTS)
-                    )
-                )
 
         # Risk factors are explicit per-pathway associations. Inferring by
         # region makes sibling pathways consume identical, unrelated risks.
         risk_factors: list[RiskFactor] = []
-        if pathway is not None:
-            risk_factors = list(
-                self.db.scalars(
-                    select(RiskFactor)
-                    .join(pathway_risk_factors, pathway_risk_factors.c.risk_factor_id == RiskFactor.id)
-                    .where(
-                        pathway_risk_factors.c.pathway_id == pathway.id,
-                        RiskFactor.deleted_at.is_(None),
-                        risk_scope_clause(goal.user_id),
-                    )
-                    .order_by(RiskFactor.level.desc())
-                    .limit(10)
+        risk_factors = list(
+            self.db.scalars(
+                select(RiskFactor)
+                .join(pathway_risk_factors, pathway_risk_factors.c.risk_factor_id == RiskFactor.id)
+                .where(
+                    pathway_risk_factors.c.pathway_id == pathway.id,
+                    RiskFactor.deleted_at.is_(None),
+                    risk_scope_clause(goal.user_id),
                 )
+                .order_by(RiskFactor.level.desc())
+                .limit(10)
             )
+        )
+
         # User profile + memories — the "long-term accumulated data" that
         # makes the projection personal rather than generic.
         profile = self.db.get(UserProfile, user.id)
@@ -321,9 +402,17 @@ class EvolutionService:
         except LLMNotConfiguredError:
             model_name = "gpt-4o-mini"  # fallback; instructor will raise anyway
 
-        base_p50 = float(
-            (scenario.success_probability or {}).get("p50", 0.5)
-        )
+        # 基线 P50：优先读 Pathway.success_probability
+        pathway_sp = pathway.success_probability or {}
+        if isinstance(pathway_sp, dict) and pathway_sp:
+            base_p50 = float(pathway_sp.get("p50", 0.5))
+        else:
+            # 向后兼容：Pathway 上没有数据时回退到关联 Scenario
+            scenario = self._resolve_linked_scenario(pathway)
+            if scenario is not None:
+                base_p50 = float((scenario.success_probability or {}).get("p50", 0.5))
+            else:
+                base_p50 = 0.5
 
         return {
             "goal": goal,
@@ -385,7 +474,7 @@ class EvolutionService:
 
     # ---------------- Prompt construction ----------------
 
-    def _build_prompt(self, scenario: Scenario, context: dict[str, Any]) -> list[dict[str, str]]:
+    def _build_prompt(self, pathway: Pathway, context: dict[str, Any]) -> list[dict[str, str]]:
         system = (
             "You are a strategic foresight assistant inside LifeTree, a life-decision "
             "support platform. Your task is to project how the user's scenario will "
@@ -435,11 +524,11 @@ class EvolutionService:
         )
 
         user_msg = (
-            f"Scenario: {scenario.name}\n"
-            f"Description: {scenario.description or 'N/A'}\n"
+            f"Pathway: {pathway.name}\n"
+            f"Description: {pathway.description or 'N/A'}\n"
             f"Current success probability (P50): {context['base_p50']:.1%}\n\n"
             f"Context:\n{context['summary']}\n\n"
-            f"Project the next {self.HORIZON_MONTHS} months for this scenario. "
+            f"Project the next {self.HORIZON_MONTHS} months for this pathway. "
             f"Respond with only the JSON object described in the system prompt."
         )
 
@@ -470,17 +559,54 @@ class EvolutionService:
             trajectory.append({"month": month, "p": round(p, 4)})
         return trajectory
 
+    @staticmethod
+    def _derive_risk_score(events: list[ProjectedEvent]) -> float:
+        """根据 LLM 投射的事件列表推导 risk_score（0-1）。
+
+        启发式：risk_score = Σ P(risk_event) * |impact|，clamp 到 [0, 1]。
+        只统计 type=='risk' 的事件，避免把正向机会/里程碑算进风险分。
+        """
+        total = 0.0
+        for e in events:
+            if e.type == "risk":
+                total += float(e.probability) * abs(float(e.impact))
+        return max(0.0, min(1.0, total))
+
 
 def evolve_scenario_async(scenario_id: str, user_id: str) -> dict[str, Any]:
-    """Standalone entry point for non-request-scoped callers (e.g. Celery).
+    """向后兼容入口：通过 scenario_id 解析关联 Pathway 再调用 evolve(pathway)。
 
-    Opens its own DB session and resolves the user from ``user_id``.
+    供 Celery / 非请求上下文调用。优先使用 scenario.pathway_id；否则用
+    resolve_scenario_pathway 反查。两者都找不到时报错。
     """
     with SessionLocal() as db:
         scenario = db.get(Scenario, scenario_id)
         if scenario is None:
             raise RuntimeError(f"Scenario {scenario_id} not found")
+        # 解析关联 Pathway —— 优先用显式的 pathway_id，再回退到反查
+        pathway: Pathway | None = None
+        if scenario.pathway_id:
+            pathway = db.get(Pathway, scenario.pathway_id)
+        if pathway is None:
+            pathway = resolve_scenario_pathway(db, scenario)
+        if pathway is None:
+            raise RuntimeError(
+                f"Scenario {scenario_id} has no linked Pathway; cannot evolve"
+            )
         # Build a minimal CurrentUser-like object — EvolutionService only
         # needs .id for memory/event scoping.
         user = type("U", (), {"id": user_id, "role": "user"})()
-        return EvolutionService(db).evolve(scenario, user)
+        return EvolutionService(db).evolve(pathway, user)
+
+
+def evolve_pathway_async(pathway_id: str, user_id: str) -> dict[str, Any]:
+    """直接通过 pathway_id 调用 evolve 的异步入口（供 Celery / 新调度用）。
+
+    Opens its own DB session and resolves the user from ``user_id``.
+    """
+    with SessionLocal() as db:
+        pathway = db.get(Pathway, pathway_id)
+        if pathway is None:
+            raise RuntimeError(f"Pathway {pathway_id} not found")
+        user = type("U", (), {"id": user_id, "role": "user"})()
+        return EvolutionService(db).evolve(pathway, user)

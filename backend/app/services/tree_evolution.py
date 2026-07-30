@@ -12,18 +12,19 @@ Implements the "LLM diverge → math model converge" pipeline that powers
 2. **MATH MODEL CONVERGE** — for each proposed branch:
    a. A ``Pathway`` row with ``status='predicted'``, ``node_type='branch'``,
       ``tree_level = parent.tree_level + 1``, ``evolution_hint = rationale``
-      is created.
-   b. A ``Scenario`` row is created for the branch so the reasoning engine
-      has somewhere to write its outputs.
-   c. Parent requirements / risk_factors are linked to the new pathway via
+      is created. The child Pathway directly inherits the parent Pathway's
+      ``assumptions`` (v0.4.0：不再创建子 Scenario)。
+   b. Parent requirements / risk_factors are linked to the new pathway via
       the ``pathway_requirements`` / ``pathway_risk_factors`` M2M tables.
       LLM-proposed new requirements / risks are also created and linked.
-   d. ``ScenarioService.run_reasoning(scenario)`` is invoked to get P50/P10/P90.
-      Each run is wrapped in ``try/except`` so a single failure doesn't
-      kill the pipeline.
-   e. Branches with P50 < 5% are deleted (filter unviable paths).
+   c. ``success_probability`` / ``risk_score`` / ``key_risk_factors`` /
+      ``computed_at`` 初始化为空，等待推理引擎后续单独填充。
+   d. （已移除）不再 inline 调用 ScenarioService.run_reasoning，因为没有
+      子 Scenario 可供推理。剪枝逻辑（P50 < 5% 删除）也随之移除 ——
+      推理引擎后续会单独填充概率字段，那时再做剪枝。
 
-3. Surviving branches (with their probability data) are returned.
+3. Surviving branches are returned with empty probability data (to be
+   filled by the reasoning engine later).
 
 Only ONE level deep is predicted. The user must confirm a branch before
 further evolution from it.
@@ -55,11 +56,11 @@ from app.models.goal import (
     pathway_risk_factors,
 )
 from app.models.memory import UserMemory
-from app.models.scenario import Scenario, ScenarioStatus
+# 保留 Scenario 导入：向后兼容时反查父 Pathway 关联的 Scenario 取 assumptions
+from app.models.scenario import Scenario
 from app.models.user import UserProfile
 from app.services.risk_adoption import get_or_create_user_risk
 from app.services.risk_scope import risk_scope_clause
-from app.services.scenarios import ScenarioService
 from app.services.tree_evolution_contracts import (
     BranchProposal,
     CompactBranchProposal,
@@ -458,6 +459,26 @@ class TreeEvolutionService:
 
     # ---------------- Branch instantiation + scoring ----------------
 
+    def _resolve_linked_scenario(self, pathway: Pathway) -> Scenario | None:
+        """查找 Pathway 关联的 Scenario（向后兼容用）。
+
+        当父 Pathway 上没有 assumptions 时，回退到关联 Scenario 的 assumptions。
+        优先用 ``pathway.scenario_id``；找不到则按 ``scenarios.pathway_id`` 反查。
+        """
+        if pathway.scenario_id:
+            sc = self.db.get(Scenario, pathway.scenario_id)
+            if sc is not None and sc.goal_id == pathway.goal_id:
+                return sc
+        sc = self.db.scalar(
+            select(Scenario)
+            .where(
+                Scenario.pathway_id == pathway.id,
+                Scenario.goal_id == pathway.goal_id,
+            )
+            .order_by(Scenario.created_at.desc())
+        )
+        return sc
+
     def _instantiate_and_score(
         self,
         *,
@@ -467,10 +488,25 @@ class TreeEvolutionService:
         user: CurrentUser,
         display_order: int,
     ) -> dict[str, Any] | None:
-        """Create Pathway + Scenario for a proposed branch, run reasoning, filter."""
+        """为提议的分支创建子 Pathway（v0.4.0：不再创建子 Scenario）。
+
+        - 子 Pathway 直接继承父 Pathway 的 ``assumptions``（向后兼容：父
+          Pathway 没有 assumptions 时回退到关联 Scenario 的 assumptions）。
+        - ``success_probability`` / ``risk_score`` / ``key_risk_factors`` /
+          ``computed_at`` 初始化为空，等待推理引擎后续单独填充。
+        - 不再 inline 调用 ``ScenarioService.run_reasoning``，因此也不再
+          做 P50 < 5% 的剪枝（推理引擎后续填充概率时再做）。
+        """
         now_iso = datetime.now(timezone.utc).isoformat()
 
-        # a. Create the branch Pathway
+        # 解析父 Pathway 的 assumptions（向后兼容：回退到关联 Scenario）
+        parent_assumptions = dict(parent.assumptions or {})
+        if not parent_assumptions:
+            parent_sc = self._resolve_linked_scenario(parent)
+            if parent_sc is not None:
+                parent_assumptions = dict(parent_sc.assumptions or {})
+
+        # a. 创建子 Pathway，继承父 Pathway 的 assumptions，概率/风险字段留空
         new_pathway = Pathway(
             id=str(uuid.uuid4()),
             goal_id=goal.id,
@@ -483,32 +519,23 @@ class TreeEvolutionService:
             tree_level=(parent.tree_level or 0) + 1,
             display_order=display_order,
             evolution_hint=branch.rationale,
-        )
-        self.db.add(new_pathway)
-        self.db.flush()
-
-        # b. Create a Scenario for the branch
-        scenario = Scenario(
-            id=str(uuid.uuid4()),
-            goal_id=goal.id,
-            pathway_id=new_pathway.id,
-            name=f"{branch.branch_name} (predicted)",
-            description=branch.branch_description,
-            status=ScenarioStatus.DRAFT.value,
-            parent_scenario_id=None,
+            # 继承父 Pathway 的 assumptions，并标记演化来源
             assumptions={
+                **parent_assumptions,
                 "evolved_from": parent.id,
                 "rationale": branch.rationale,
             },
+            # 概率/风险字段初始化为空，等待推理引擎填充
+            success_probability={},
+            risk_score=None,
+            key_risk_factors=[],
+            computed_at=None,
             impact_threshold=self.MIN_VIABLE_P50,
         )
-        self.db.add(scenario)
-        self.db.flush()
-        new_pathway.scenario_id = scenario.id
         self.db.add(new_pathway)
         self.db.flush()
 
-        # c. Link parent requirements + risk_factors to the new pathway (M2M).
+        # b. Link parent requirements + risk_factors to the new pathway (M2M).
         # The new branch inherits everything its parent had, plus the
         # branch-specific items the LLM proposed below.
         parent_req_ids = {
@@ -617,62 +644,11 @@ class TreeEvolutionService:
 
         self.db.commit()
 
-        # d. Run ReasoningEngine.run_full(scenario). Wrap in try/except so
-        # one failure doesn't kill the pipeline.
-        p50: float | None = None
-        p10: float | None = None
-        p90: float | None = None
-        key_risk_factors: list[dict[str, Any]] = []
-        run_error: str | None = None
-        try:
-            run = ScenarioService(self.db).run_reasoning(scenario.id)
-            if run.status == "completed" and run.result:
-                sp = run.result.get("success_probability", {}) or {}
-                p50 = sp.get("p50")
-                p10 = sp.get("p10")
-                p90 = sp.get("p90")
-                key_risk_factors = run.result.get("key_risk_factors", []) or []
-            elif run.error:
-                run_error = run.error
-        except Exception as exc:  # noqa: BLE001
-            run_error = str(exc)
-            log.warning(
-                "tree_evolution.reasoning_failed",
-                pathway_id=new_pathway.id,
-                scenario_id=scenario.id,
-                error=run_error,
-            )
+        # c. （v0.4.0 已移除）不再 inline 调用 ScenarioService.run_reasoning ——
+        # 没有子 Scenario 可供推理。success_probability 等字段保持为空，
+        # 后续由推理引擎单独填充。剪枝逻辑（P50 < 5% 删除）也一并移除。
 
-        # e. Filter: if P50 < threshold, delete the branch (and its scenario).
-        if p50 is not None and p50 < self.MIN_VIABLE_P50:
-            log.info(
-                "tree_evolution.branch_pruned",
-                pathway_id=new_pathway.id,
-                p50=p50,
-                threshold=self.MIN_VIABLE_P50,
-            )
-            # Unlink M2M rows (cascade handles them, but be explicit so the
-            # session state is clean).
-            self.db.execute(
-                pathway_requirements.delete().where(
-                    pathway_requirements.c.pathway_id == new_pathway.id
-                )
-            )
-            self.db.execute(
-                pathway_risk_factors.delete().where(
-                    pathway_risk_factors.c.pathway_id == new_pathway.id
-                )
-            )
-            self.db.delete(new_pathway)
-            # The scenario is left behind as 'failed' / dormant for audit,
-            # but unlink it from the deleted pathway. Set its status to
-            # closed so it doesn't show up in active listings.
-            scenario.status = ScenarioStatus.CLOSED.value
-            self.db.add(scenario)
-            self.db.commit()
-            return None
-
-        # f. Return the surviving branch with its probability data.
+        # d. 返回新建分支（probability 字段为空，等推理引擎填充）
         return {
             "pathway_id": new_pathway.id,
             "name": new_pathway.name,
@@ -684,14 +660,14 @@ class TreeEvolutionService:
             "evolution_hint": new_pathway.evolution_hint,
             "status": new_pathway.status,
             "node_type": new_pathway.node_type,
-            "scenario_id": scenario.id,
+            "scenario_id": new_pathway.scenario_id,
             "probability": {
-                "p50": p50,
-                "p10": p10,
-                "p90": p90,
+                "p50": None,
+                "p10": None,
+                "p90": None,
             },
-            "key_risk_factors": key_risk_factors,
-            "run_error": run_error,
+            "key_risk_factors": [],
+            "run_error": None,
         }
 
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -10,6 +10,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     Date,
+    DateTime,
     Float,
     ForeignKey,
     Index,
@@ -167,6 +168,13 @@ class Pathway(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     - tree_status tracks the prediction→confirmation→execution lifecycle
     - tree_level + display_order drive React Flow layout
     - evolution_hint stores the LLM+math suggestion that spawned this branch
+
+    Merged Scenario fields (v0.4.0): assumptions, success_probability,
+    risk_score, key_risk_factors, impact_threshold, computed_at are now
+    stored directly on Pathway. The scenarios table is kept for backward
+    compat but new writes go to pathways. This eliminates the asymmetric
+    Pathway↔Scenario soft link and makes the decision tree node the
+    single source of truth for both route selection and probability.
     """
 
     __tablename__ = "pathways"
@@ -201,6 +209,18 @@ class Pathway(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     evolution_hint: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # LLM+math rationale for predicted branches
+
+    # --- Merged Scenario fields (v0.4.0) ---
+    # Previously on the Scenario model; now stored directly on Pathway so
+    # the decision tree node is the single source of truth.
+    assumptions: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    success_probability: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    key_risk_factors: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    impact_threshold: Mapped[float] = mapped_column(Float, default=0.05)
+    computed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     goal: Mapped["Goal"] = relationship(back_populates="pathways")
     # M2M relationships — requirements and risk_factors are now shared across

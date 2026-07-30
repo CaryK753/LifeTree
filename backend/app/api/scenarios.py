@@ -82,8 +82,13 @@ def list_scenarios(
 def evolve_all_scenarios(
     goal_id: str, user: CurrentUser, db: Session = Depends(get_db)
 ) -> dict:
-    """Evolve every active pathway scenario for one owned goal."""
+    """Evolve every active pathway scenario for one owned goal.
+
+    v0.4.0：通过 scenario 查找关联的 Pathway，再调用
+    ``EvolutionService.evolve(pathway)``。保留 scenario 入口用于向后兼容。
+    """
     from app.services.evolution import EvolutionService
+    from app.services.scenario_pathway import resolve_scenario_pathway
 
     _verify_goal_owner(goal_id, user, db)
     scenarios = list(db.scalars(select(Scenario).where(
@@ -93,7 +98,20 @@ def evolve_all_scenarios(
     results = []
     for scenario in scenarios:
         try:
-            projection = EvolutionService(db).evolve(scenario, user)
+            # 解析关联 Pathway —— 优先用显式 pathway_id，再回退到反查
+            pathway = None
+            if scenario.pathway_id:
+                pathway = db.get(Pathway, scenario.pathway_id)
+            if pathway is None:
+                pathway = resolve_scenario_pathway(db, scenario)
+            if pathway is None:
+                results.append({
+                    "scenario_id": scenario.id,
+                    "ok": False,
+                    "error": "no linked pathway",
+                })
+                continue
+            projection = EvolutionService(db).evolve(pathway, user)
             results.append({"scenario_id": scenario.id, "ok": True, "result": projection})
         except Exception as exc:  # noqa: BLE001
             results.append({"scenario_id": scenario.id, "ok": False, "error": str(exc)})
@@ -160,13 +178,36 @@ def evolve_scenario(
     decisions) by calling the chat-role LLM with a structured-output schema.
     The result is cached on ``scenario.meta["evolution"]`` so subsequent
     reads are instant.
+
+    v0.4.0：通过 scenario 查找关联的 Pathway，再调用
+    ``EvolutionService.evolve(pathway)``。数值结果会写回 Pathway 与
+    Scenario（向后兼容）。保留 scenario 入口用于向后兼容。
     """
     from app.core.exceptions import LifeTreeError
     from app.services.evolution import EvolutionService
+    from app.services.scenario_pathway import resolve_scenario_pathway
 
     scenario = _verify_scenario_owner(scenario_id, user, db)
+    # 解析关联 Pathway —— 优先用显式 pathway_id，再回退到反查
+    pathway = None
+    if scenario.pathway_id:
+        pathway = db.get(Pathway, scenario.pathway_id)
+    if pathway is None:
+        pathway = resolve_scenario_pathway(db, scenario)
+    if pathway is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No pathway linked to this scenario; cannot evolve.",
+        )
+    # 防御性检查：Pathway 必须属于同一个 goal
+    if pathway.goal_id != scenario.goal_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Pathway does not belong to the scenario's goal.",
+        )
+
     try:
-        result = EvolutionService(db).evolve(scenario, user)
+        result = EvolutionService(db).evolve(pathway, user)
     except LifeTreeError:
         raise  # domain errors (e.g. LLMNotConfiguredError) have proper status codes
     except Exception as exc:
