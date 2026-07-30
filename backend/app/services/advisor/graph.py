@@ -217,6 +217,11 @@ Dependent calls must always use IDs returned by the preceding call.
   - `"forbidden"` → ownership mismatch; the entity belongs to another
     user
 
+Never retry an identical tool call with unchanged arguments. If a tool
+returns an error, use the error to change the next step or ask the user for
+the missing choice. If a write tool reports success or `reused=true`, treat
+the operation as complete and do not call it again.
+
 ### Rule 7: Don't over-call
 
 - The context block already has profile + primary goal + pathways +

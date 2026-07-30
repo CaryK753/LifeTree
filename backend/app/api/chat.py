@@ -20,6 +20,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from langgraph.errors import GraphRecursionError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -35,6 +36,11 @@ from app.services.advisor import (
     build_advisor_graph,
     build_advisor_tools,
     messages_to_langchain,
+)
+from app.services.advisor.loop_guard import (
+    RECURSION_LIMIT_MESSAGE,
+    TOOL_LOOP_MESSAGE,
+    ToolLoopGuard,
 )
 from app.services.risk_scope import risk_scope_clause
 from app.services.user_extensions import build_mcp_tools, skill_context
@@ -444,6 +450,7 @@ async def chat_stream(
     lc_messages = messages_to_langchain(history)
 
     async def event_generator():
+        loop_guard = ToolLoopGuard()
         try:
             # ``astream`` yields LangGraph stream events. We care about:
             #   - ``on_chat_model_stream``: token deltas from the LLM
@@ -451,7 +458,7 @@ async def chat_stream(
             async for event in graph.astream_events(
                 {"messages": lc_messages},
                 version="v2",
-                config={"max_concurrency": 1},
+                config={"max_concurrency": 1, "recursion_limit": 40},
             ):
                 kind = event.get("event")
                 if kind == "on_chat_model_stream":
@@ -497,6 +504,21 @@ async def chat_stream(
                     run_id = event.get("run_id", "")
                     raw_args = event.get("data", {}).get("input", {})
                     args = raw_args if isinstance(raw_args, dict) else {}
+                    stop_reason = loop_guard.record(tool_name, args)
+                    if stop_reason is not None:
+                        log.warning(
+                            "chat.tool_loop_stopped",
+                            reason=stop_reason,
+                            tool=tool_name,
+                            total_calls=loop_guard.total_calls,
+                        )
+                        stopped = ChatResponseChunk(
+                            delta=f"\n\n{TOOL_LOOP_MESSAGE}",
+                            finish_reason="tool_loop",
+                        )
+                        yield f"data: {stopped.model_dump_json()}\n\n"
+                        yield "data: [DONE]\n\n"
+                        return
                     out = ChatResponseChunk(
                         delta="",
                         tool_call={"name": tool_name, "args": args, "result": None, "id": run_id},
@@ -556,6 +578,17 @@ async def chat_stream(
             # Final chunk with finish_reason so the client can close cleanly.
             done = ChatResponseChunk(delta="", finish_reason="stop")
             yield f"data: {done.model_dump_json()}\n\n"
+            yield "data: [DONE]\n\n"
+        except GraphRecursionError:
+            log.warning(
+                "chat.graph_recursion_stopped",
+                total_calls=loop_guard.total_calls,
+            )
+            stopped = ChatResponseChunk(
+                delta=f"\n\n{RECURSION_LIMIT_MESSAGE}",
+                finish_reason="tool_loop",
+            )
+            yield f"data: {stopped.model_dump_json()}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as exc:  # noqa: BLE001
             import traceback
