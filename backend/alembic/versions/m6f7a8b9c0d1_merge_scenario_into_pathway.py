@@ -56,13 +56,14 @@ def upgrade() -> None:
     # 3. Also backfill from the reverse direction (scenarios.pathway_id → pathways).
     # This catches cases where pathway.scenario_id was never set but the FK
     # on scenarios.pathway_id exists (added in migration k4d5e6f7a8b9).
+    # Use CASE WHEN instead of NULLIF(text) to avoid jsonb/text type mismatch.
     op.execute("""
         UPDATE pathways p
         SET
-            assumptions        = COALESCE(s.assumptions, p.assumptions),
-            success_probability = COALESCE(NULLIF(p.success_probability::text, '{}'), s.success_probability),
+            assumptions        = CASE WHEN p.assumptions = '{}'::jsonb THEN s.assumptions ELSE p.assumptions END,
+            success_probability = CASE WHEN p.success_probability = '{}'::jsonb THEN s.success_probability ELSE p.success_probability END,
             risk_score         = COALESCE(p.risk_score, s.risk_score),
-            key_risk_factors   = COALESCE(NULLIF(p.key_risk_factors::text, '[]'), s.key_risk_factors),
+            key_risk_factors   = CASE WHEN p.key_risk_factors = '[]'::jsonb THEN s.key_risk_factors ELSE p.key_risk_factors END,
             impact_threshold   = COALESCE(NULLIF(p.impact_threshold, 0.05), s.impact_threshold),
             computed_at        = COALESCE(p.computed_at, s.computed_at)
         FROM scenarios s
