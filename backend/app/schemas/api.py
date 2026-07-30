@@ -298,7 +298,9 @@ class ChatRequest(BaseModel):
 class ChatToolCall(BaseModel):
     name: str
     args: dict[str, Any]
-    result: dict[str, Any] | None = None
+    # result can be a dict (structured tools), a string (web_search / web_fetch
+    # return raw text), a list, or None (while the tool is still running).
+    result: dict[str, Any] | list[Any] | str | None = None
     id: str | None = None
 
 

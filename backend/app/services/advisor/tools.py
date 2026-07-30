@@ -1944,7 +1944,6 @@ def build_advisor_tools(
             children_by_parent,
             requirements_by_pathway,
             risk_factors_by_pathway,
-            scenario_by_id,
         ) = _load_tree_indexes(db, goal.id, goal.user_id)
         root_pathways = list(
             db.scalars(
@@ -1975,7 +1974,6 @@ def build_advisor_tools(
                 children_by_parent,
                 requirements_by_pathway,
                 risk_factors_by_pathway,
-                scenario_by_id,
             )
             for p in root_pathways
         ]

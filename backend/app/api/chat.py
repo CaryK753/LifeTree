@@ -492,13 +492,44 @@ async def chat_stream(
                     raw_output = event.get("data", {}).get("output")
                     try:
                         if hasattr(raw_output, "content"):
-                            result = json.loads(raw_output.content)
+                            content = raw_output.content
+                            if isinstance(content, str):
+                                # Tools that return plain strings (web_search,
+                                # web_fetch) send the raw text as content.
+                                # Try JSON first for structured tools, fall
+                                # back to the raw string so the frontend can
+                                # parse sources / display text directly.
+                                try:
+                                    result = json.loads(content)
+                                except (json.JSONDecodeError, TypeError):
+                                    result = content
+                            elif isinstance(content, (dict, list)):
+                                result = content
+                            else:
+                                result = {"value": str(raw_output)}
                         elif isinstance(raw_output, dict):
                             result = raw_output
+                        elif isinstance(raw_output, str):
+                            # Some tools return a plain string directly.
+                            try:
+                                result = json.loads(raw_output)
+                            except (json.JSONDecodeError, TypeError):
+                                result = raw_output
                         else:
                             result = {"value": str(raw_output)}
                     except Exception:  # noqa: BLE001
                         result = {"value": str(raw_output)}
+                    out = ChatResponseChunk(
+                        delta="",
+                        tool_call={"name": tool_name, "args": {}, "result": result, "id": run_id},
+                    )
+                    yield f"data: {out.model_dump_json()}\n\n"
+
+                elif kind == "on_tool_error":
+                    tool_name = event.get("name", "")
+                    run_id = event.get("run_id", "")
+                    err_obj = event.get("data", {}).get("error") or event.get("data", {})
+                    result = {"error": str(err_obj)}
                     out = ChatResponseChunk(
                         delta="",
                         tool_call={"name": tool_name, "args": {}, "result": result, "id": run_id},
@@ -510,7 +541,8 @@ async def chat_stream(
             yield f"data: {done.model_dump_json()}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as exc:  # noqa: BLE001
-            log.error("chat.stream_failed", error=str(exc))
+            import traceback
+            log.error("chat.stream_failed", error=str(exc), traceback=traceback.format_exc())
             err = ChatResponseChunk(
                 delta=f"\n\n[stream error: {exc}]",
                 finish_reason="error",
