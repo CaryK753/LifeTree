@@ -32,9 +32,9 @@ export default function DashboardRedirectPage() {
     if (primaryId) {
       setRedirected(true);
       router.replace(`/goals/${primaryId}`);
-    } else if (!isLoading && !profile) {
-      // No profile and goals fetch finished without data — fall back to
-      // the goals list page so the user can create one.
+    } else if (!isLoading && goals) {
+      // Goals finished loading and none are available. A profile normally
+      // exists for authenticated users, so it must not gate this fallback.
       setRedirected(true);
       router.replace("/goals");
     }

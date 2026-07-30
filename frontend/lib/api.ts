@@ -1076,6 +1076,16 @@ export interface ReviewSourceProposal {
   credibility_hint: string;
 }
 
+export interface ReviewPendingSource {
+  id: string;
+  title: string;
+  kind: string;
+  url?: string | null;
+  publisher?: string | null;
+  published_at?: string | null;
+  credibility: string;
+}
+
 export interface ReviewRiskProposal {
   id: string;
   name: string;
@@ -1100,8 +1110,19 @@ export interface ReviewConflict {
 }
 
 export interface UnifiedReviewInbox {
-  counts: Record<"events" | "source_proposals" | "risk_proposals" | "conflicts", number>;
+  counts: Record<
+    "events" | "source_proposals" | "pending_sources" | "risk_proposals" | "conflicts",
+    number
+  >;
+  events: Array<{
+    id: string;
+    subject?: string | null;
+    action: string;
+    risk_flag_level?: string | null;
+    created_at: string;
+  }>;
   source_proposals: ReviewSourceProposal[];
+  pending_sources: ReviewPendingSource[];
   risk_proposals: ReviewRiskProposal[];
   conflicts: ReviewConflict[];
 }

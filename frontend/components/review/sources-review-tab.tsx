@@ -4,16 +4,16 @@
  * SourcesReviewTab — pending-credibility sources queue for the Review
  * Center. Mirrors the "Review Queue" card that used to live on /sources.
  *
- * Lists every source whose ``credibility`` is not in REVIEWED_STATES
- * and offers quick mark-reliable / mark-questionable buttons. After a
- * mark, the parent SWR cache for ``sources`` and ``credibility`` is
- * revalidated so /sources list and the credibility meter stay in sync.
+ * Uses the unified review inbox so the page header, tab badge, and source
+ * queue share one contract. The source library is revalidated after marking.
  */
 
 import { useState } from "react";
-import { useSources, useCredibility } from "@/lib/hooks";
+import { mutate as mutateCache } from "swr";
+import { useCredibility, useUnifiedReview } from "@/lib/hooks";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Loader2, ThumbsUp, ThumbsDown, ExternalLink } from "lucide-react";
 import { formatDate } from "@/lib/utils";
@@ -21,40 +21,24 @@ import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n/provider";
 import { useToast } from "@/components/ui/toast";
 
-// Sources in these states are considered "reviewed" — the user has
-// either explicitly marked them or the system has auto-classified them.
-const REVIEWED_STATES = new Set([
-  "high",
-  "medium",
-  "low",
-  "user_marked_reliable",
-  "user_marked_questionable",
-]);
-
 export function SourcesReviewTab() {
   const t = useT();
   const toast = useToast();
-  const { data: sources, mutate, isLoading } = useSources();
+  const { data, mutate, isLoading } = useUnifiedReview();
   const { mutate: mutateCred } = useCredibility();
 
   // Track which source is currently being marked so we can disable its
   // buttons and show a spinner. Keyed by source id.
   const [markingId, setMarkingId] = useState<string | null>(null);
 
-  const allSources = (sources as any[]) ?? [];
-  const pendingSources = allSources.filter(
-    (s) => !REVIEWED_STATES.has(s.credibility)
-  );
-  const reviewedCount = allSources.length - pendingSources.length;
+  const pendingSources = data?.pending_sources ?? [];
 
   async function handleMark(id: string, level: string) {
     if (markingId) return; // prevent concurrent marks
     setMarkingId(id);
     try {
       await api.markCredibility(id, level);
-      // Revalidate both the sources list and the credibility aggregate
-      // so /sources list and the credibility meter stay in sync.
-      await Promise.all([mutate(), mutateCred()]);
+      await Promise.all([mutate(), mutateCred(), mutateCache("sources")]);
       toast({
         title:
           level === "user_marked_reliable"
@@ -108,7 +92,7 @@ export function SourcesReviewTab() {
 
   return (
     <div className="space-y-4">
-      {/* Progress indicator */}
+      {/* Queue summary */}
       <Card className="border-amber-500/30 bg-amber-500/[0.03]">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between gap-2">
@@ -121,22 +105,9 @@ export function SourcesReviewTab() {
                 {t("review.sources.subtitle")}
               </CardDescription>
             </div>
-            <div className="text-right shrink-0">
-              <div className="text-xs text-zinc-500 dark:text-zinc-400">
-                {t("sources.review.progress", {
-                  reviewed: reviewedCount,
-                  total: allSources.length,
-                })}
-              </div>
-              <div className="mt-1 h-1.5 w-24 rounded-full bg-black/5 dark:bg-white/5 overflow-hidden">
-                <div
-                  className="h-full bg-brand-500 transition-all"
-                  style={{
-                    width: `${allSources.length ? (reviewedCount / allSources.length) * 100 : 0}%`,
-                  }}
-                />
-              </div>
-            </div>
+            <Badge variant="risk" riskLevel="medium">
+              {pendingSources.length}
+            </Badge>
           </div>
         </CardHeader>
       </Card>

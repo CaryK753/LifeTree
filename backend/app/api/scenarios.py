@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
-from app.models.goal import Goal, Pathway
+from app.models.goal import Pathway
 from app.models.scenario import Scenario, ScenarioRun
 from app.schemas.api import (
     EvolutionProjectionRead,
@@ -24,48 +24,33 @@ from app.schemas.api import (
     ScenarioRunRead,
     ScenarioUpdate,
 )
+from app.services.scenario_contracts import (
+    resolve_create_pathway_id,
+    verify_goal_owner,
+    verify_scenario_owner,
+)
 from app.services.scenarios import ScenarioService
 
 router = APIRouter(prefix="/scenarios", tags=["scenarios"])
-
-
-def _verify_goal_owner(goal_id: str, user: CurrentUser, db: Session) -> Goal:
-    """Fetch a goal and verify the caller owns it (admin can read any)."""
-    goal = db.get(Goal, goal_id)
-    if goal is None:
-        raise HTTPException(404, "Goal not found")
-    if goal.user_id != user.id and user.role != "admin":
-        raise HTTPException(403, "You do not have access to this goal")
-    return goal
-
-
-def _verify_scenario_owner(
-    scenario_id: str, user: CurrentUser, db: Session
-) -> Scenario:
-    """Fetch a scenario and verify ownership via its parent goal."""
-    scenario = db.get(Scenario, scenario_id)
-    if scenario is None:
-        raise HTTPException(404, "Scenario not found")
-    _verify_goal_owner(scenario.goal_id, user, db)
-    return scenario
 
 
 @router.post("", response_model=ScenarioRead, status_code=201)
 def create_scenario(
     payload: ScenarioCreate, user: CurrentUser, db: Session = Depends(get_db)
 ) -> ScenarioRead:
-    _verify_goal_owner(payload.goal_id, user, db)
-    if payload.pathway_id:
-        pathway = db.get(Pathway, payload.pathway_id)
-        if pathway is None or pathway.goal_id != payload.goal_id:
-            raise HTTPException(422, "Pathway does not belong to the scenario goal")
-    return ScenarioService(db).create(**payload.model_dump())
+    verify_goal_owner(payload.goal_id, user, db)
+    pathway_id = resolve_create_pathway_id(
+        db,
+        goal_id=payload.goal_id,
+        pathway_id=payload.pathway_id,
+    )
+    fields = payload.model_dump()
+    fields["pathway_id"] = pathway_id
+    return ScenarioService(db).create(**fields)
 
 
 @router.get("", response_model=list[ScenarioRead])
-def list_scenarios(
-    goal_id: str, user: CurrentUser, db: Session = Depends(get_db)
-) -> list[dict]:
+def list_scenarios(goal_id: str, user: CurrentUser, db: Session = Depends(get_db)) -> list[dict]:
     """List scenarios for a goal.
 
     Includes ``survival_curve`` / ``key_risk_times`` / ``median_time_months``
@@ -73,15 +58,13 @@ def list_scenarios(
     scenario-comparison overlay view can render every branch's probability
     curve in a single request (no N+1 follow-up calls).
     """
-    _verify_goal_owner(goal_id, user, db)
+    verify_goal_owner(goal_id, user, db)
     svc = ScenarioService(db)
     return [svc.to_read_with_curve(s) for s in svc.list_for_goal(goal_id)]
 
 
 @router.post("/evolve-all")
-def evolve_all_scenarios(
-    goal_id: str, user: CurrentUser, db: Session = Depends(get_db)
-) -> dict:
+def evolve_all_scenarios(goal_id: str, user: CurrentUser, db: Session = Depends(get_db)) -> dict:
     """Evolve every active pathway scenario for one owned goal.
 
     v0.4.0：通过 scenario 查找关联的 Pathway，再调用
@@ -90,11 +73,15 @@ def evolve_all_scenarios(
     from app.services.evolution import EvolutionService
     from app.services.scenario_pathway import resolve_scenario_pathway
 
-    _verify_goal_owner(goal_id, user, db)
-    scenarios = list(db.scalars(select(Scenario).where(
-        Scenario.goal_id == goal_id,
-        Scenario.status.in_(["active", "draft"]),
-    )))
+    verify_goal_owner(goal_id, user, db)
+    scenarios = list(
+        db.scalars(
+            select(Scenario).where(
+                Scenario.goal_id == goal_id,
+                Scenario.status.in_(["active", "draft"]),
+            )
+        )
+    )
     results = []
     for scenario in scenarios:
         try:
@@ -105,13 +92,15 @@ def evolve_all_scenarios(
             if pathway is None:
                 pathway = resolve_scenario_pathway(db, scenario)
             if pathway is None:
-                results.append({
-                    "scenario_id": scenario.id,
-                    "ok": False,
-                    "error": "no linked pathway",
-                })
+                results.append(
+                    {
+                        "scenario_id": scenario.id,
+                        "ok": False,
+                        "error": "no linked pathway",
+                    }
+                )
                 continue
-            projection = EvolutionService(db).evolve(pathway, user)
+            projection = EvolutionService(db).evolve(pathway, user, scenario)
             results.append({"scenario_id": scenario.id, "ok": True, "result": projection})
         except Exception as exc:  # noqa: BLE001
             results.append({"scenario_id": scenario.id, "ok": False, "error": str(exc)})
@@ -119,22 +108,16 @@ def evolve_all_scenarios(
 
 
 @router.get("/evolution/calibration")
-def evolution_calibration(
-    user: CurrentUser, db: Session = Depends(get_db)
-) -> dict:
+def evolution_calibration(user: CurrentUser, db: Session = Depends(get_db)) -> dict:
     from app.services.evolution_feedback import EvolutionFeedbackService
 
     return EvolutionFeedbackService(db).calibration(user.id)
 
 
 @router.get("/{scenario_id}", response_model=ScenarioRead)
-def get_scenario(
-    scenario_id: str, user: CurrentUser, db: Session = Depends(get_db)
-) -> dict:
-    _verify_scenario_owner(scenario_id, user, db)
-    return ScenarioService(db).to_read_with_curve(
-        ScenarioService(db).get(scenario_id)
-    )
+def get_scenario(scenario_id: str, user: CurrentUser, db: Session = Depends(get_db)) -> dict:
+    verify_scenario_owner(scenario_id, user, db)
+    return ScenarioService(db).to_read_with_curve(ScenarioService(db).get(scenario_id))
 
 
 @router.patch("/{scenario_id}", response_model=ScenarioRead)
@@ -144,7 +127,7 @@ def update_scenario(
     user: CurrentUser,
     db: Session = Depends(get_db),
 ) -> ScenarioRead:
-    scenario = _verify_scenario_owner(scenario_id, user, db)
+    scenario = verify_scenario_owner(scenario_id, user, db)
     if payload.pathway_id:
         pathway = db.get(Pathway, payload.pathway_id)
         if pathway is None or pathway.goal_id != scenario.goal_id:
@@ -153,10 +136,8 @@ def update_scenario(
 
 
 @router.delete("/{scenario_id}", status_code=204)
-def close_scenario(
-    scenario_id: str, user: CurrentUser, db: Session = Depends(get_db)
-) -> None:
-    _verify_scenario_owner(scenario_id, user, db)
+def close_scenario(scenario_id: str, user: CurrentUser, db: Session = Depends(get_db)) -> None:
+    verify_scenario_owner(scenario_id, user, db)
     ScenarioService(db).close(scenario_id)
 
 
@@ -164,7 +145,7 @@ def close_scenario(
 def run_reasoning(
     scenario_id: str, user: CurrentUser, db: Session = Depends(get_db)
 ) -> ScenarioRun:
-    _verify_scenario_owner(scenario_id, user, db)
+    verify_scenario_owner(scenario_id, user, db)
     return ScenarioService(db).run_reasoning(scenario_id)
 
 
@@ -187,7 +168,7 @@ def evolve_scenario(
     from app.services.evolution import EvolutionService
     from app.services.scenario_pathway import resolve_scenario_pathway
 
-    scenario = _verify_scenario_owner(scenario_id, user, db)
+    scenario = verify_scenario_owner(scenario_id, user, db)
     # 解析关联 Pathway —— 优先用显式 pathway_id，再回退到反查
     pathway = None
     if scenario.pathway_id:
@@ -207,7 +188,7 @@ def evolve_scenario(
         )
 
     try:
-        result = EvolutionService(db).evolve(pathway, user)
+        result = EvolutionService(db).evolve(pathway, user, scenario)
     except LifeTreeError:
         raise  # domain errors (e.g. LLMNotConfiguredError) have proper status codes
     except Exception as exc:
@@ -233,7 +214,7 @@ def get_evolution(
 
     Returns 404 if the scenario has never been evolved.
     """
-    scenario = _verify_scenario_owner(scenario_id, user, db)
+    scenario = verify_scenario_owner(scenario_id, user, db)
     meta = dict(scenario.meta or {})
     cached = meta.get("evolution")
     if not cached:
@@ -257,7 +238,7 @@ def get_evolution(
 def list_runs(
     scenario_id: str, user: CurrentUser, db: Session = Depends(get_db)
 ) -> list[ScenarioRun]:
-    _verify_scenario_owner(scenario_id, user, db)
+    verify_scenario_owner(scenario_id, user, db)
     return list(
         db.scalars(
             select(ScenarioRun)
@@ -276,17 +257,15 @@ def spawn_branch(
     impact_threshold: float = 0.05,
     db: Session = Depends(get_db),
 ) -> ScenarioRead:
-    parent = _verify_scenario_owner(scenario_id, user, db)
+    parent = verify_scenario_owner(scenario_id, user, db)
     return ScenarioService(db).spawn_branch(
         parent, name=name, assumptions=assumptions, impact_threshold=impact_threshold
     )
 
 
 @router.post("/goals/{goal_id}/prune", response_model=int)
-def prune_low_impact(
-    goal_id: str, user: CurrentUser, db: Session = Depends(get_db)
-) -> int:
-    _verify_goal_owner(goal_id, user, db)
+def prune_low_impact(goal_id: str, user: CurrentUser, db: Session = Depends(get_db)) -> int:
+    verify_goal_owner(goal_id, user, db)
     return ScenarioService(db).prune_low_impact(goal_id)
 
 
@@ -301,7 +280,7 @@ def merge_into_parent(
     as ``merged``. Implements §4.3 of the project plan: "当存疑信息被
     证实或证伪时，分支自动合并".
     """
-    _verify_scenario_owner(scenario_id, user, db)
+    verify_scenario_owner(scenario_id, user, db)
     parent = ScenarioService(db).merge_into_parent(scenario_id)
     if parent is None:
         raise HTTPException(

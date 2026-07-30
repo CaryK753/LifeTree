@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.core.tenant import CurrentUser
 from app.db.postgres import get_db
-from app.models.goal import Goal, Pathway, Requirement, RiskFactor
+from app.models.goal import Goal, Pathway, Requirement, RiskFactor, pathway_requirements
 from app.models.memory import UserMemory
 from app.models.scenario import Scenario
 from app.models.user import UserProfile
@@ -90,7 +90,7 @@ def _build_context_block(
         goal = db.get(Goal, user.primary_goal_id)
 
     if goal is not None:
-        parts.append(f"\n# Goal: {goal.title}")
+        parts.append(f"\n# Goal: {goal.title} [id={goal.id}]")
         parts.append(f"- Scenario: {goal.scenario}")
         parts.append(f"- Status: {goal.status}")
         if goal.target_date:
@@ -100,18 +100,31 @@ def _build_context_block(
 
         pathways = list(db.scalars(select(Pathway).where(Pathway.goal_id == goal.id)))
         for p in pathways[:3]:
-            parts.append(f"\n## Pathway: {p.name} ({p.status})")
+            parts.append(f"\n## Pathway: {p.name} ({p.status}) [id={p.id}]")
             reqs = list(
                 db.scalars(
                     select(Requirement)
-                    .where(Requirement.pathway_id == p.id)
+                    .join(
+                        pathway_requirements,
+                        pathway_requirements.c.requirement_id == Requirement.id,
+                    )
+                    .where(pathway_requirements.c.pathway_id == p.id)
                     .order_by(Requirement.weight.desc())
                     .limit(10)
                 )
             )
+            if not reqs:
+                reqs = list(
+                    db.scalars(
+                        select(Requirement)
+                        .where(Requirement.pathway_id == p.id)
+                        .order_by(Requirement.weight.desc())
+                        .limit(10)
+                    )
+                )
             for r in reqs:
                 parts.append(
-                    f"  - Requirement: {r.name} ({r.type}) "
+                    f"  - Requirement: {r.name} ({r.type}) [id={r.id}] "
                     f"threshold={r.threshold} current={r.current_value} "
                     f"gap={r.gap_status}"
                 )
@@ -132,11 +145,14 @@ def _build_context_block(
         parts.append("\n# Top Risk Factors")
         for rf in rfs:
             parts.append(
-                f"- {rf.name} [{rf.type}] level={rf.level} urgency={rf.urgency}"
+                f"- {rf.name} [{rf.type}|id={rf.id}] "
+                f"level={rf.level} urgency={rf.urgency}"
             )
 
     if scenario is not None:
-        parts.append(f"\n# Active Scenario: {scenario.name}")
+        parts.append(f"\n# Active Scenario: {scenario.name} [id={scenario.id}]")
+        if scenario.pathway_id:
+            parts.append(f"- Pathway ID: {scenario.pathway_id}")
         parts.append(
             f"- Assumptions: {json.dumps(scenario.assumptions, ensure_ascii=False)}"
         )
@@ -435,6 +451,7 @@ async def chat_stream(
             async for event in graph.astream_events(
                 {"messages": lc_messages},
                 version="v2",
+                config={"max_concurrency": 1},
             ):
                 kind = event.get("event")
                 if kind == "on_chat_model_stream":

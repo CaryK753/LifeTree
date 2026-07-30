@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { AlertTriangle, Check, ExternalLink, Loader2, Radio, X } from "lucide-react";
-import { api, type ReviewConflict, type ReviewRiskProposal } from "@/lib/api";
+import { api, type ReviewRiskProposal } from "@/lib/api";
 import { useUnifiedReview } from "@/lib/hooks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,7 +31,7 @@ export function IntelligenceReviewSections() {
   if (isLoading) return <Skeleton className="h-28 w-full" />;
   if (!data) return null;
   const intelligenceCount =
-    data.counts.source_proposals + data.counts.risk_proposals + data.counts.conflicts;
+    data.counts.source_proposals + data.counts.risk_proposals;
   if (intelligenceCount === 0) return null;
 
   return (
@@ -67,10 +67,6 @@ export function IntelligenceReviewSections() {
         {data.risk_proposals.map((risk) => (
           <RiskRow key={risk.id} risk={risk} working={working} run={run} />
         ))}
-
-        {data.conflicts.map((conflict) => (
-          <ConflictRow key={`${conflict.subject_id}:${conflict.predicate}`} conflict={conflict} working={working} run={run} />
-        ))}
       </CardContent>
     </Card>
   );
@@ -97,33 +93,6 @@ function RiskRow({ risk, working, run }: {
         onAccept={() => pathwayId && run(risk.id, () => api.adoptRiskProposal(risk, pathwayId))}
         onReject={() => run(risk.id, () => api.rejectRiskProposal(risk.id))}
       />
-    </div>
-  );
-}
-
-function ConflictRow({ conflict, working, run }: {
-  conflict: ReviewConflict;
-  working: string | null;
-  run: (id: string, operation: () => Promise<unknown>) => Promise<void>;
-}) {
-  const id = `${conflict.subject_id}:${conflict.predicate}`;
-  return (
-    <div className="px-4 py-3">
-      <div className="text-sm font-medium">信源结论冲突 · {conflict.predicate}</div>
-      <div className="mt-2 flex flex-wrap gap-2">
-        {conflict.conflicting_values.filter((value) => value.source_id).map((value) => (
-          <Button
-            key={`${value.object_id}:${value.source_id}`}
-            size="sm"
-            variant="outline"
-            disabled={working === id}
-            onClick={() => run(id, () => api.resolveSourceConflict(conflict, value.source_id!))}
-          >
-            {working === id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-            <span className="ml-1.5 max-w-40 truncate">{value.source_title || value.source_id}</span>
-          </Button>
-        ))}
-      </div>
     </div>
   );
 }

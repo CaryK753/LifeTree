@@ -159,7 +159,7 @@ export default function SourcesPage() {
             {t("sources.reviewHint", { count: pendingSources.length })}
           </div>
           <Button asChild size="sm" variant="outline" className="gap-1.5 shrink-0">
-            <Link href="/review">
+            <Link href="/review?tab=sources">
               <Inbox className="h-3.5 w-3.5" />
               {t("sources.goReviewCenter")}
             </Link>

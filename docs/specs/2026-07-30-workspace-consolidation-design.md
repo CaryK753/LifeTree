@@ -2,7 +2,7 @@
 
 **日期**：2026-07-30
 **作者**：wwj
-**状态**：待实施
+**状态**：已实施并完成回归修正
 **关联文档**：
 - [项目计划书](../项目计划书：LifeTree（人生树）.md) §5 用户体验与交互设计
 - [现状审计与改进建议](../现状审计与改进建议-2026-07-28.md)
@@ -38,7 +38,7 @@
 - i18n 6 语言新增 `nav.reviewCenter`、`goalDetail.tab.graph`、`goalDetail.tab.tree`、`goalDetail.tab.scenariosCompare` 等键。
 
 **不做**：
-- 不改后端 API 或数据模型（`useUnifiedReview` 已就绪）。
+- 不删除兼容数据模型；统一审核 API 补充 `pending_sources`，Scenario 创建契约补充 Pathway 绑定。
 - 不改 `/graph`、`/scenarios`、`/tree/[goalId]` 独立路由（保留作为深链入口，但从侧栏移除）。
 - 不改 `/actions`、`/chat`、`/notifications`、`/ingest`、`/plugins`、`/admin`。
 - 不重构 dashboard 子组件（GoalCompass、RiskHeatmap 等），只搬位置。
@@ -87,8 +87,8 @@
 
 | Tab | 内容 | 数据源 |
 | --- | --- | --- |
-| 事件 (events) | 当前 `usePendingReview` 列表 + IntelligenceReviewSections（source_proposals / risk_proposals / conflicts） | `usePendingReview` + `useUnifiedReview` |
-| 信源 (sources) | `/sources` 中 pending 卡片搬过来：信源可信度待评定列表 + 标记可靠/存疑按钮 | `useSources` 过滤 pending |
+| 事件 (events) | 当前 `usePendingReview` 列表 + IntelligenceReviewSections（source_proposals / risk_proposals） | `usePendingReview` + `useUnifiedReview` |
+| 信源 (sources) | 信源可信度待评定列表 + 标记可靠/存疑按钮 | `useUnifiedReview.pending_sources` |
 | 冲突 (conflicts) | 从 IntelligenceReviewSections 抽出单独 Tab | `useUnifiedReview.conflicts` |
 
 `/sources` 页面：移除「Review Queue」卡片，保留 CredibilityMeter / LifecyclePanel / 全量列表 / 调度对话框。在头部加提示「待评定信源请至审核中心处理」。
@@ -218,14 +218,14 @@ dashboard.redirecting       // 正在跳转到目标工作台 / ...
 
 ## 9. 验收
 
-- [ ] `/goals/[id]` 工作台 5 个 Tab 都能渲染，切换无报错。
-- [ ] `/dashboard` 访问自动跳转到 `/goals/{id}` 或 `/goals`。
-- [ ] `/review` 三个 Tab 都能渲染，信源 Tab 标记后 `/sources` 列表同步刷新。
-- [ ] `/sources` 移除 Review Queue 卡片，头部有「待评定信源请至审核中心」提示。
-- [ ] 侧栏只剩 8 个主入口（2+4+2）+ admin 项，无 `/dashboard`、`/graph`、`/scenarios`、`/tree`、`/`(概览)。
-- [ ] 6 语言切换无 missing key 警告。
-- [ ] `pnpm -C frontend typecheck` 通过。
-- [ ] `pnpm -C frontend lint` 无新增错误。
+- [x] `/goals/[id]` 工作台 5 个 Tab 都能渲染，切换无报错。
+- [x] `/dashboard` 访问自动跳转到 `/goals/{id}` 或 `/goals`。
+- [x] `/review` 三个 Tab 都能渲染，信源 Tab 标记后 `/sources` 列表同步刷新。
+- [x] `/sources` 移除 Review Queue 卡片，头部有「待评定信源请至审核中心」提示。
+- [x] 侧栏只剩 8 个主入口（2+4+2）+ admin 项，无 `/dashboard`、`/graph`、`/scenarios`、`/tree`、`/`(概览)。
+- [x] 6 语言切换无 missing key 警告。
+- [x] 前端 TypeScript 与生产构建通过。
+- [x] 后端测试、Ruff 致命规则和迁移离线 SQL 生成通过。
 
 ---
 

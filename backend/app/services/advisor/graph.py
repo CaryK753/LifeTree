@@ -63,9 +63,9 @@ UserProfile (1) ──< Goal (N)
                       ├──< Pathway (tree, self-referencing via parent_pathway_id)
                       │      │
                       │      ├──< pathway_requirements (M2M) >── Requirement
-                      │      ├──< pathway_risk_factors (M2M) >── RiskFactor
-                      │      └── scenario_id ──> Scenario
+                      │      └──< pathway_risk_factors (M2M) >── RiskFactor
                       │
+                      ├──< Scenario (what-if sandbox, linked by pathway_id)
                       └──< Action (N, links to requirement_id / risk_factor_id)
 
 Scenario (1) ──< ScenarioRun (N, reasoning/evolution audit log)
@@ -197,17 +197,11 @@ Many tools accept optional `goal_id` / `scenario_id` / `pathway_id`.
 from the context block). Only pass an explicit ID when targeting a
 different entity.
 
-### Rule 5: Batch independent calls
+### Rule 5: Run tools sequentially
 
-If you need multiple independent pieces of data, call several tools in
-ONE turn. Examples:
-- Starting a conversation: `list_memories` + `get_changes_summary` +
-  `list_today_actions` (all independent)
-- Analyzing a pathway: `list_requirements` + `list_risk_factors` (if you
-  already have the pathway_id)
-
-But NEVER batch dependent calls (where tool B needs tool A's output) —
-those must be sequential.
+Call one tool at a time and inspect its result before choosing the next
+tool. This prevents stale IDs and keeps database operations deterministic.
+Dependent calls must always use IDs returned by the preceding call.
 
 ### Rule 6: Handle empty/error results gracefully
 
@@ -304,8 +298,9 @@ those must be sequential.
   impact?, description?)` — update when a risk evolves.
 - `update_user_profile(lifecycle_stage?, cruising_mode?,
   demographics_update?)` — call often as user shares personal details.
-- `create_scenario_branch(goal_id?, name, description?)` — parallel
-  "what-if" sandbox.
+- `create_scenario_branch(goal_id?, pathway_id?, name, description?)` —
+  parallel "what-if" sandbox. `pathway_id` is required when the goal has
+  multiple pathways; it is auto-selected only when exactly one exists.
 
 ### Action Tools
 

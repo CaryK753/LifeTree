@@ -18,6 +18,7 @@ from datetime import date as date_type
 from datetime import datetime, timezone
 from typing import Any
 
+from fastapi import HTTPException
 from langchain_core.tools import StructuredTool, tool
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
@@ -45,6 +46,7 @@ from app.services.goal_identity import find_equivalent_goal, lock_goal_identity
 from app.services.graph import GraphService
 from app.services.risk_adoption import adopt_risk_for_pathway
 from app.services.risk_scope import risk_scope_clause
+from app.services.scenario_contracts import resolve_create_pathway_id
 from app.services.scenarios import ScenarioService
 from app.services.source_discovery import SourceDiscoveryService
 from app.services.tree_evolution import TreeEvolutionService
@@ -81,6 +83,10 @@ class RunScenarioReasoningInput(BaseModel):
 
 class GetScenarioSummaryInput(BaseModel):
     scenario_id: str | None = Field(None, description="Scenario ID to summarize. Omit to use the current scenario context.")
+
+
+class EmptyInput(BaseModel):
+    """Explicit no-argument schema for tools that only use bound context."""
 
 
 # --- Write tools (create ontology entities) ---
@@ -525,13 +531,35 @@ def build_advisor_tools(
         effective_goal_id = goal_id or goal_id_context
         if not effective_goal_id:
             return {"error": "no_goal_context", "message": "No goal_id provided and no goal context set for this conversation."}
+        goal = db.get(Goal, effective_goal_id)
+        if goal is None:
+            return {"error": "goal_not_found", "goal_id": effective_goal_id}
+        if goal.user_id != user_id:
+            return {"error": "forbidden", "goal_id": effective_goal_id}
         pathways = list(
             db.scalars(
                 select(Pathway)
-                .where(Pathway.goal_id == effective_goal_id)
+                .where(
+                    Pathway.goal_id == effective_goal_id,
+                    Pathway.deleted_at.is_(None),
+                )
                 .order_by(Pathway.tree_level.asc(), Pathway.display_order.asc())
             )
         )
+        pathway_ids = [pathway.id for pathway in pathways]
+        scenarios_by_pathway: dict[str, list[str]] = {}
+        if pathway_ids:
+            linked_scenarios = db.scalars(
+                select(Scenario).where(
+                    Scenario.pathway_id.in_(pathway_ids),
+                    Scenario.deleted_at.is_(None),
+                )
+            )
+            for scenario in linked_scenarios:
+                if scenario.pathway_id:
+                    scenarios_by_pathway.setdefault(scenario.pathway_id, []).append(
+                        scenario.id
+                    )
         return {
             "pathways": [
                 {
@@ -546,6 +574,7 @@ def build_advisor_tools(
                     "evolution_hint": p.evolution_hint,
                     "region": p.region,
                     "description": p.description,
+                    "scenario_ids": scenarios_by_pathway.get(p.id, []),
                     "scenario_id": p.scenario_id,
                 }
                 for p in pathways
@@ -560,6 +589,13 @@ def build_advisor_tools(
         Falls back to the legacy Requirement.pathway_id column when no M2M
         rows exist (pre-migration data).
         """
+        pathway = db.get(Pathway, pathway_id)
+        goal = db.get(Goal, pathway.goal_id) if pathway is not None else None
+        if pathway is None:
+            return {"error": "pathway_not_found", "pathway_id": pathway_id}
+        if goal is None or goal.user_id != user_id:
+            return {"error": "forbidden", "pathway_id": pathway_id}
+
         # §11.3: query M2M table first
         reqs = list(
             db.scalars(
@@ -677,6 +713,9 @@ def build_advisor_tools(
         sc = db.get(Scenario, effective_scenario_id)
         if sc is None:
             return {"error": "scenario_not_found", "scenario_id": effective_scenario_id}
+        goal = db.get(Goal, sc.goal_id)
+        if goal is None or goal.user_id != user_id:
+            return {"error": "forbidden", "scenario_id": effective_scenario_id}
         return {
             "id": sc.id,
             "name": sc.name,
@@ -703,6 +742,15 @@ def build_advisor_tools(
         # internally multiple times, which would race with other tools on
         # the shared request session.
         with SessionLocal() as session:
+            scenario = session.get(Scenario, effective_scenario_id)
+            if scenario is None:
+                return {
+                    "error": "scenario_not_found",
+                    "scenario_id": effective_scenario_id,
+                }
+            goal = session.get(Goal, scenario.goal_id)
+            if goal is None or goal.user_id != user_id:
+                return {"error": "forbidden", "scenario_id": effective_scenario_id}
             service = ScenarioService(session)
             try:
                 run = service.run_reasoning(effective_scenario_id)
@@ -807,10 +855,17 @@ def build_advisor_tools(
             g = session.get(Goal, effective_goal_id)
             if g is None:
                 return {"error": "goal_not_found", "goal_id": effective_goal_id}
+            if g.user_id != user_id:
+                return {"error": "forbidden", "goal_id": effective_goal_id}
             if parent_pathway_id:
                 parent = session.get(Pathway, parent_pathway_id)
                 if parent is None:
                     return {"error": "parent_pathway_not_found", "parent_pathway_id": parent_pathway_id}
+                if parent.goal_id != effective_goal_id:
+                    return {
+                        "error": "parent_pathway_goal_mismatch",
+                        "parent_pathway_id": parent_pathway_id,
+                    }
             p = Pathway(
                 goal_id=effective_goal_id,
                 name=name,
@@ -870,6 +925,9 @@ def build_advisor_tools(
             p = session.get(Pathway, pathway_id)
             if p is None:
                 return {"error": "pathway_not_found", "pathway_id": pathway_id}
+            goal = session.get(Goal, p.goal_id)
+            if goal is None or goal.user_id != user_id:
+                return {"error": "forbidden", "pathway_id": pathway_id}
             r = Requirement(
                 pathway_id=pathway_id,
                 name=name,
@@ -928,6 +986,30 @@ def build_advisor_tools(
             req = session.get(Requirement, requirement_id)
             if req is None:
                 return {"error": "requirement_not_found", "requirement_id": requirement_id}
+            owned_pathway = session.scalar(
+                select(Pathway)
+                .join(Goal, Goal.id == Pathway.goal_id)
+                .join(
+                    pathway_requirements,
+                    pathway_requirements.c.pathway_id == Pathway.id,
+                )
+                .where(
+                    pathway_requirements.c.requirement_id == requirement_id,
+                    Goal.user_id == user_id,
+                )
+                .limit(1)
+            )
+            if owned_pathway is None and req.pathway_id:
+                legacy_pathway = session.get(Pathway, req.pathway_id)
+                legacy_goal = (
+                    session.get(Goal, legacy_pathway.goal_id)
+                    if legacy_pathway is not None
+                    else None
+                )
+                if legacy_goal is not None and legacy_goal.user_id == user_id:
+                    owned_pathway = legacy_pathway
+            if owned_pathway is None:
+                return {"error": "forbidden", "requirement_id": requirement_id}
 
             req.gap_status = gap_status
             if current_value is not None:
@@ -1138,9 +1220,9 @@ def build_advisor_tools(
                 return {"ok": False, "error": "user_not_found"}
             demo = dict(user.demographics or {})
             if lifecycle_stage:
-                demo["lifecycle_stage"] = lifecycle_stage
+                user.lifecycle_stage = lifecycle_stage
             if cruising_mode is not None:
-                demo["cruising_mode"] = cruising_mode
+                user.cruising_mode = cruising_mode
             if demographics_update:
                 demo.update(demographics_update)
             user.demographics = demo
@@ -1175,10 +1257,22 @@ def build_advisor_tools(
                 pathway = session.get(Pathway, pathway_id)
                 if pathway is None or pathway.goal_id != g.id:
                     return {"error": "pathway_not_found", "pathway_id": pathway_id}
+            try:
+                effective_pathway_id = resolve_create_pathway_id(
+                    session,
+                    goal_id=effective_goal_id,
+                    pathway_id=pathway_id,
+                )
+            except HTTPException as exc:
+                return {
+                    "error": "invalid_pathway" if pathway_id else "pathway_required",
+                    "message": str(exc.detail),
+                    "goal_id": effective_goal_id,
+                }
             sc_svc = ScenarioService(session)
             sc = sc_svc.create_branch(
                 goal_id=effective_goal_id,
-                pathway_id=pathway_id,
+                pathway_id=effective_pathway_id,
                 name=name,
                 description=description,
             )
@@ -1186,6 +1280,7 @@ def build_advisor_tools(
             return {
                 "ok": True,
                 "scenario_id": sc.id,
+                "pathway_id": sc.pathway_id,
                 "name": sc.name,
                 "branch_count": branch_count,
             }
@@ -1515,7 +1610,10 @@ def build_advisor_tools(
         Use this at the start of a conversation with a multi-goal user, or
         when the user wants to switch context to a different goal.
         """
-        stmt = select(Goal).where(Goal.user_id == user_id)
+        stmt = select(Goal).where(
+            Goal.user_id == user_id,
+            Goal.deleted_at.is_(None),
+        )
         if status:
             stmt = stmt.where(Goal.status == status)
         stmt = stmt.order_by(Goal.created_at.desc())
@@ -1607,6 +1705,8 @@ def build_advisor_tools(
             rf = session.get(RiskFactor, risk_factor_id)
             if rf is None:
                 return {"error": "risk_factor_not_found", "risk_factor_id": risk_factor_id}
+            if rf.user_id != user_id:
+                return {"error": "forbidden", "risk_factor_id": risk_factor_id}
             if level is not None:
                 rf.level = level
             if urgency is not None:
@@ -1646,6 +1746,9 @@ def build_advisor_tools(
             sc = db.get(Scenario, sid)
             if sc is None:
                 return {"error": "scenario_not_found", "scenario_id": sid}
+            goal = db.get(Goal, sc.goal_id)
+            if goal is None or goal.user_id != user_id:
+                return {"error": "forbidden", "scenario_id": sid}
             scenarios.append(sc)
         comparison = []
         for sc in scenarios:
@@ -1764,7 +1867,7 @@ def build_advisor_tools(
             except Exception as exc:  # noqa: BLE001
                 return {"error": "reject_failed", "message": str(exc)}
 
-    @tool("list_conflicts", args_schema=BaseModel)
+    @tool("list_conflicts", args_schema=EmptyInput)
     def list_conflicts() -> dict[str, Any]:
         """Find cross-source conflicts: same fact, different values from different sources.
 
@@ -1793,7 +1896,7 @@ def build_advisor_tools(
 
     # ---------- Profile & changes tools ----------
 
-    @tool("get_user_profile", args_schema=BaseModel)
+    @tool("get_user_profile", args_schema=EmptyInput)
     def get_user_profile() -> dict[str, Any]:
         """Get the user's full profile: demographics, lifecycle stage, cruising mode."""
         user = db.get(UserProfile, user_id)
@@ -1807,7 +1910,7 @@ def build_advisor_tools(
             "risk_tolerance": user.risk_tolerance,
         }
 
-    @tool("get_changes_summary", args_schema=BaseModel)
+    @tool("get_changes_summary", args_schema=EmptyInput)
     def get_changes_summary() -> dict[str, Any]:
         """Get a summary of what changed since the user's last visit.
 
@@ -2025,9 +2128,10 @@ def build_advisor_tools(
                 parent_sc = session.get(Scenario, parent.scenario_id)
                 new_sc = Scenario(
                     goal_id=parent.goal_id,
+                    pathway_id=new_pathway.id,
                     name=f"{name} (branch)",
                     description=description,
-                    status="draft",
+                    status="active",
                     parent_scenario_id=parent.scenario_id,
                     assumptions=dict(parent_sc.assumptions or {}) if parent_sc else {},
                     impact_threshold=0.05,

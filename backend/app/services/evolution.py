@@ -39,6 +39,7 @@ from app.models.memory import UserMemory
 from app.models.scenario import Scenario, ScenarioRun, ScenarioStatus
 from app.models.user import UserProfile
 from app.services.risk_scope import risk_scope_clause
+
 # 保留 resolve_scenario_pathway 用于向后兼容入口（evolve_scenario_async）
 from app.services.scenario_pathway import resolve_scenario_pathway
 
@@ -128,7 +129,12 @@ class EvolutionService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def evolve(self, pathway: Pathway, user: CurrentUser) -> dict[str, Any]:
+    def evolve(
+        self,
+        pathway: Pathway,
+        user: CurrentUser,
+        scenario: Scenario | None = None,
+    ) -> dict[str, Any]:
         """Project the next 24 months of events for ``pathway``.
 
         Returns a dict with ``projection`` (the LLM output) and ``trajectory``
@@ -144,7 +150,7 @@ class EvolutionService:
         started_at = datetime.now(timezone.utc)
 
         # 查找关联的 Scenario（向后兼容：审计记录与缓存仍需要 scenario_id）
-        scenario = self._resolve_linked_scenario(pathway)
+        scenario = scenario or self._resolve_linked_scenario(pathway)
 
         # ScenarioRun.scenario_id 是 NOT NULL 的外键，所以只有当存在关联
         # Scenario 时才写审计记录。
@@ -161,7 +167,7 @@ class EvolutionService:
             self.db.commit()
 
         try:
-            context = self._build_context(pathway, user)
+            context = self._build_context(pathway, user, scenario)
             prompt_messages = self._build_prompt(pathway, context)
 
             try:
@@ -320,7 +326,12 @@ class EvolutionService:
 
     # ---------------- Context loading ----------------
 
-    def _build_context(self, pathway: Pathway, user: CurrentUser) -> dict[str, Any]:
+    def _build_context(
+        self,
+        pathway: Pathway,
+        user: CurrentUser,
+        scenario: Scenario | None = None,
+    ) -> dict[str, Any]:
         """Load all long-term accumulated data that informs the projection.
 
         v0.4.0：直接使用传入的 Pathway，不再通过 resolve_scenario_pathway
@@ -402,9 +413,13 @@ class EvolutionService:
         except LLMNotConfiguredError:
             model_name = "gpt-4o-mini"  # fallback; instructor will raise anyway
 
-        # 基线 P50：优先读 Pathway.success_probability
+        # Scenario endpoint calls must use the selected sandbox, not another
+        # scenario that happens to share the same pathway.
+        scenario_sp = scenario.success_probability if scenario is not None else {}
         pathway_sp = pathway.success_probability or {}
-        if isinstance(pathway_sp, dict) and pathway_sp:
+        if isinstance(scenario_sp, dict) and scenario_sp:
+            base_p50 = float(scenario_sp.get("p50", 0.5))
+        elif isinstance(pathway_sp, dict) and pathway_sp:
             base_p50 = float(pathway_sp.get("p50", 0.5))
         else:
             # 向后兼容：Pathway 上没有数据时回退到关联 Scenario
@@ -413,6 +428,12 @@ class EvolutionService:
                 base_p50 = float((scenario.success_probability or {}).get("p50", 0.5))
             else:
                 base_p50 = 0.5
+
+        summary = self._summarize_context(
+            goal, pathway, requirements, risk_factors, profile, memories, recent_events
+        )
+        if scenario is not None and scenario.assumptions:
+            summary += f"\nScenario assumptions: {dict(scenario.assumptions)}"
 
         return {
             "goal": goal,
@@ -424,9 +445,7 @@ class EvolutionService:
             "recent_events": recent_events,
             "model_name": model_name,
             "base_p50": base_p50,
-            "summary": self._summarize_context(
-                goal, pathway, requirements, risk_factors, profile, memories, recent_events
-            ),
+            "summary": summary,
         }
 
     @staticmethod
