@@ -34,6 +34,7 @@ ENV/
 .env
 .env.local
 .env.*.local
+.lifetree-local/
 
 # Docker Compose local override (dev bind mounts, port changes, etc.)
 # Created per-host by the developer; never committed.

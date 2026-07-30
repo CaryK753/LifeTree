@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,6 +27,13 @@ class Settings(BaseSettings):
     app_backend_port: int = 18000
     app_frontend_port: int = 13000
     app_cors_origins: str = "http://localhost:13000"
+
+    # ---------- Runtime storage ----------
+    # ``local`` currently enables the desktop-ready directory and secret
+    # foundations only. Database/blob/job adapters remain server-backed until
+    # their explicit ports are implemented.
+    lifetree_storage_mode: Literal["server", "local"] = "server"
+    lifetree_data_dir: Path | None = None
 
     # ---------- PostgreSQL ----------
     postgres_user: str = "lifetree"
@@ -129,6 +137,13 @@ class Settings(BaseSettings):
         if v is None or v.strip() == "":
             return None
         return v.rstrip("/")
+
+    @field_validator("lifetree_data_dir", mode="before")
+    @classmethod
+    def _normalize_data_dir(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @property
     def llm_configured(self) -> bool:
