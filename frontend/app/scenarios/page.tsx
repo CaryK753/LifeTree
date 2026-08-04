@@ -31,7 +31,7 @@ export default function ScenariosRedirectPage() {
         {t("scenarios.title")}
       </h1>
       <Card>
-        <CardContent className="flex items-center justify-center gap-2 py-12 text-sm text-muted">
+        <CardContent className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           {t("dashboard.redirecting")}
         </CardContent>

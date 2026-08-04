@@ -47,18 +47,18 @@ export function ReviewEventCard({
                 {t(`review.riskLevel.${level}`)}
               </Badge>
             </div>
-            <div className="text-xs text-muted mt-1">
+            <div className="text-xs text-muted-foreground mt-1">
               <span className="text-foreground/80">{event.action}</span>
               {event.object && <span> · {event.object}</span>}
             </div>
           </div>
-          <div className="text-[10px] text-muted text-right shrink-0">
+          <div className="text-[10px] text-muted-foreground text-right shrink-0">
             <div>{formatDate(event.created_at)}</div>
             {occurredAt && <div>{t("review.occurred", { date: formatDate(occurredAt) })}</div>}
           </div>
         </div>
 
-        <div className="flex items-center gap-3 text-[10px] text-muted flex-wrap">
+        <div className="flex items-center gap-3 text-[10px] text-muted-foreground flex-wrap">
           {riskType && <span>{t("review.riskType")}: <span className="text-foreground/80">{riskType}</span></span>}
           {confidence != null && (
             <span className="inline-flex items-center gap-1.5">

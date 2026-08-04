@@ -119,7 +119,12 @@ async def check_update() -> dict[str, str | bool | None]:
             return {"has_update": False, "latest_version": None, "release_url": None}
         data = resp.json()
         latest = (data.get("tag_name") or "").lstrip("v")
-        current = "0.2.0"
+        # Dynamically read current version from package metadata
+        try:
+            from importlib.metadata import version as _pkg_version
+            current = _pkg_version("lifetree-backend")
+        except Exception:
+            current = "0.0.0"
         # Simple semver compare (major.minor.patch).
         def _parse(v: str):
             parts = []

@@ -22,7 +22,7 @@ export function EventsReviewTab() {
       {queue.items.length > 0 && (
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-1 p-1 rounded-lg bg-surface-2/60 border border-border/10">
-            <Filter className="h-3.5 w-3.5 text-muted mx-1.5" />
+            <Filter className="h-3.5 w-3.5 text-muted-foreground mx-1.5" />
             {filters.map((filter) => (
               <FilterButton
                 key={filter}
@@ -51,10 +51,10 @@ export function EventsReviewTab() {
       ) : queue.items.length === 0 ? (
         <EmptyReviewState />
       ) : queue.filteredItems.length === 0 ? (
-        <Card><CardContent className="py-10 text-center text-sm text-muted">{t("review.noFiltered")}</CardContent></Card>
+        <Card><CardContent className="py-10 text-center text-sm text-muted-foreground">{t("review.noFiltered")}</CardContent></Card>
       ) : (
         <>
-          <div className="flex items-center gap-1.5 text-[11px] text-muted">
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <Keyboard className="h-3 w-3" />{t("review.shortcut.hint")}
           </div>
           <div className="space-y-3">
@@ -80,7 +80,7 @@ function FilterButton({ active, label, count, onClick }: {
   count: number;
   onClick: () => void;
 }) {
-  return <button type="button" onClick={onClick} className={cn("inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium", active ? "bg-surface text-foreground shadow-sm" : "text-muted hover:text-foreground")}><span>{label}</span><span className="rounded-full bg-brand-500/15 px-1.5 py-0.5 text-[10px]">{count}</span></button>;
+  return <button type="button" onClick={onClick} className={cn("inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium", active ? "bg-surface text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}><span>{label}</span><span className="rounded-full bg-brand-500/15 px-1.5 py-0.5 text-[10px]">{count}</span></button>;
 }
 
 function ReviewSkeleton() {
@@ -94,7 +94,7 @@ function EmptyReviewState() {
       <CardContent className="py-12 text-center space-y-3">
         <div className="mx-auto h-12 w-12 rounded-full bg-brand-500/10 flex items-center justify-center"><Check className="h-6 w-6 text-brand-500" /></div>
         <div className="text-sm">{t("review.empty")}</div>
-        <p className="text-xs text-muted">{t("review.emptyHint")}</p>
+        <p className="text-xs text-muted-foreground">{t("review.emptyHint")}</p>
         <div className="flex justify-center gap-2 pt-2">
           <Button asChild variant="outline" size="sm"><Link href="/ingest"><ExternalLink className="h-3.5 w-3.5 mr-1.5" />{t("review.goIngest")}</Link></Button>
           <Button asChild variant="ghost" size="sm"><Link href="/goals"><GitBranch className="h-3.5 w-3.5 mr-1.5" />{t("review.viewBranches")}</Link></Button>

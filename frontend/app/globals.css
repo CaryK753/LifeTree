@@ -9,14 +9,21 @@
  * work in both light and dark mode. The `dark` class is applied to <html>
  * by next-themes (attribute="class"). Light mode is the default :root.
  *
- * Tokens:
- *   --background  : page background (rgb triplet, alpha applied via / <alpha>)
- *   --foreground  : primary text
- *   --surface     : card / panel background
- *   --surface-2   : raised surface (hovers, inputs)
- *   --muted       : secondary text
- *   --border      : default border color
- *   --ring        : focus ring
+ * Tokens follow the shadcn/ui naming convention so that third-party
+ * libraries (Streamdown, shadcn components) that use standard class
+ * names like `bg-background`, `text-muted-foreground`, `bg-sidebar`
+ * work out of the box.
+ *
+ *   --background          : page background
+ *   --foreground          : primary text
+ *   --surface             : card / panel background (alias: --card, --sidebar)
+ *   --surface-2           : raised surface (hovers, inputs) (alias: --accent)
+ *   --muted               : muted BACKGROUND (light in light mode)
+ *   --muted-foreground    : muted TEXT (secondary text)
+ *   --border              : default border color
+ *   --ring                : focus ring (alias: --primary)
+ *   --popover             : dropdown/menu background
+ *   --popover-foreground  : dropdown/menu text
  *
  * Values are space-separated RGB triplets (e.g. "15 20 16") so Tailwind's
  * `rgb(var(--x) / <alpha-value>)` form works with opacity modifiers.
@@ -30,9 +37,25 @@
   --surface-2: 244 244 245;        /* zinc-100 */
   --popover: 255 255 255;          /* white — used by shadcn dropdown/menu */
   --popover-foreground: 24 24 27;
-  --muted: 82 82 91;               /* zinc-600 */
+  --muted: 244 244 245;            /* zinc-100 — muted BACKGROUND */
+  --muted-foreground: 82 82 91;    /* zinc-600 — muted TEXT */
   --border: 0 0 0;                 /* black, used with low alpha */
   --ring: 59 141 97;               /* brand-500 */
+  /* shadcn/ui standard aliases */
+  --card: 255 255 255;
+  --card-foreground: 24 24 27;
+  --sidebar: 255 255 255;
+  --sidebar-foreground: 24 24 27;
+  --primary: 59 141 97;            /* brand-500 */
+  --primary-foreground: 255 255 255;
+  --secondary: 244 244 245;        /* zinc-100 */
+  --secondary-foreground: 24 24 27;
+  --accent: 244 244 245;
+  --accent-foreground: 24 24 27;
+  --destructive: 239 68 68;
+  --destructive-foreground: 255 255 255;
+  --input: 0 0 0;                  /* used with low alpha */
+  --radius: 0.5rem;
 }
 
 :root.dark {
@@ -43,9 +66,25 @@
   --surface-2: 30 36 31;
   --popover: 23 29 24;             /* same as surface — used by shadcn dropdown/menu */
   --popover-foreground: 230 235 232;
-  --muted: 156 163 160;            /* #9ca3a0 */
+  --muted: 30 36 31;               /* dark muted BACKGROUND */
+  --muted-foreground: 156 163 160; /* #9ca3a0 — muted TEXT */
   --border: 255 255 255;           /* white, used with low alpha */
   --ring: 59 141 97;
+  /* shadcn/ui standard aliases */
+  --card: 23 29 24;
+  --card-foreground: 230 235 232;
+  --sidebar: 23 29 24;
+  --sidebar-foreground: 230 235 232;
+  --primary: 59 141 97;            /* brand-500 */
+  --primary-foreground: 255 255 255;
+  --secondary: 30 36 31;
+  --secondary-foreground: 230 235 232;
+  --accent: 30 36 31;
+  --accent-foreground: 230 235 232;
+  --destructive: 239 68 68;
+  --destructive-foreground: 255 255 255;
+  --input: 255 255 255;            /* used with low alpha */
+  --radius: 0.5rem;
 }
 
 html, body {
@@ -264,6 +303,52 @@ input[type="time"]::-webkit-calendar-picker-indicator {
 
   /* Surfaces using bg-surface (mapped via tailwind config) are already themed,
      but a few places hard-code bg-black/60 (modal backdrops) — that's fine. */
+}
+
+/* ---------- Streamdown component overrides ----------
+ * Streamdown (Vercel's AI markdown renderer) uses shadcn/ui class names
+ * like bg-background, bg-sidebar, text-muted-foreground internally.
+ * These are now mapped in tailwind.config.ts, but we add explicit
+ * data-attribute selectors as a safety net to guarantee correct
+ * rendering regardless of Tailwind's content scanning.
+ */
+
+/* Table fullscreen overlay — must be opaque to cover page content */
+[data-streamdown="table-fullscreen"] {
+  background-color: rgb(var(--background)) !important;
+}
+
+/* Table wrapper — uses bg-sidebar, ensure it matches surface */
+[data-streamdown="table-wrapper"] {
+  background-color: rgb(var(--surface)) !important;
+}
+
+/* Code block action bar — uses bg-sidebar */
+[data-streamdown="code-block-actions"] > div {
+  background-color: rgb(var(--surface) / 0.8) !important;
+  border-color: rgb(var(--border) / 0.1) !important;
+}
+
+/* Inline code — bg-muted should be a light background in light mode */
+[data-streamdown="inline-code"] {
+  background-color: rgb(var(--muted)) !important;
+  color: rgb(var(--foreground)) !important;
+}
+
+/* Mermaid block — uses bg-sidebar */
+[data-streamdown="mermaid-block"] {
+  background-color: rgb(var(--surface)) !important;
+}
+
+/* Links — text-primary is not scanned from Streamdown dist */
+[data-streamdown="link"] {
+  color: rgb(var(--primary)) !important;
+}
+
+/* Strong/bold — ensure inherited text color in light mode */
+[data-streamdown="strong"] {
+  color: inherit !important;
+  font-weight: 600 !important;
 }
 
 /* ---------- PWA / mobile helpers ---------- */

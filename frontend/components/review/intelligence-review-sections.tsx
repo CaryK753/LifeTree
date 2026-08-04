@@ -49,7 +49,7 @@ export function IntelligenceReviewSections() {
           <div key={source.id} className="flex items-start gap-3 px-4 py-3">
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{source.title}</div>
-              <div className="mt-1 flex items-center gap-2 text-xs text-muted">
+              <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                 <span>相关度 {(source.relevance_score * 100).toFixed(0)}%</span>
                 <a href={source.url} target="_blank" rel="noreferrer" title="查看信源">
                   <ExternalLink className="h-3.5 w-3.5" />
@@ -83,7 +83,7 @@ function RiskRow({ risk, working, run }: {
       <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-500" />
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium">{risk.name}</div>
-        <div className="mt-1 text-xs text-muted">
+        <div className="mt-1 text-xs text-muted-foreground">
           {risk.region || "全球"} · 影响 {risk.affected_goals_count} 个目标
         </div>
       </div>

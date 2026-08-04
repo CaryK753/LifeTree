@@ -50,7 +50,7 @@ export default function ReviewCenterPage() {
             <Inbox className="h-6 w-6 text-brand-500" />
             {t("review.title")}
           </h1>
-          <p className="text-sm text-muted mt-1">{t("review.subtitle")}</p>
+          <p className="text-sm text-muted-foreground mt-1">{t("review.subtitle")}</p>
         </div>
         <Badge variant="risk" riskLevel={total > 0 ? "high" : "low"}>
           {t("review.queueCount", { n: total })}

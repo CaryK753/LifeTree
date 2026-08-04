@@ -6,6 +6,11 @@ const config: Config = {
     "./app/**/*.{ts,tsx}",
     "./components/**/*.{ts,tsx}",
     "./lib/**/*.{ts,tsx}",
+    // Streamdown (AI markdown renderer) uses shadcn/ui class names
+    // internally. Without scanning its dist, Tailwind won't generate
+    // classes like bg-sidebar, text-primary that only appear in the
+    // library's compiled JS.
+    "./node_modules/streamdown/dist/**/*.js",
   ],
   theme: {
     container: {
@@ -38,14 +43,31 @@ const config: Config = {
         // Use `rgb(var(--bg) / <alpha-value>)` form so opacity modifiers
         // like `bg-bg/50` work correctly in both light and dark themes.
         bg: "rgb(var(--background) / <alpha-value>)",
+        background: "rgb(var(--background) / <alpha-value>)",
         surface: "rgb(var(--surface) / <alpha-value>)",
         "surface-2": "rgb(var(--surface-2) / <alpha-value>)",
         popover: "rgb(var(--popover) / <alpha-value>)",
         "popover-foreground": "rgb(var(--popover-foreground) / <alpha-value>)",
         foreground: "rgb(var(--foreground) / <alpha-value>)",
         muted: "rgb(var(--muted) / <alpha-value>)",
+        "muted-foreground": "rgb(var(--muted-foreground) / <alpha-value>)",
         border: "rgb(var(--border) / <alpha-value>)",
         ring: "rgb(var(--ring) / <alpha-value>)",
+        // shadcn/ui standard color names — needed for Streamdown and
+        // shadcn components that use these class names directly.
+        card: "rgb(var(--card) / <alpha-value>)",
+        "card-foreground": "rgb(var(--card-foreground) / <alpha-value>)",
+        sidebar: "rgb(var(--sidebar) / <alpha-value>)",
+        "sidebar-foreground": "rgb(var(--sidebar-foreground) / <alpha-value>)",
+        primary: "rgb(var(--primary) / <alpha-value>)",
+        "primary-foreground": "rgb(var(--primary-foreground) / <alpha-value>)",
+        secondary: "rgb(var(--secondary) / <alpha-value>)",
+        "secondary-foreground": "rgb(var(--secondary-foreground) / <alpha-value>)",
+        accent: "rgb(var(--accent) / <alpha-value>)",
+        "accent-foreground": "rgb(var(--accent-foreground) / <alpha-value>)",
+        destructive: "rgb(var(--destructive) / <alpha-value>)",
+        "destructive-foreground": "rgb(var(--destructive-foreground) / <alpha-value>)",
+        input: "rgb(var(--input) / <alpha-value>)",
       },
       fontFamily: {
         sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],

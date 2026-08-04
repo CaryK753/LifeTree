@@ -84,7 +84,7 @@ export function SourcesReviewTab() {
             <ThumbsUp className="h-6 w-6 text-emerald-500" />
           </div>
           <div className="text-sm text-foreground">{t("review.sources.empty")}</div>
-          <p className="text-xs text-muted">{t("review.sources.subtitle")}</p>
+          <p className="text-xs text-muted-foreground">{t("review.sources.subtitle")}</p>
         </CardContent>
       </Card>
     );
