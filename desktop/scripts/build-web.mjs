@@ -18,8 +18,14 @@ const exportedFrontend = resolve(frontend, ".next-desktop");
 
 // Windows 上 Node.js 的 spawnSync 调用 .cmd/.bat 文件必须启用 shell，
 // 否则报 EINVAL（Node 22+ 更严格）。统一用 shell:true 在所有平台上都安全。
-function run(args, cwd) {
-  const result = spawnSync("npm", args, { cwd, stdio: "inherit", shell: true });
+// `env` 参数允许为子进程注入环境变量（跨平台替代 Unix 的 VAR=value cmd 语法）。
+function run(args, cwd, env) {
+  const result = spawnSync("npm", args, {
+    cwd,
+    stdio: "inherit",
+    shell: true,
+    env: { ...process.env, ...env },
+  });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
@@ -50,7 +56,11 @@ function externalizeInlineScripts(directory) {
   }
 }
 
-run(["run", "build:desktop"], frontend);
+// 通过环境变量注入桌面端构建标志（跨平台，替代 Unix 的 VAR=value cmd 语法）
+run(["run", "build:desktop"], frontend, {
+  LIFETREE_DESKTOP_EXPORT: "1",
+  NEXT_DIST_DIR: ".next-desktop",
+});
 rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
 cpSync(exportedFrontend, output, { recursive: true });
