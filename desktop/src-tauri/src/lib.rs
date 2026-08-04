@@ -8,9 +8,11 @@ use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     window::Color,
-    ActivationPolicy, AppHandle, Manager, State, Theme, WebviewUrl, WebviewWindow,
+    AppHandle, Manager, State, Theme, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, WindowEvent,
 };
+#[cfg(target_os = "macos")]
+use tauri::ActivationPolicy;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_updater::UpdaterExt;
 use url::Url;
@@ -860,6 +862,7 @@ pub fn run() {
                 // 导致应用没有 Dock 图标。显式设为 .regular。
                 // 放在窗口显示逻辑之后，避免 macOS 激活应用时让 visible:false
                 // 的 bootstrap 窗口短暂闪现。
+                #[cfg(target_os = "macos")]
                 let _ = app_handle.set_activation_policy(ActivationPolicy::Regular);
             }
 
