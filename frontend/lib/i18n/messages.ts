@@ -919,6 +919,11 @@ const zhCN: Dict = {
   "settings.about.newVersion": "发现新版本：{version}",
   "settings.about.checkFailed": "无法检查更新",
 
+  // Desktop instance switcher (Tauri only)
+  "settings.desktopInstance.title": "运行实例",
+  "settings.desktopInstance.desc": "切换本地服务、自托管或云端实例。点击后将关闭当前窗口并打开启动器。",
+  "settings.desktopInstance.switch": "切换实例 / 运行模式",
+
   // Backup / restore (P2 整库备份/恢复)
   "settings.backup.title": "数据备份",
   "settings.backup.subtitle": "导出你的全部数据，或从备份中恢复",
@@ -2494,6 +2499,11 @@ const zhTW: Dict = {
   "settings.about.newVersion": "發現新版本：{version}",
   "settings.about.checkFailed": "無法檢查更新",
 
+  // Desktop instance switcher (Tauri only)
+  "settings.desktopInstance.title": "執行實例",
+  "settings.desktopInstance.desc": "切換本地服務、自託管或雲端實例。點擊後將關閉當前視窗並開啟啟動器。",
+  "settings.desktopInstance.switch": "切換實例 / 執行模式",
+
   // Backup / restore (P2 整庫備份/恢復)
   "settings.backup.title": "資料備份",
   "settings.backup.subtitle": "匯出你的全部資料，或從備份中恢復",
@@ -4061,6 +4071,11 @@ const en: Dict = {
   "settings.about.upToDate": "You're up to date",
   "settings.about.newVersion": "New version available: {version}",
   "settings.about.checkFailed": "Unable to check for updates",
+
+  // Desktop instance switcher (Tauri only)
+  "settings.desktopInstance.title": "Runtime Instance",
+  "settings.desktopInstance.desc": "Switch between local service, self-hosted, or cloud instances. Closes the current window and reopens the launcher.",
+  "settings.desktopInstance.switch": "Switch Instance / Mode",
 
   // Backup / restore (P2 整库备份/恢复)
   "settings.backup.title": "Data Backup",
@@ -5632,6 +5647,11 @@ const es: Dict = {
   "settings.about.newVersion": "Nueva versión disponible: {version}",
   "settings.about.checkFailed": "No se pudieron buscar actualizaciones",
 
+  // Desktop instance switcher (Tauri only)
+  "settings.desktopInstance.title": "Instancia de ejecución",
+  "settings.desktopInstance.desc": "Cambia entre servicio local, autoalojado o en la nube. Cierra la ventana actual y abre el iniciador.",
+  "settings.desktopInstance.switch": "Cambiar instancia / modo",
+
   // Backup / restore (P2 整库备份/恢复)
   "settings.backup.title": "Copia de seguridad",
   "settings.backup.subtitle": "Exporta todos tus datos o restáuralos desde una copia",
@@ -7201,6 +7221,11 @@ const de: Dict = {
   "settings.about.upToDate": "Du bist auf dem neuesten Stand",
   "settings.about.newVersion": "Neue Version verfügbar: {version}",
   "settings.about.checkFailed": "Update-Prüfung fehlgeschlagen",
+
+  // Desktop instance switcher (Tauri only)
+  "settings.desktopInstance.title": "Laufzeit-Instanz",
+  "settings.desktopInstance.desc": "Wechseln zwischen lokalem Dienst, selbst gehostet oder Cloud. Schließt das aktuelle Fenster und öffnet den Starter.",
+  "settings.desktopInstance.switch": "Instanz / Modus wechseln",
 
   // Backup / restore (P2 整库备份/恢复)
   "settings.backup.title": "Datensicherung",
@@ -8772,6 +8797,11 @@ const fr: Dict = {
   "settings.about.upToDate": "Vous êtes à jour",
   "settings.about.newVersion": "Nouvelle version disponible : {version}",
   "settings.about.checkFailed": "Impossible de vérifier les mises à jour",
+
+  // Desktop instance switcher (Tauri only)
+  "settings.desktopInstance.title": "Instance d'exécution",
+  "settings.desktopInstance.desc": "Basculer entre service local, auto-hébergé ou cloud. Ferme la fenêtre actuelle et ouvre le lanceur.",
+  "settings.desktopInstance.switch": "Changer d'instance / mode",
 
   // Backup / restore (P2 整库备份/恢复)
   "settings.backup.title": "Sauvegarde des données",

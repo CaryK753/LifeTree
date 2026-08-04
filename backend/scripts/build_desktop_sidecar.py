@@ -56,6 +56,11 @@ def main() -> None:
             "--clean",
             f"--paths={backend}",
             "--collect-submodules=app",
+            # Copy lifetree-backend package metadata so importlib.metadata
+            # .version("lifetree-backend") works inside the frozen sidecar.
+            # Without this, /meta/about falls back to "0.0.0" and the
+            # Settings → About panel shows a stale/wrong version.
+            "--copy-metadata=lifetree-backend",
             "--hidden-import=uvicorn.logging",
             "--hidden-import=uvicorn.loops.auto",
             "--hidden-import=uvicorn.protocols.http.auto",

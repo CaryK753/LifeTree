@@ -82,18 +82,38 @@ async def meta() -> dict[str, str]:
     return {"name": "LifeTree API", "phase": "MVP"}
 
 
+def _read_version() -> str:
+    """Read the backend version robustly.
+
+    Tries ``importlib.metadata`` first (works in normal Python envs and
+    in PyInstaller bundles that include ``--copy-metadata=lifetree-backend``).
+    Falls back to parsing ``pyproject.toml`` directly (works even when the
+    package metadata is missing, e.g. stale PyInstaller builds).
+    """
+    try:
+        from importlib.metadata import version as _pkg_version
+        return _pkg_version("lifetree-backend")
+    except Exception:
+        pass
+    # Fallback: read pyproject.toml next to the backend package.
+    try:
+        from pathlib import Path
+        toml_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        if toml_path.exists():
+            for line in toml_path.read_text(encoding="utf-8").splitlines():
+                if line.strip().startswith("version"):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return "0.0.0"
+
+
 @api_router.get("/meta/about", tags=["meta"])
 async def about() -> dict[str, str]:
     """Return project metadata for the Settings → About panel."""
-    # 从 pyproject.toml 动态读取版本号，避免发布时忘记同步。
-    try:
-        from importlib.metadata import version as _pkg_version
-        version = _pkg_version("lifetree-backend")
-    except Exception:
-        version = "0.0.0"
     return {
         "name": "LifeTree",
-        "version": version,
+        "version": _read_version(),
         "description": "知识图谱驱动的决策支持系统",
         "github_url": "https://github.com/CaryK753/LifeTree",
         "license": "AGPL-3.0",
@@ -119,12 +139,7 @@ async def check_update() -> dict[str, str | bool | None]:
             return {"has_update": False, "latest_version": None, "release_url": None}
         data = resp.json()
         latest = (data.get("tag_name") or "").lstrip("v")
-        # Dynamically read current version from package metadata
-        try:
-            from importlib.metadata import version as _pkg_version
-            current = _pkg_version("lifetree-backend")
-        except Exception:
-            current = "0.0.0"
+        current = _read_version()
         # Simple semver compare (major.minor.patch).
         def _parse(v: str):
             parts = []

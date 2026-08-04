@@ -34,6 +34,7 @@ import {
   Github,
   Globe,
   Info,
+  Monitor,
   RefreshCw,
   ScrollText,
   ShieldCheck,
@@ -52,6 +53,7 @@ import { SkillSettingsCard } from "@/components/settings/skill-settings-card";
 import { PersonalModelSettings } from "@/components/settings/personal-model-settings";
 import { PersonalServiceKeys } from "@/components/settings/personal-service-keys";
 import { WebPushControl } from "@/components/settings/web-push-control";
+import { isTauriHost } from "@/lib/notifications";
 
 export default function SettingsPage() {
   const { data: settings } = useSettings();
@@ -112,7 +114,70 @@ export default function SettingsPage() {
 
       {/* ---------- About ---------- */}
       <AboutCard />
+
+      {/* ---------- Desktop instance switcher (only in Tauri) ---------- */}
+      {isTauriHost() && <DesktopInstanceCard />}
     </div>
+  );
+}
+
+// ============== Desktop Instance Card ==============
+
+/**
+ * DesktopInstanceCard — shown only in the Tauri desktop app. Provides an
+ * in-app button to reopen the bootstrap launcher so the user can switch
+ * between local service / self-hosted / cloud instances without relying
+ * on the system tray menu.
+ */
+function DesktopInstanceCard() {
+  const t = useT();
+  const [switching, setSwitching] = useState(false);
+
+  async function handleSwitch() {
+    setSwitching(true);
+    try {
+      const internals = (window as unknown as {
+        __TAURI_INTERNALS__?: {
+          invoke: (cmd: string) => Promise<unknown>;
+        };
+      }).__TAURI_INTERNALS__;
+      if (internals) {
+        await internals.invoke("switch_instance");
+      }
+    } catch {
+      // Ignore — the window will close anyway if the command succeeded.
+    } finally {
+      setSwitching(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle className="flex items-center gap-2">
+            <Monitor className="h-4 w-4 text-brand-600 dark:text-brand-400" />
+            {t("settings.desktopInstance.title")}
+          </CardTitle>
+          <CardDescription className="mt-1">
+            {t("settings.desktopInstance.desc")}
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleSwitch}
+          disabled={switching}
+        >
+          <RefreshCw
+            className={cn("h-3.5 w-3.5 mr-1.5", switching && "animate-spin")}
+          />
+          {t("settings.desktopInstance.switch")}
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 
