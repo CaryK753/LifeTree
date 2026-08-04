@@ -9,6 +9,10 @@ on:
         description: Release tag to build, for example v0.2.2
         required: true
         type: string
+      ref:
+        description: Git ref to build from (defaults to the tag). Use a branch name like "main" to build from a branch.
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -35,7 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
