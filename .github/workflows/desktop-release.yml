@@ -139,6 +139,12 @@ jobs:
 
   manifest:
     needs: build
+    # Run even if some platform builds fail or are cancelled — we only
+    # need at least one sig file to produce a useful manifest. Without
+    # this, a single stuck/cancelled job (e.g. macos-13 x86_64 runner
+    # shortage) blocks the manifest forever and the updater endpoint
+    # returns 404, breaking "Check for Updates" for all desktop users.
+    if: always() && needs.build.result != 'skipped'
     runs-on: ubuntu-latest
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
@@ -148,7 +154,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p release-assets
-          gh release download "$TAG" --dir release-assets --pattern '*.sig'
+          gh release download "$TAG" --dir release-assets --pattern '*.sig' || true
 
       - name: Publish signed update manifest
         shell: bash
@@ -158,20 +164,39 @@ jobs:
           MAC_ARM_SIG="release-assets/LifeTree-${VERSION}-aarch64-apple-darwin.app.tar.gz.sig"
           MAC_X64_SIG="release-assets/LifeTree-${VERSION}-x86_64-apple-darwin.app.tar.gz.sig"
           WINDOWS_SIG="release-assets/LifeTree-${VERSION}-x86_64-pc-windows-msvc.msi.sig"
-          test -f "$MAC_ARM_SIG" && test -f "$MAC_X64_SIG" && test -f "$WINDOWS_SIG"
+
+          # Require at least the ARM macOS + Windows builds; x86_64
+          # macOS is optional (macos-13 runners are being deprecated).
+          test -f "$MAC_ARM_SIG" || { echo "Missing aarch64 sig"; exit 1; }
+          test -f "$WINDOWS_SIG" || { echo "Missing Windows sig"; exit 1; }
+
+          # Build the platforms object dynamically so absent platforms
+          # are simply omitted instead of crashing jq with a missing
+          # --rawfile argument.
+          PLATFORMS='{}'
+          if [ -f "$MAC_ARM_SIG" ]; then
+            PLATFORMS=$(echo "$PLATFORMS" | jq --arg url "$BASE_URL/LifeTree-${VERSION}-aarch64-apple-darwin.app.tar.gz" \
+              --rawfile sig "$MAC_ARM_SIG" \
+              '. + {"darwin-aarch64": {signature: $sig, url: $url}}')
+          fi
+          if [ -f "$MAC_X64_SIG" ]; then
+            PLATFORMS=$(echo "$PLATFORMS" | jq --arg url "$BASE_URL/LifeTree-${VERSION}-x86_64-apple-darwin.app.tar.gz" \
+              --rawfile sig "$MAC_X64_SIG" \
+              '. + {"darwin-x86_64": {signature: $sig, url: $url}}')
+          fi
+          if [ -f "$WINDOWS_SIG" ]; then
+            PLATFORMS=$(echo "$PLATFORMS" | jq --arg url "$BASE_URL/LifeTree-${VERSION}-x86_64-pc-windows-msvc.msi" \
+              --rawfile sig "$WINDOWS_SIG" \
+              '. + {"windows-x86_64": {signature: $sig, url: $url}}')
+          fi
+
           jq -n \
             --arg version "$VERSION" \
             --arg notes "LifeTree $TAG" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg mac_arm_url "$BASE_URL/LifeTree-${VERSION}-aarch64-apple-darwin.app.tar.gz" \
-            --arg mac_x64_url "$BASE_URL/LifeTree-${VERSION}-x86_64-apple-darwin.app.tar.gz" \
-            --arg windows_url "$BASE_URL/LifeTree-${VERSION}-x86_64-pc-windows-msvc.msi" \
-            --rawfile mac_arm_sig "$MAC_ARM_SIG" \
-            --rawfile mac_x64_sig "$MAC_X64_SIG" \
-            --rawfile windows_sig "$WINDOWS_SIG" \
-            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: {
-              "darwin-aarch64": {signature: $mac_arm_sig, url: $mac_arm_url},
-              "darwin-x86_64": {signature: $mac_x64_sig, url: $mac_x64_url},
-              "windows-x86_64": {signature: $windows_sig, url: $windows_url}
-            }}' > latest.json
+            --argjson platforms "$PLATFORMS" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' > latest.json
+
+          echo "Manifest contents:"
+          cat latest.json
           gh release upload "$TAG" latest.json --clobber
