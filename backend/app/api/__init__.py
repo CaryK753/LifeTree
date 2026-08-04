@@ -85,9 +85,15 @@ async def meta() -> dict[str, str]:
 @api_router.get("/meta/about", tags=["meta"])
 async def about() -> dict[str, str]:
     """Return project metadata for the Settings → About panel."""
+    # 从 pyproject.toml 动态读取版本号，避免发布时忘记同步。
+    try:
+        from importlib.metadata import version as _pkg_version
+        version = _pkg_version("lifetree-backend")
+    except Exception:
+        version = "0.0.0"
     return {
         "name": "LifeTree",
-        "version": "0.2.1",
+        "version": version,
         "description": "知识图谱驱动的决策支持系统",
         "github_url": "https://github.com/CaryK753/LifeTree",
         "license": "AGPL-3.0",

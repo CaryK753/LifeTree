@@ -1,6 +1,6 @@
 [project]
 name = "lifetree-backend"
-version = "0.1.0"
+version = "0.2.2"
 description = "LifeTree Phase 1 MVP backend: FastAPI + Celery + LLM orchestration"
 requires-python = ">=3.11"
 dependencies = [
