@@ -9,6 +9,12 @@ from typing import Any, Literal
 
 LoopStopReason = Literal["repeated_tool_call", "tool_call_budget_exceeded"]
 
+DEFAULT_MAX_TOOL_CALLS = 128
+DEFAULT_MAX_IDENTICAL_TOOL_CALLS = 3
+# A ReAct tool call normally consumes a model node and a tool node. Leave a
+# small margin for the initial and terminal model passes.
+ADVISOR_RECURSION_LIMIT = DEFAULT_MAX_TOOL_CALLS * 2 + 8
+
 TOOL_LOOP_MESSAGE = (
     "检测到工具调用没有收敛，已停止本轮自动调用。"
     "请明确要操作的目标、路径或情景后重试。"
@@ -23,8 +29,8 @@ RECURSION_LIMIT_MESSAGE = (
 class ToolLoopGuard:
     """Stop identical retries and cap the total tools used by one agent run."""
 
-    max_total_calls: int = 12
-    max_identical_calls: int = 3
+    max_total_calls: int = DEFAULT_MAX_TOOL_CALLS
+    max_identical_calls: int = DEFAULT_MAX_IDENTICAL_TOOL_CALLS
     total_calls: int = 0
     fingerprints: Counter[str] = field(default_factory=Counter)
 
@@ -46,6 +52,9 @@ class ToolLoopGuard:
 
 
 __all__ = [
+    "ADVISOR_RECURSION_LIMIT",
+    "DEFAULT_MAX_IDENTICAL_TOOL_CALLS",
+    "DEFAULT_MAX_TOOL_CALLS",
     "RECURSION_LIMIT_MESSAGE",
     "TOOL_LOOP_MESSAGE",
     "ToolLoopGuard",

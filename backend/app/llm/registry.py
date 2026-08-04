@@ -66,6 +66,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.local_encryption import EncryptionError, get_encryption
 from app.core.logging import get_logger
 from app.db.postgres import SessionLocal
 from app.models.llm_config import AppConfig, LLMModel, LLMProvider
@@ -271,9 +272,57 @@ def _decode_value(raw: str | None, default: Any) -> Any:
         return default
 
 
-def _set_app_config(session: Session, key: str, value: Any) -> None:
-    """Upsert one app_config row. Value is JSON-encoded."""
+def _is_local_storage() -> bool:
+    """True when the process is running against the local SQLite backend."""
+    from app.core.config import get_settings
+
+    return get_settings().lifetree_storage_mode == "local"
+
+
+def _encode_app_config_value(key: str, value: Any) -> str:
+    """JSON-encode an app_config value, encrypting it if ``key`` is sensitive.
+
+    Sensitive keys (API keys, passwords) are Fernet-encrypted *after* JSON
+    encoding in local storage mode; server mode stores plaintext (PostgreSQL
+    is responsible for at-rest protection there). Empty strings and ``None``
+    short-circuit so nullable columns are not affected.
+    """
     encoded = json.dumps(value)
+    if not _is_local_storage() or key not in _SENSITIVE_APP_CONFIG_KEYS:
+        return encoded
+    if value in ("", None):  # nothing to encrypt
+        return encoded
+    return get_encryption().encrypt(encoded)
+
+
+def _decode_app_config_value(key: str, raw: str | None, default: Any) -> Any:
+    """Decode a JSON-encoded app_config value, decrypting if ``key`` is sensitive.
+
+    Mirrors :func:`_encode_app_config_value`: in local storage mode, sensitive
+    values are Fernet-decrypted before JSON parsing. Plaintext values (from a
+    pre-encryption database) pass through unchanged so existing rows read
+    fine and are re-encrypted on the next write.
+    """
+    if raw is None:
+        return default
+    try:
+        if _is_local_storage() and key in _SENSITIVE_APP_CONFIG_KEYS:
+            try:
+                raw = get_encryption().decrypt(raw)
+            except EncryptionError as exc:
+                # Re-raise with the key name for diagnostics.
+                raise EncryptionError(
+                    f"Failed to decrypt app_config.{key}; the local encryption "
+                    "key may have changed or the data is corrupted."
+                ) from exc
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return default
+
+
+def _set_app_config(session: Session, key: str, value: Any) -> None:
+    """Upsert one app_config row. Value is JSON-encoded (+ encrypted if sensitive)."""
+    encoded = _encode_app_config_value(key, value)
     row = session.get(AppConfig, key)
     if row is None:
         session.add(AppConfig(key=key, value=encoded))
@@ -398,8 +447,10 @@ def _load_from_db() -> LLMConfig | None:
         if not isinstance(role_assignments, dict):
             role_assignments = {}
 
-        tavily = _decode_value(config_rows.get(_KEY_TAVILY), "") or ""
-        mineru_key = _decode_value(config_rows.get(_KEY_MINERU_KEY), "") or ""
+        tavily = _decode_app_config_value(_KEY_TAVILY, config_rows.get(_KEY_TAVILY), "") or ""
+        mineru_key = _decode_app_config_value(
+            _KEY_MINERU_KEY, config_rows.get(_KEY_MINERU_KEY), ""
+        ) or ""
         mineru_url = (
             _decode_value(config_rows.get(_KEY_MINERU_URL), _DEFAULT_MINERU_URL)
             or _DEFAULT_MINERU_URL
@@ -407,7 +458,9 @@ def _load_from_db() -> LLMConfig | None:
         smtp_host = _decode_value(config_rows.get(_KEY_SMTP_HOST), "") or ""
         smtp_port = _decode_value(config_rows.get(_KEY_SMTP_PORT), 587) or 587
         smtp_user = _decode_value(config_rows.get(_KEY_SMTP_USER), "") or ""
-        smtp_password = _decode_value(config_rows.get(_KEY_SMTP_PASSWORD), "") or ""
+        smtp_password = _decode_app_config_value(
+            _KEY_SMTP_PASSWORD, config_rows.get(_KEY_SMTP_PASSWORD), ""
+        ) or ""
         smtp_from = (
             _decode_value(config_rows.get(_KEY_SMTP_FROM), _DEFAULT_SMTP_FROM)
             or _DEFAULT_SMTP_FROM
@@ -861,6 +914,19 @@ _KEY_SERVICE_ADDRESS = "service_address"
 _KEY_USE_MODE = "use_mode"
 _KEY_PASSKEY_LOGIN_ENABLED = "passkey_login_enabled"
 
+# AppConfig keys whose ``value`` should be Fernet-encrypted at rest in local
+# storage mode. Pattern: ``*_api_key`` / ``*_password`` / ``*_token`` /
+# ``*_secret``. The ``oauth_providers`` key is handled separately below
+# because only the ``client_secret`` field within each provider entry is
+# sensitive (the rest — client_id, URLs, scopes — is admin-visible config).
+_SENSITIVE_APP_CONFIG_KEYS: frozenset[str] = frozenset(
+    {
+        _KEY_TAVILY,        # tavily_api_key
+        _KEY_MINERU_KEY,    # mineru_api_key
+        _KEY_SMTP_PASSWORD, # smtp_password
+    }
+)
+
 
 class OAuthProvider(BaseModel):
     """A generic OAuth2 provider configured by the admin (Authorization Code flow)."""
@@ -931,6 +997,43 @@ def _oauth_provider_to_view(p: OAuthProvider) -> OAuthProviderView:
     )
 
 
+def _encrypt_oauth_providers_payload(providers: list[OAuthProvider]) -> list[dict[str, Any]]:
+    """Serialize OAuth providers to dicts, encrypting ``client_secret`` in local mode.
+
+    Only the ``client_secret`` field is encrypted; the rest (client_id, URLs,
+    scopes, …) stays plaintext so it remains inspectable for debugging and
+    doesn't bloat the ciphertext. Empty secrets are left as-is.
+    """
+    payload = [p.model_dump() for p in providers]
+    if not _is_local_storage():
+        return payload
+    enc = get_encryption()
+    for entry in payload:
+        secret = entry.get("client_secret", "")
+        if secret:
+            entry["client_secret"] = enc.encrypt(secret)
+    return payload
+
+
+def _decrypt_oauth_provider_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of ``entry`` with ``client_secret`` decrypted if needed.
+
+    Plaintext values (from a pre-encryption database) pass through unchanged
+    so existing rows read fine and are re-encrypted on the next write.
+    """
+    secret = entry.get("client_secret", "")
+    if not secret or not _is_local_storage():
+        return entry
+    try:
+        entry = {**entry, "client_secret": get_encryption().decrypt(secret)}
+    except EncryptionError as exc:
+        raise EncryptionError(
+            "Failed to decrypt an OAuth provider's client_secret; the local "
+            "encryption key may have changed or the data is corrupted."
+        ) from exc
+    return entry
+
+
 def get_oauth_providers() -> list[OAuthProvider]:
     """Return all configured OAuth providers (with secrets — internal use only)."""
     with _db_session() as session:
@@ -943,6 +1046,8 @@ def get_oauth_providers() -> list[OAuthProvider]:
             return []
         if not isinstance(data, list):
             return []
+        if _is_local_storage():
+            data = [_decrypt_oauth_provider_entry(item) for item in data]
         return [OAuthProvider.model_validate(item) for item in data]
 
 
@@ -975,7 +1080,11 @@ def get_oauth_provider_by_id(provider_id: str) -> OAuthProvider | None:
 def set_oauth_providers(providers: list[OAuthProvider]) -> None:
     """Replace the full OAuth provider list (admin write)."""
     with _db_session() as session:
-        _set_app_config(session, _KEY_OAUTH_PROVIDERS, [p.model_dump() for p in providers])
+        _set_app_config(
+            session,
+            _KEY_OAUTH_PROVIDERS,
+            _encrypt_oauth_providers_payload(providers),
+        )
 
 
 def add_oauth_provider(

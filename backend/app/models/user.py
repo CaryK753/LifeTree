@@ -7,11 +7,11 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, ForeignKey, Index, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.postgres import Base
 from app.models.base import SoftDeleteMixin, TimestampMixin, UUIDPkMixin
+from app.models.types import JSON_DOCUMENT
 
 if TYPE_CHECKING:
     from app.models.goal import Goal
@@ -55,7 +55,7 @@ class UserProfile(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     privacy_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     # Demographics (free-form JSONB to support multiple scenarios)
-    demographics: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    demographics: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
     # Preferences
     primary_goal_id: Mapped[str | None] = mapped_column(
@@ -64,18 +64,18 @@ class UserProfile(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
         nullable=True,
     )
     preferred_pathway_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    priority_factors: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    priority_factors: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
     risk_tolerance: Mapped[str] = mapped_column(
         String(16), default="medium"
     )
 
     # Behavior & progress (updated by profiling service)
-    progress: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
-    implicit_tags: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    progress: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
+    implicit_tags: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
     # Notification preferences
-    notify_channels: Mapped[dict[str, bool]] = mapped_column(JSONB, default=dict)
-    quiet_hours: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    notify_channels: Mapped[dict[str, bool]] = mapped_column(JSON_DOCUMENT, default=dict)
+    quiet_hours: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
     goals: Mapped[list[Goal]] = relationship(
         back_populates="user", cascade="all, delete-orphan", foreign_keys="Goal.user_id"
@@ -127,7 +127,7 @@ class UserUpload(UUIDPkMixin, TimestampMixin, Base):
 
     # Extracted raw text & metadata
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    extraction_meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    extraction_meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
     legal_acknowledged: Mapped[bool] = mapped_column(default=False)
 

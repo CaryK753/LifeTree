@@ -1,0 +1,170 @@
+name: Build Desktop Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build, for example v0.2.2
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Verify tag version
+        shell: bash
+        run: |
+          VERSION="${TAG#v}"
+          CONFIG_VERSION=$(node -p "require('./desktop/src-tauri/tauri.conf.json').version")
+          test "$VERSION" = "$CONFIG_VERSION" || {
+            echo "Tag $TAG does not match desktop version $CONFIG_VERSION"
+            exit 1
+          }
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install local runtime dependencies
+        run: python -m pip install -e "backend[desktop,dev]"
+
+      - name: Build desktop sidecar
+        run: python backend/scripts/build_desktop_sidecar.py
+
+      - name: Build signed desktop app
+        working-directory: desktop
+        run: npm run build
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.target }}
+
+      - name: Create GitHub Release if needed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "$TAG" --generate-notes || \
+            gh release view "$TAG" >/dev/null
+
+      - name: Upload macOS update assets
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${TAG#v}"
+          RELEASE_DIR="$RUNNER_TEMP/release-assets"
+          mkdir -p "$RELEASE_DIR"
+          DMG=$(find desktop/src-tauri/target -type f -name '*.dmg' | head -1)
+          UPDATER=$(find desktop/src-tauri/target -type f -name '*.app.tar.gz' | head -1)
+          test -n "$DMG" && test -n "$UPDATER" && test -f "$UPDATER.sig"
+          cp "$DMG" "$RELEASE_DIR/LifeTree-${VERSION}-${{ matrix.target }}.dmg"
+          cp "$UPDATER" "$RELEASE_DIR/LifeTree-${VERSION}-${{ matrix.target }}.app.tar.gz"
+          cp "$UPDATER.sig" "$RELEASE_DIR/LifeTree-${VERSION}-${{ matrix.target }}.app.tar.gz.sig"
+          gh release upload "$TAG" "$RELEASE_DIR"/* --clobber
+
+      - name: Upload Windows update assets
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${TAG#v}"
+          RELEASE_DIR="$RUNNER_TEMP/release-assets"
+          mkdir -p "$RELEASE_DIR"
+          MSI=$(find desktop/src-tauri/target -type f -name '*.msi' | head -1)
+          test -n "$MSI" && test -f "$MSI.sig"
+          cp "$MSI" "$RELEASE_DIR/LifeTree-${VERSION}-${{ matrix.target }}.msi"
+          cp "$MSI.sig" "$RELEASE_DIR/LifeTree-${VERSION}-${{ matrix.target }}.msi.sig"
+          gh release upload "$TAG" "$RELEASE_DIR"/* --clobber
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download update signatures
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          gh release download "$TAG" --dir release-assets --pattern '*.sig'
+
+      - name: Publish signed update manifest
+        shell: bash
+        run: |
+          VERSION="${TAG#v}"
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/$TAG"
+          MAC_ARM_SIG="release-assets/LifeTree-${VERSION}-aarch64-apple-darwin.app.tar.gz.sig"
+          MAC_X64_SIG="release-assets/LifeTree-${VERSION}-x86_64-apple-darwin.app.tar.gz.sig"
+          WINDOWS_SIG="release-assets/LifeTree-${VERSION}-x86_64-pc-windows-msvc.msi.sig"
+          test -f "$MAC_ARM_SIG" && test -f "$MAC_X64_SIG" && test -f "$WINDOWS_SIG"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "LifeTree $TAG" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg mac_arm_url "$BASE_URL/LifeTree-${VERSION}-aarch64-apple-darwin.app.tar.gz" \
+            --arg mac_x64_url "$BASE_URL/LifeTree-${VERSION}-x86_64-apple-darwin.app.tar.gz" \
+            --arg windows_url "$BASE_URL/LifeTree-${VERSION}-x86_64-pc-windows-msvc.msi" \
+            --rawfile mac_arm_sig "$MAC_ARM_SIG" \
+            --rawfile mac_x64_sig "$MAC_X64_SIG" \
+            --rawfile windows_sig "$WINDOWS_SIG" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: {
+              "darwin-aarch64": {signature: $mac_arm_sig, url: $mac_arm_url},
+              "darwin-x86_64": {signature: $mac_x64_sig, url: $mac_x64_url},
+              "windows-x86_64": {signature: $windows_sig, url: $windows_url}
+            }}' > latest.json
+          gh release upload "$TAG" latest.json --clobber

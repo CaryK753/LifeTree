@@ -439,9 +439,10 @@ def refresh_source_now(
 ) -> InformationSource:
     """Manually trigger a refresh of a single source.
 
-    Delegates to the same Celery task used by the beat schedule so the
-    user can test their schedule immediately without waiting.
+    Delegates to the active JobRunner so servers use Celery while a local
+    desktop runtime executes through its in-process queue.
     """
+    from app.services.runtime.job_runner import get_job_runner
     from app.workers.tasks import refresh_due_sources
 
     src = db.get(InformationSource, source_id)
@@ -451,7 +452,6 @@ def refresh_source_now(
         raise HTTPException(403, "You do not have access to this source")
     if not src.url:
         raise HTTPException(400, "Cannot refresh a source without a URL")
-    # Run synchronously (the task itself is fast — one URL fetch + ingest)
-    refresh_due_sources.delay(source_ids=[source_id])
+    get_job_runner().submit(refresh_due_sources, source_ids=[source_id])
     db.refresh(src)
     return src

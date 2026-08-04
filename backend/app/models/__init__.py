@@ -23,13 +23,6 @@ from app.models.goal import (
     RiskFactor,
     RiskFactorType,
 )
-from app.models.llm_config import (
-    AppConfig,
-    LLMModel,
-    LLMProvider,
-)
-from app.models.memory import UserMemory
-from app.models.model_params import ModelParam, PredictionOutcome
 from app.models.intelligence import (
     CalibrationReport,
     ConflictResolution,
@@ -37,7 +30,13 @@ from app.models.intelligence import (
     RiskProposal,
     SourceAccuracyLog,
 )
-from app.models.source_proposal import SourceProposal
+from app.models.llm_config import (
+    AppConfig,
+    LLMModel,
+    LLMProvider,
+)
+from app.models.memory import UserMemory
+from app.models.model_params import ModelParam, PredictionOutcome
 from app.models.notification import (
     NotificationChannel,
     NotificationLog,
@@ -51,6 +50,7 @@ from app.models.scenario import (
     ScenarioRun,
     ScenarioStatus,
 )
+from app.models.source_proposal import SourceProposal
 from app.models.user import (
     RiskTolerance,
     UserProfile,

@@ -247,7 +247,7 @@ export default function HomePage() {
               }
 
               return (
-                <Link key={g.id} href={`/goals/${g.id}`} className="block group">
+                <Link key={g.id} href={`/goals/view?id=${encodeURIComponent(g.id)}`} className="block group">
                   <Card className="hover:border-brand-500/40 transition-colors h-full">
                     <CardHeader>
                       <div className="flex items-start justify-between gap-2">

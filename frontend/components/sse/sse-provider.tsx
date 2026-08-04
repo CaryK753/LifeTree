@@ -5,6 +5,10 @@ import { useSWRConfig } from "swr";
 import { useToast } from "@/components/ui/toast";
 import { useT } from "@/lib/i18n/provider";
 import { streamServerEvents, type ServerEvent } from "@/lib/sse-stream";
+import {
+  DEFAULT_NOTIFICATION_ICON,
+  sendSystemNotification,
+} from "@/lib/notifications";
 
 const RISK_REVALIDATE_MATCHER = (key: unknown): boolean => {
   if (typeof key === "string") return key === "events" || key === "dashboard";
@@ -50,11 +54,22 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
           // Keep the generic alert text when a server payload is malformed.
         }
         const severity = data.severity;
+        const title = String(data.title ?? data.summary ?? "Risk Alert");
+        const body = data.body || data.message ? String(data.body ?? data.message) : undefined;
         toast({
-          title: String(data.title ?? data.summary ?? "Risk Alert"),
-          description: data.body || data.message ? String(data.body ?? data.message) : undefined,
+          title,
+          description: body,
           variant:
             severity === "critical" ? "error" : severity === "warning" ? "warning" : "default",
+        });
+        // 同步投递到操作系统级通知（浏览器 Notification API / Tauri 通知插件）。
+        // 静默失败：权限未授予或环境不支持时回退到上面的应用内 toast。
+        void sendSystemNotification({
+          title,
+          body,
+          url: "/notifications",
+          icon: DEFAULT_NOTIFICATION_ICON,
+          tag: data.event_id ? `risk:${data.event_id}` : "risk-alert",
         });
         mutate(RISK_REVALIDATE_MATCHER);
         return;

@@ -31,7 +31,7 @@ export default function DashboardRedirectPage() {
       profile?.primary_goal_id ?? (goalList.length > 0 ? goalList[0].id : null);
     if (primaryId) {
       setRedirected(true);
-      router.replace(`/goals/${primaryId}`);
+      router.replace(`/goals/view?id=${encodeURIComponent(primaryId)}`);
     } else if (!isLoading && goals) {
       // Goals finished loading and none are available. A profile normally
       // exists for authenticated users, so it must not gate this fallback.

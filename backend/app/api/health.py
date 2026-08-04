@@ -1,9 +1,8 @@
 """Lightweight component health probes for the dashboard / ops view.
 
-Returns the reachability of the three primary backing services (Postgres,
-Neo4j, Redis) without authentication so the frontend can show a status
-strip on the dashboard before the user logs in. Each probe is wrapped in
-its own try/except so a single broken service never tanks the endpoint.
+Returns relational, graph, and task/cache reachability without authentication.
+Local mode reports unavailable server-only enhancements as unknown instead of
+attempting external connections.
 """
 
 from __future__ import annotations
@@ -13,6 +12,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 
 log = get_logger(__name__)
@@ -54,6 +54,8 @@ def _check_neo4j() -> str:
     """Return ``"ok"`` if Neo4j responds, ``"unknown"`` if not configured,
     ``"error"`` on failure.
     """
+    if get_settings().lifetree_storage_mode == "local":
+        return "unknown"
     try:
         from app.db.neo4j import get_neo4j_driver
 
@@ -74,6 +76,8 @@ def _check_redis() -> str:
     """Return ``"ok"`` if Redis PING succeeds, ``"unknown"`` if not
     configured, ``"error"`` on failure.
     """
+    if get_settings().lifetree_storage_mode == "local":
+        return "unknown"
     try:
         from app.db.redis import get_redis
 

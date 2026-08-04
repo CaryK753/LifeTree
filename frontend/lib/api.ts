@@ -1,14 +1,58 @@
 /**
  * API client + SWR fetchers + AI streaming helpers.
  *
- * All requests proxy through /api/v1/* which Next.js rewrites to the
- * FastAPI backend (see next.config.mjs).
+ * Browser requests use the Next.js /api/v1 proxy by default. Desktop builds
+ * can inject a local sidecar or remote API origin at runtime.
  */
 
 import type { SWRConfiguration } from "swr";
 import { apiErrorMessage } from "@/lib/api-error";
 
 export const API_PREFIX = "/api/v1";
+export const RUNTIME_API_BASE_URL_KEY = "lifetree.runtime.api_base_url";
+
+declare global {
+  interface Window {
+    __LIFETREE_RUNTIME__?: { apiBaseUrl?: string; desktopToken?: string };
+    __BACKEND_PUBLIC_URL__?: string;
+  }
+}
+
+function normalizeBaseUrl(value: string | undefined): string {
+  return (value || "").trim().replace(/\/+$/, "");
+}
+
+/** Resolve the API origin at request time so a desktop sidecar can use a random port. */
+export function getApiBaseUrl(): string {
+  if (typeof window !== "undefined") {
+    const injected = normalizeBaseUrl(window.__LIFETREE_RUNTIME__?.apiBaseUrl);
+    if (injected) return injected;
+    const stored = normalizeBaseUrl(
+      window.localStorage.getItem(RUNTIME_API_BASE_URL_KEY) || undefined
+    );
+    if (stored) return stored;
+  }
+  return normalizeBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL);
+}
+
+export function setRuntimeApiBaseUrl(value: string | null): void {
+  if (typeof window === "undefined") return;
+  if (value) {
+    window.localStorage.setItem(RUNTIME_API_BASE_URL_KEY, normalizeBaseUrl(value));
+  } else {
+    window.localStorage.removeItem(RUNTIME_API_BASE_URL_KEY);
+  }
+}
+
+export function apiUrl(path: string): string {
+  return `${getApiBaseUrl()}${API_PREFIX}${path}`;
+}
+
+export function getDesktopHeaders(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  const token = window.__LIFETREE_RUNTIME__?.desktopToken;
+  return token ? { "X-LifeTree-Desktop-Token": token } : {};
+}
 
 /**
  * Direct backend URL for streaming endpoints (SSE).
@@ -22,8 +66,9 @@ export const API_PREFIX = "/api/v1";
  *   1. ``window.__BACKEND_PUBLIC_URL__`` — runtime-injected by layout.tsx
  *      from the server-side ``BACKEND_PUBLIC_URL`` env var. Set when the
  *      browser can reach the backend directly (requires CORS).
- *   2. ``NEXT_PUBLIC_API_BASE_URL`` — build-time fallback (local dev only).
- *   3. empty string → SSE uses same-origin ``/api/v1/*``. This is the
+ *   2. Desktop runtime injection or localStorage configuration.
+ *   3. ``NEXT_PUBLIC_API_BASE_URL`` — build-time fallback (local dev only).
+ *   4. empty string → SSE uses same-origin ``/api/v1/*``. This is the
  *      default in cloud/Docker deployments where nginx (or a similar
  *      streaming-aware reverse proxy) fronts both frontend and backend,
  *      so the browser only talks to one origin and there are no CORS
@@ -31,15 +76,16 @@ export const API_PREFIX = "/api/v1";
  */
 function getStreamBaseUrl(): string {
   if (typeof window !== "undefined") {
-    const w = window as unknown as { __BACKEND_PUBLIC_URL__?: string };
-    if (typeof w.__BACKEND_PUBLIC_URL__ === "string") {
-      return w.__BACKEND_PUBLIC_URL__;
+    if (typeof window.__BACKEND_PUBLIC_URL__ === "string") {
+      return normalizeBaseUrl(window.__BACKEND_PUBLIC_URL__);
     }
   }
-  return process.env.NEXT_PUBLIC_API_BASE_URL || "";
+  return getApiBaseUrl();
 }
 
-export const STREAM_BASE_URL = getStreamBaseUrl();
+export function streamApiUrl(path: string): string {
+  return `${getStreamBaseUrl()}${API_PREFIX}${path}`;
+}
 
 // ---------- Auth token storage ----------
 //
@@ -101,6 +147,9 @@ export async function request<T>(
   const isFormData = init?.body instanceof FormData;
 
   const headers = new Headers(init?.headers);
+  for (const [name, value] of Object.entries(getDesktopHeaders())) {
+    headers.set(name, value);
+  }
   if (!isFormData && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
@@ -108,7 +157,7 @@ export async function request<T>(
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const res = await fetch(`${API_PREFIX}${path}`, {
+  const res = await fetch(apiUrl(path), {
     ...init,
     headers,
   });
@@ -152,9 +201,12 @@ async function tryRefreshAccessToken(): Promise<boolean> {
     const refresh = getRefreshToken();
     if (!refresh) return false;
     try {
-      const res = await fetch(`${API_PREFIX}/auth/refresh`, {
+      const res = await fetch(apiUrl("/auth/refresh"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...getDesktopHeaders(),
+        },
         body: JSON.stringify({ refresh_token: refresh }),
       });
       if (!res.ok) {
@@ -362,8 +414,11 @@ export const api = {
     request<ActionROISort>(`/actions/roi?limit=${limit}`),
   downloadActionCalendar: async () => {
     const token = getAccessToken();
-    const response = await fetch(`${API_PREFIX}/actions/calendar.ics`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    const response = await fetch(apiUrl("/actions/calendar.ics"), {
+      headers: {
+        ...getDesktopHeaders(),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
     });
     if (!response.ok) throw new ApiError(response.status, "Action calendar export failed");
     const url = URL.createObjectURL(await response.blob());
@@ -575,11 +630,16 @@ export const api = {
     }),
   uploadPlugin: (file: File, overwrite?: boolean) => {
     const fd = new FormData();
+    const token = getAccessToken();
     fd.append("file", file);
     if (overwrite) fd.append("overwrite", "true");
-    return fetch(`${API_PREFIX}/plugins/upload`, {
+    return fetch(apiUrl("/plugins/upload"), {
       method: "POST",
       body: fd,
+      headers: {
+        ...getDesktopHeaders(),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
     }).then(async (r) => {
       if (!r.ok) {
         let details: unknown;
@@ -1826,16 +1886,14 @@ export async function* streamChat(
   },
   signal?: AbortSignal
 ): AsyncGenerator<ChatChunk> {
-  // Bypass the Next.js rewrite proxy when STREAM_BASE_URL is configured.
+  // Bypass the Next.js rewrite proxy when a runtime API origin is configured.
   // Why: Next.js `rewrites()` buffers the SSE response in dev mode — the
   // browser receives the entire stream as one giant chunk, defeating
   // token-by-token streaming and making the typewriter cursor look fake.
   // Hitting the backend origin directly preserves true SSE chunking.
   // Falls back to the proxy path when no backend URL is configured (e.g.
   // production behind a streaming-aware reverse proxy).
-  const streamUrl = STREAM_BASE_URL
-    ? `${STREAM_BASE_URL}${API_PREFIX}/chat/stream`
-    : `${API_PREFIX}/chat/stream`;
+  const streamUrl = streamApiUrl("/chat/stream");
   // Attach Bearer token — streamChat uses raw fetch (not ``request``) so
   // it must add the Authorization header manually. Without this the backend
   // returns 401 and the user sees "Chat stream failed".
@@ -1847,6 +1905,7 @@ export async function* streamChat(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      ...getDesktopHeaders(),
       ...authHeaders,
     },
     body: JSON.stringify({ ...body, stream: true }),

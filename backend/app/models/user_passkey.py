@@ -22,11 +22,11 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.postgres import Base
 from app.models.base import UUIDPkMixin
+from app.models.types import JSON_DOCUMENT
 
 
 class UserPasskey(UUIDPkMixin, Base):
@@ -52,7 +52,7 @@ class UserPasskey(UUIDPkMixin, Base):
     # assertion (FIDO Client to Authenticator Protocol §6.1.1).
     sign_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # Allowed transports (e.g. ["internal", "hybrid"]). Empty list = unknown.
-    transports: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    transports: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list)
     # Authenticator Attestation GUID — identifies the authenticator model
     # (e.g. YubiKey 5C, MacBook Touch ID, …). May be all-zeros for
     # attestation-less registrations.

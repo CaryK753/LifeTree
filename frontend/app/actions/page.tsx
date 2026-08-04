@@ -16,6 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -301,10 +302,10 @@ export default function ActionsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <Label>{t("actions.due")}</Label>
-                <Input
-                  type="date"
+                <DateInput
                   value={form.due_at}
                   onChange={(e) => setForm({ ...form, due_at: e.target.value })}
+                  label={t("actions.due")}
                 />
               </div>
               <div className="space-y-1.5">

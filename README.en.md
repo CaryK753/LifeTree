@@ -445,7 +445,7 @@ LifeTree supports two use modes, controlled by the `LIFETREE_USE_MODE` environme
 - **Single-user mode (`single`, default)**: registration and sign-in are required. The first account becomes admin; subsequent registration is automatically disabled.
 - **Multi-user mode (`multi`)**: requires the full PostgreSQL, Neo4j, Redis, MinIO, and Celery deployment. The first account becomes admin; `LIFETREE_ADMIN_USER_IDS` may grant additional admin roles.
 
-SQLite local storage is planned only for `single` mode and is not yet implemented. Both modes currently use PostgreSQL while transaction, vector-search, and graph-sync storage boundaries are extracted.
+SQLite local storage is restricted to `single` mode. `LIFETREE_STORAGE_MODE=local` now provides an Alpha SQLite database, content-addressed file storage, and an in-process job runner; the goal, action, and upload vertical slice passes in isolation. Embedded graph/vector adapters, sidecar packaging, the static desktop UI, formal migrations, and encryption remain pending, so the desktop launcher does not yet unlock `local_private`.
 
 Supported login methods:
 

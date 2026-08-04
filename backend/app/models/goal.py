@@ -19,11 +19,11 @@ from sqlalchemy import (
     Table,
     Text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.postgres import Base
 from app.models.base import SoftDeleteMixin, TimestampMixin, UUIDPkMixin
+from app.models.types import JSON_DOCUMENT
 
 if TYPE_CHECKING:
     from app.models.user import UserProfile
@@ -141,10 +141,10 @@ class Goal(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     status: Mapped[str] = mapped_column(String(16), default="active")
 
     # Personalized probability cache
-    success_probability: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    success_probability: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
     # e.g. {"p50": 0.42, "p10": 0.18, "p90": 0.61, "computed_at": "..."}
 
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
     user: Mapped["UserProfile"] = relationship(  # type: ignore[name-defined]
         back_populates="goals", foreign_keys="Goal.user_id"
@@ -188,8 +188,8 @@ class Pathway(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     region: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # JSONB for free-form eligibility rules / cutoffs / steps
-    eligibility: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
-    milestones: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    eligibility: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
+    milestones: Mapped[list[dict[str, Any]]] = mapped_column(JSON_DOCUMENT, default=list)
 
     # Branch management (legacy parent-child for sub-pathways)
     parent_pathway_id: Mapped[str | None] = mapped_column(
@@ -213,10 +213,10 @@ class Pathway(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     # --- Merged Scenario fields (v0.4.0) ---
     # Previously on the Scenario model; now stored directly on Pathway so
     # the decision tree node is the single source of truth.
-    assumptions: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
-    success_probability: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    assumptions: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
+    success_probability: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
     risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    key_risk_factors: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    key_risk_factors: Mapped[list[dict[str, Any]]] = mapped_column(JSON_DOCUMENT, default=list)
     impact_threshold: Mapped[float] = mapped_column(Float, default=0.05)
     computed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -264,8 +264,8 @@ class Requirement(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Cutoffs & current user value (free-form)
-    threshold: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
-    current_value: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    threshold: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
+    current_value: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
     # Gap analysis cache
     gap_status: Mapped[str] = mapped_column(String(16), default="unknown")
@@ -313,7 +313,7 @@ class RiskFactor(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     # Knowledge half-life (days)
     half_life_days: Mapped[int] = mapped_column(Integer, default=730)
 
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
     def __repr__(self) -> str:
         return f"<RiskFactor {self.name} ({self.level})>"

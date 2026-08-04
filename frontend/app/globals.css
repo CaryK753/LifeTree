@@ -53,7 +53,7 @@ html, body {
   color: rgb(var(--foreground));
   font-feature-settings: "rlig" 1, "calt" 1;
   -webkit-font-smoothing: antialiased;
-  min-height: 100%;
+  min-height: 100dvh;
   max-width: 100%;
   overflow-x: hidden;
 }
@@ -118,15 +118,18 @@ html, body {
    `accent-color` styles the modern browsers' default, but the track itself
    is browser-styled and looks wrong (too dark) in light mode. We provide an
    explicit track + thumb for both themes. */
-input[type="range"] {
+input[type="range"],
+.lt-slider {
   -webkit-appearance: none;
   appearance: none;
   height: 6px;
   border-radius: 9999px;
   background: rgb(var(--border) / 0.18);
   cursor: pointer;
+  touch-action: manipulation; /* PWA: 允许触屏滑动而不触发页面滚动 */
 }
-input[type="range"]::-webkit-slider-thumb {
+input[type="range"]::-webkit-slider-thumb,
+.lt-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 14px;
@@ -137,10 +140,12 @@ input[type="range"]::-webkit-slider-thumb {
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
   transition: transform 120ms ease-out;
 }
-input[type="range"]::-webkit-slider-thumb:hover {
+input[type="range"]::-webkit-slider-thumb:hover,
+.lt-slider::-webkit-slider-thumb:hover {
   transform: scale(1.15);
 }
-input[type="range"]::-moz-range-thumb {
+input[type="range"]::-moz-range-thumb,
+.lt-slider::-moz-range-thumb {
   width: 14px;
   height: 14px;
   border-radius: 9999px;
@@ -148,9 +153,57 @@ input[type="range"]::-moz-range-thumb {
   border: 2px solid rgb(var(--surface));
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
 }
-input[type="range"]:focus {
+input[type="range"]:focus,
+.lt-slider:focus {
   outline: none;
   box-shadow: 0 0 0 3px rgb(var(--ring) / 0.25);
+}
+
+/* PWA 模式下：增大滑块 thumb 触控目标（移动端 44px 最小触控区）。
+   iOS standalone 与 Android TWA 都需要更大的命中区域。 */
+html.pwa input[type="range"]::-webkit-slider-thumb,
+html.pwa .lt-slider::-webkit-slider-thumb {
+  width: 20px;
+  height: 20px;
+}
+html.pwa input[type="range"]::-moz-range-thumb,
+html.pwa .lt-slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+}
+
+/* Date / Time input — PWA 样式一致性。
+   原生 input[type=date|time] 的 calendar-picker-indicator 在不同主题下颜色
+   不可控（默认黑色），dark mode 下看不清。这里统一外观并处理主题适配。 */
+.lt-date-input,
+.lt-time-input,
+input[type="date"],
+input[type="time"] {
+  -webkit-appearance: none;
+  appearance: none;
+  /* iOS Safari standalone 下默认会出现内阴影，这里清除 */
+  background-clip: padding-box;
+}
+.lt-date-input::-webkit-calendar-picker-indicator,
+.lt-time-input::-webkit-calendar-picker-indicator,
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  /* light mode 下默认黑色图标可见，无需处理 */
+}
+/* dark mode 下将 picker 图标反色为白色，确保可见性 */
+:root.dark .lt-date-input::-webkit-calendar-picker-indicator,
+:root.dark .lt-time-input::-webkit-calendar-picker-indicator,
+:root.dark input[type="date"]::-webkit-calendar-picker-indicator,
+:root.dark input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+}
+/* iOS PWA 下 date/time input 的 placeholder 文字颜色 */
+.lt-date-input::-webkit-datetime-edit-text,
+.lt-date-input::-webkit-datetime-edit-field,
+.lt-time-input::-webkit-datetime-edit-text,
+.lt-time-input::-webkit-datetime-edit-field {
+  color: inherit;
 }
 
 /*
@@ -293,8 +346,8 @@ html.pwa [role="dialog"][data-state="open"] > div:first-child {
 
 /* Fade-in animation used by page roots for a soft PWA-like transition. */
 @keyframes lifetree-fade-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { transform: translateY(2px); }
+  to   { transform: translateY(0); }
 }
 .animate-fade-in {
   animation: lifetree-fade-in 220ms ease-out both;

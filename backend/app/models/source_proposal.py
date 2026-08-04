@@ -12,11 +12,11 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy import Float, ForeignKey, Index, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.postgres import Base
 from app.models.base import TimestampMixin, UUIDPkMixin
+from app.models.types import JSON_DOCUMENT
 
 
 class SourceProposal(UUIDPkMixin, TimestampMixin, Base):
@@ -52,8 +52,8 @@ class SourceProposal(UUIDPkMixin, TimestampMixin, Base):
     # proposed / accepted / rejected
 
     # Tavily Extract trial result: {ok, title_preview, update_frequency_hint, content_length}
-    probe_result: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    probe_result: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
     def __repr__(self) -> str:
         return f"<SourceProposal {self.status}:{self.title[:40]}>"

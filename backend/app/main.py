@@ -12,11 +12,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import api_router
 from app.core.config import get_settings
+from app.core.desktop_security import DesktopTokenMiddleware
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
-from app.db.minio import close_minio, ensure_minio_bucket
 from app.db.neo4j import close_neo4j_driver, get_neo4j_driver
+from app.db.postgres import initialize_local_database
 from app.db.redis import close_redis, get_redis
+from app.services.runtime.blob_store import close_blob_store, get_blob_store
+from app.services.runtime.job_runner import close_job_runner
 
 settings = get_settings()
 log = get_logger(__name__)
@@ -27,32 +30,42 @@ async def lifespan(app: FastAPI):
     configure_logging("DEBUG" if settings.app_debug else "INFO")
     log.info("app.startup", env=settings.app_env, port=settings.app_backend_port)
 
-    # Warm up connections; failures here are non-fatal at import time so the
-    # API still boots (e.g. during CI without docker compose running).
-    try:
-        get_neo4j_driver().verify_connectivity()
-        log.info("app.neo4j_ok")
-    except Exception as exc:  # noqa: BLE001
-        log.warning("app.neo4j_unavailable", error=str(exc))
+    if settings.lifetree_storage_mode == "local":
+        initialize_local_database()
+        log.info("app.sqlite_ok")
+        # 图投影重建放到后台线程，不阻塞 /health 响应
+        from app.db.postgres import schedule_graph_rebuild
+
+        schedule_graph_rebuild()
+        log.info("app.graph_rebuild_scheduled")
+    else:
+        # Warm up server-only connections. Failures remain non-fatal so the
+        # API can still expose diagnostics during a partial outage.
+        try:
+            get_neo4j_driver().verify_connectivity()
+            log.info("app.neo4j_ok")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("app.neo4j_unavailable", error=str(exc))
+
+        try:
+            get_redis().ping()
+            log.info("app.redis_ok")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("app.redis_unavailable", error=str(exc))
 
     try:
-        get_redis().ping()
-        log.info("app.redis_ok")
+        get_blob_store().prepare()
+        log.info("app.blob_store_ok", mode=settings.lifetree_storage_mode)
     except Exception as exc:  # noqa: BLE001
-        log.warning("app.redis_unavailable", error=str(exc))
-
-    try:
-        ensure_minio_bucket()
-        log.info("app.minio_ok")
-    except Exception as exc:  # noqa: BLE001
-        log.warning("app.minio_unavailable", error=str(exc))
+        log.warning("app.blob_store_unavailable", error=str(exc))
 
     yield
 
     log.info("app.shutdown")
     close_neo4j_driver()
     close_redis()
-    close_minio()
+    close_job_runner()
+    close_blob_store()
 
 
 def create_app() -> FastAPI:
@@ -62,6 +75,10 @@ def create_app() -> FastAPI:
         description="Phase 1 MVP — knowledge-graph-driven decision support",
         lifespan=lifespan,
     )
+
+    desktop_token = settings.lifetree_desktop_token.get_secret_value()
+    if desktop_token:
+        app.add_middleware(DesktopTokenMiddleware, token=desktop_token)
 
     app.add_middleware(
         CORSMiddleware,

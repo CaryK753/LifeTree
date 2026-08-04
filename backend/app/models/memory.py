@@ -22,11 +22,11 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy import Float, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.postgres import Base
 from app.models.base import SoftDeleteMixin, TimestampMixin, UUIDPkMixin
+from app.models.types import JSON_DOCUMENT
 
 
 class UserMemory(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
@@ -65,7 +65,7 @@ class UserMemory(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     source: Mapped[str] = mapped_column(String(16), default="chat")
 
     # Optional structured payload (e.g. {"date": "2024-03-15", "amount": 50000})
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
 
 Index("ix_user_memories_user_category", UserMemory.user_id, UserMemory.category)

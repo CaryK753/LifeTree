@@ -2,16 +2,19 @@ import { dirname } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const desktopExport = process.env.LIFETREE_DESKTOP_EXPORT === "1";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  output: "standalone",
+  output: desktopExport ? "export" : "standalone",
   distDir: process.env.NEXT_DIST_DIR || ".next",
+  trailingSlash: desktopExport,
+  images: { unoptimized: desktopExport },
   turbopack: {
     root: __dirname,
   },
-  async rewrites() {
+  ...(desktopExport ? {} : { async rewrites() {
     // Server-side proxy target: prefer BACKEND_URL (a server-only env var,
     // safe to use container-internal hostnames like http://backend:18000).
     // Fall back to NEXT_PUBLIC_API_BASE_URL for backward compatibility
@@ -24,7 +27,7 @@ const nextConfig = {
         destination: `${apiBase}/api/v1/:path*`,
       },
     ];
-  },
+  } }),
 };
 
 export default nextConfig;

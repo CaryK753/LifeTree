@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-08-03
+
+### Added
+
+- Local-private desktop runtime: bundled SQLite, encrypted local storage,
+  embedded graph/vector adapters, in-process jobs, and an on-demand Python
+  sidecar with a lightweight Rust proxy.
+- Signed desktop updater: GitHub Release now publishes updater archives,
+  signatures, and `latest.json`; the desktop host verifies, downloads, and
+  installs new versions on restart.
+- Native update dialogs from the macOS menu bar and Windows tray for no
+  update, available update, and update-check failure states.
+- Decision-tree and goal detail workspaces, plus dedicated presentation routes
+  for a lower-friction navigation flow.
+
+### Changed
+
+- macOS menu-bar LifeTree icon is now white; Windows keeps its theme-aware
+  notification-area icon.
+- AI advisor tool-call budget is now 128 per turn; its LangGraph recursion
+  budget scales with that limit.
+- The advisor's existing action-calendar tools are verified and remain part of
+  the built-in tool set: list, reschedule, unschedule, set recurrence, and
+  update action status.
+- New goals default to `active`, and the advisor reuses an equivalent existing
+  goal instead of repeatedly creating duplicates.
+
+### Fixed
+
+- Local desktop startup no longer exposes business pages before the worker is
+  ready, and sidecar processes exit when their desktop host exits.
+- Local SSE no longer attempts to connect to deployment-only Redis.
+- Route transitions no longer animate from transparency, eliminating the
+  desktop black/white flash caused by the WebView background showing through.
+- Desktop proxy routing, token reuse, CORS, and release CI dependency setup
+  are hardened for packaged local operation.
+
 ## [0.1.0] - 2026-07-26
 
 First tagged release of LifeTree — the "life decision tree" intelligent

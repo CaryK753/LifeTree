@@ -1,4 +1,4 @@
-"""System components endpoint — read-only status of docker-launched services.
+"""Read-only status for server infrastructure or local runtime adapters.
 
 Reports the connection / availability of the backing services (Postgres,
 Neo4j, Redis, MinIO) the app depends on. The settings page renders these as
@@ -11,7 +11,7 @@ public config (host/port). Passwords / keys are masked.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.core.config import get_settings
@@ -42,12 +42,17 @@ class SystemComponentsView(BaseModel):
 
 def _check_postgres() -> tuple[bool, str | None, str | None]:
     try:
-        from app.db.postgres import engine
         from sqlalchemy import text
 
+        from app.db.postgres import engine
+
         with engine.connect() as conn:
-            res = conn.execute(text("SELECT version()")).scalar_one_or_none()
-            version = (res or "").split(",")[0] if res else None
+            if get_settings().lifetree_storage_mode == "local":
+                res = conn.execute(text("SELECT sqlite_version()"))
+                version = f"SQLite {res.scalar_one()}"
+            else:
+                res = conn.execute(text("SELECT version()")).scalar_one_or_none()
+                version = (res or "").split(",")[0] if res else None
             return True, version, None
     except Exception as exc:  # noqa: BLE001
         return False, None, str(exc)[:200]
@@ -105,6 +110,52 @@ async def get_system_components(user: CurrentUser) -> SystemComponentsView:
     s = get_settings()
 
     pg_ok, pg_detail, pg_err = _check_postgres()
+    if s.lifetree_storage_mode == "local":
+        from app.core.local_storage import prepare_local_storage
+
+        paths = prepare_local_storage(s.lifetree_data_dir)
+        return SystemComponentsView(
+            components=[
+                SystemComponentView(
+                    key="sqlite",
+                    name="SQLite",
+                    kind="database",
+                    endpoint=str(paths.database),
+                    available=pg_ok,
+                    enabled=True,
+                    detail=pg_detail,
+                    error=pg_err,
+                ),
+                SystemComponentView(
+                    key="embedded_graph",
+                    name="Embedded Graph",
+                    kind="graph",
+                    endpoint="local",
+                    available=True,
+                    enabled=True,
+                    detail="sqlite_edges",
+                ),
+                SystemComponentView(
+                    key="in_process_jobs",
+                    name="In-process Jobs",
+                    kind="cache",
+                    endpoint="local",
+                    available=True,
+                    enabled=True,
+                    detail="serial executor",
+                ),
+                SystemComponentView(
+                    key="filesystem",
+                    name="Local Files",
+                    kind="storage",
+                    endpoint=str(paths.objects),
+                    available=paths.objects.is_dir(),
+                    enabled=True,
+                    detail="content-addressed",
+                ),
+            ]
+        )
+
     neo_ok, neo_detail, neo_err = _check_neo4j()
     redis_ok, redis_detail, redis_err = _check_redis()
     minio_ok, minio_detail, minio_err = _check_minio()

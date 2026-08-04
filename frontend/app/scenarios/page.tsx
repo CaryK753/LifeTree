@@ -20,7 +20,7 @@ export default function ScenariosRedirectPage() {
     const goalList = goals as Array<{ id: string }>;
     const goalId = profile?.primary_goal_id ?? goalList[0]?.id;
     setRedirected(true);
-    router.replace(goalId ? `/goals/${goalId}?tab=scenarios` : "/goals");
+    router.replace(goalId ? `/goals/view?id=${encodeURIComponent(goalId)}&tab=scenarios` : "/goals");
   }, [goals, isLoading, profile?.primary_goal_id, redirected, router]);
 
   return (

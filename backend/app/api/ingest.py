@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -11,7 +10,6 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.core.tenant import CurrentUser
-from app.db.minio import ensure_minio_bucket, get_minio_client
 from app.db.postgres import get_db
 from app.models.event import Event
 from app.models.user import UserProfile
@@ -20,6 +18,7 @@ from app.schemas.api import IngestTextRequest, IngestTextResponse
 from app.services.mineru import is_supported, parse_file
 from app.services.notification import NotificationService
 from app.services.reasoning.risk_propagation import RiskPropagationEngine
+from app.services.runtime.blob_store import get_blob_store
 from app.services.structuring import StructuringService
 
 log = get_logger(__name__)
@@ -60,8 +59,8 @@ async def ingest_upload(
     then run the resulting text through the same structuring pipeline as
     ``POST /ingest/text``.
 
-    The original file is stored in MinIO so users can re-download or
-    re-process it later. The InformationSource row records the MinIO key.
+    The original file is stored through the active BlobStore so users can
+    re-download or re-process it later.
     """
     if not file.filename or not is_supported(file.filename):
         raise HTTPException(
@@ -86,20 +85,17 @@ async def ingest_upload(
     )
     final_title = parsed.title or file.filename
 
-    # Persist to MinIO for traceability
-    minio_key = f"uploads/{uuid.uuid4().hex}/{file.filename}"
+    # Persist the original bytes for traceability. Server mode uses MinIO;
+    # local mode uses the content-addressed objects directory.
+    blob_key = ""
     try:
-        bucket = ensure_minio_bucket()
-        get_minio_client().put_object(
-            bucket_name=bucket,
-            object_name=minio_key,
-            data=__import__("io").BytesIO(raw),
-            length=len(raw),
+        stored = get_blob_store().put_bytes(
+            raw,
             content_type=file.content_type or "application/octet-stream",
         )
+        blob_key = stored.key
     except Exception as exc:  # noqa: BLE001
-        log.warning("ingest.minio_put_failed", error=str(exc))
-        minio_key = ""
+        log.warning("ingest.blob_put_failed", error=str(exc))
 
     if not parsed.text.strip():
         # Still create a source so the user sees the upload, but mark skip_llm
@@ -111,7 +107,7 @@ async def ingest_upload(
             source_kind="user_upload",
             url=url,
             publisher=publisher,
-            user_upload_id=minio_key or None,
+            user_upload_id=blob_key or None,
             skip_llm=True,
         )
 
@@ -123,7 +119,7 @@ async def ingest_upload(
         source_kind=source_kind,
         url=url,
         publisher=publisher,
-        user_upload_id=minio_key or None,
+        user_upload_id=blob_key or None,
         skip_llm=skip_llm,
     )
 

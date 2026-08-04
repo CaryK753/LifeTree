@@ -16,6 +16,7 @@ Two resolution modes:
 """
 from __future__ import annotations
 
+import secrets
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
@@ -37,6 +38,9 @@ DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
 #: Display name used when bootstrapping a fresh default user.
 DEFAULT_DISPLAY_NAME = "Alex Chen"
 DEFAULT_EMAIL = "alex@example.com"
+
+#: HTTP header carrying the per-launch desktop sidecar token.
+DESKTOP_TOKEN_HEADER = "x-lifetree-desktop-token"
 
 
 def get_default_user(db: Session) -> UserProfile:
@@ -92,19 +96,49 @@ def _allow_default_user_fallback() -> bool:
     return False
 
 
+def _desktop_token_user(
+    db: Session,
+    desktop_token: str | None,
+) -> UserProfile | None:
+    """Authenticate a desktop sidecar session via the per-launch token.
+
+    In local-private desktop mode there is no login UI; the ``X-LifeTree-Desktop-Token``
+    header (validated by ``DesktopTokenMiddleware``) doubles as the user session.
+    Returns the default user when the token matches the configured sidecar token,
+    otherwise ``None`` so the caller falls through to JWT auth.
+    """
+    if not desktop_token:
+        return None
+    settings = get_settings()
+    expected = settings.lifetree_desktop_token.get_secret_value()
+    if not expected or not secrets.compare_digest(desktop_token, expected):
+        return None
+    return _apply_admin_override(get_default_user(db))
+
+
 def get_current_user(
     db: Annotated[Session, Depends(get_db)],
     authorization: Annotated[str | None, Header()] = None,
+    x_lifetree_desktop_token: Annotated[str | None, Header()] = None,
 ) -> UserProfile:
-    """FastAPI dependency: resolve the current user from a Bearer JWT.
+    """FastAPI dependency: resolve the current user.
 
-    Returns 401 when:
-      - No ``Authorization`` header
-      - Token is invalid/expired
-      - User doesn't exist or is disabled
+    Resolution order:
+      1. ``Authorization: Bearer <jwt>`` — normal multi-user / cloud auth.
+      2. ``X-LifeTree-Desktop-Token`` — local-private desktop mode; the
+         per-launch sidecar token authenticates the single default user.
+
+    Returns 401 when neither credential is present or valid.
     """
-    # ---------- No Authorization header ----------
+    # ---------- 1. Desktop sidecar token (local private mode) ----------
     if not authorization or not authorization.lower().startswith("bearer "):
+        desktop_user = _desktop_token_user(db, x_lifetree_desktop_token)
+        if desktop_user is not None:
+            if not desktop_user.is_enabled:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled"
+                )
+            return desktop_user
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing Authorization header",
@@ -137,10 +171,11 @@ def get_current_user(
 def get_optional_current_user(
     db: Annotated[Session, Depends(get_db)],
     authorization: Annotated[str | None, Header()] = None,
+    x_lifetree_desktop_token: Annotated[str | None, Header()] = None,
 ) -> UserProfile | None:
     """Resolve a user when present, without rejecting an anonymous multi-user request."""
     if not authorization or not authorization.lower().startswith("bearer "):
-        return None
+        return _desktop_token_user(db, x_lifetree_desktop_token)
     return get_current_user(db, authorization)
 
 

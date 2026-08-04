@@ -1905,7 +1905,7 @@ export function DecisionTreeWorkspace({
               {t("tree.noTreeHint")}
             </p>
             <Button asChild size="sm" variant="outline">
-              <Link href={`/goals/${goalId}`}>
+              <Link href={`/goals/view?id=${encodeURIComponent(goalId)}`}>
                 <ArrowLeft className="h-3.5 w-3.5 mr-1" />
                 {t("tree.back")}
               </Link>

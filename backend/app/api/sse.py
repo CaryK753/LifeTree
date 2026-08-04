@@ -37,11 +37,14 @@ async def sse_stream(
 ) -> StreamingResponse:
     """Stream server-sent events for the authenticated user.
 
-    Uses Redis pub/sub channels:
+    Server deployments use Redis pub/sub channels:
       - `lifetree:risk:{user_id}` — risk alerts
       - `lifetree:scenario:{scenario_id}` — run progress (if scenario_id given)
+
+    The private desktop runtime has no Redis dependency and keeps the same
+    connection open with heartbeats instead.
     """
-    redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
+    settings = get_settings()
     resolved_user_id = user.id
     channels = [f"lifetree:risk:{resolved_user_id}"]
     if scenario_id:
@@ -58,6 +61,20 @@ async def sse_stream(
             },
         }
         yield f"event: hello\ndata: {json.dumps(hello['data'])}\n\n"
+
+        # The private desktop runtime intentionally has no Redis service.
+        # Keep its connection alive so UI consumers retain one transport
+        # contract; local changes are re-fetched by the client as needed.
+        if settings.lifetree_storage_mode == "local":
+            try:
+                while True:
+                    await asyncio.sleep(15)
+                    yield f": ping {datetime.now(timezone.utc).isoformat()}\n\n"
+            except asyncio.CancelledError:
+                log.info("sse.client_disconnected", user_id=resolved_user_id)
+            return
+
+        redis = Redis.from_url(settings.redis_url, decode_responses=True)
 
         pubsub = redis.pubsub()
         for ch in channels:

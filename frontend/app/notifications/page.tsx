@@ -123,7 +123,7 @@ function getDeepLink(n: NotificationRead): string | null {
       (typeof fromImpact === "string" && fromImpact) ||
       (n as NotificationRead & { goal_id?: string }).goal_id ||
       suffix;
-    if (goalId) return `/goals/${encodeURIComponent(goalId)}`;
+    if (goalId) return `/goals/view?id=${encodeURIComponent(goalId)}`;
   }
   return null;
 }

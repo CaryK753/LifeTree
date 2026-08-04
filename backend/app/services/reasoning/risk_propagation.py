@@ -8,14 +8,14 @@ per (goal, scenario) tuple and emitting personalized notifications.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.db.neo4j import get_neo4j_driver
 from app.db.redis import get_redis
 from app.models.event import Event
 from app.models.goal import Goal
@@ -32,7 +32,7 @@ class RiskPropagationEngine:
 
     def __init__(self, db: Session) -> None:
         self.db = db
-        self.graph = GraphService(driver=get_neo4j_driver())
+        self.graph = GraphService()
         self.profiling = ProfilingService(db)
 
     # ---------------- Public API ----------------
@@ -42,7 +42,7 @@ class RiskPropagationEngine:
         if event.risk_flag_level is None:
             return []
 
-        started = datetime.now(timezone.utc)
+        started = datetime.now(UTC)
         impacted = self.graph.propagate_risk(event.id)
 
         if not impacted:
@@ -71,25 +71,25 @@ class RiskPropagationEngine:
                 goal_id=goal.id,
                 scenario_id=None,
                 overall_risk=overall_risk,
-                factor_scores=[{
-                    "factor_id": row.get("risk_id"),
-                    "name": row.get("risk_name"),
-                    "level": personalized_level,
-                    "contribution": overall_risk,
-                }],
+                factor_scores=[
+                    {
+                        "factor_id": row.get("risk_id"),
+                        "name": row.get("risk_name"),
+                        "level": personalized_level,
+                        "contribution": overall_risk,
+                    }
+                ],
             )
             assessments.append(assessment)
 
         # Audit log
-        elapsed_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+        elapsed_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
         self.db.add(
             RiskPropagationLog(
                 event_id=event.id,
                 goal_id=impacted[0].get("goal_id") if impacted else None,
                 path=[{"row": r} for r in impacted],
-                initial_risk=self._level_to_score(
-                    impacted[0].get("level", "low")
-                ),
+                initial_risk=self._level_to_score(impacted[0].get("level", "low")),
                 final_risk=assessments[0].overall_risk if assessments else 0.0,
                 duration_ms=elapsed_ms,
             )
@@ -112,6 +112,8 @@ class RiskPropagationEngine:
 
     def _publish_sse(self, assessment: RiskAssessment) -> None:
         """Publish a risk_alert event to the user's SSE channel."""
+        if get_settings().lifetree_storage_mode == "local":
+            return
         try:
             payload = {
                 "type": "risk_alert",
@@ -159,7 +161,7 @@ class RiskPropagationEngine:
         if existing is not None:
             existing.overall_risk = overall_risk
             existing.factor_scores = factor_scores
-            existing.computed_at = datetime.now(timezone.utc)
+            existing.computed_at = datetime.now(UTC)
             self.db.add(existing)
             return existing
         assessment = RiskAssessment(

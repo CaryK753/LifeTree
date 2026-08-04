@@ -870,7 +870,7 @@ FastAPI 第一版使用 PyInstaller 打包为每个平台的 Python sidecar，�
 
 | 能力 | 本地实现建议 | 云端实现 | 说明 |
 | :--- | :--- | :--- | :--- |
-| 关系事实 | SQLite + SQLCipher（或等价页级加密） | PostgreSQL | SQLAlchemy 模型需消除 PostgreSQL `JSONB` 等方言直绑 |
+| 关系事实 | SQLite Alpha（加密待实现） | PostgreSQL | `JSONB` 已改为方言类型；正式迁移器与页级加密待完成 |
 | 全文检索 | SQLite FTS5 | PostgreSQL FTS/专用检索 | 索引可重建，不作为唯一真相源 |
 | 图查询 | 第一阶段使用节点/边表 + 递归 CTE；复杂查询再评估 Kuzu | Neo4j | 先建立 `GraphStore`，不要让领域服务直接写 Cypher |
 | 向量检索 | 在 sqlite-vec 与 LanceDB 间做兼容性/性能验证后选型 | pgvector | 嵌入向量属于可重建派生数据 |
@@ -954,6 +954,17 @@ checksums.sha256
 | D4 迁移 GA | local -> self-hosted/cloud、single -> multi 的 dry-run/校验/回滚 | 大数据集、跨版本、失败注入和恢复演练通过，迁移报告可审计 |
 
 首个技术验证应做一个很窄的 vertical slice：在 Tauri 中完成“创建目标 -> 本地持久化 -> 创建行动 -> 关闭重开 -> 导出归档 -> 导入空库”，同时用一个本地模型完成结构化提取。这个切片通过后，再迁移图谱、抓取、自演化和云同步，能最早暴露 Next.js 静态化、Python sidecar、数据库方言和签名发布的真实成本。
+
+### 12.11 2026-07-30 桌面端启动进展
+
+桌面 D1 已开始实施，并先落地不会伪装成本地离线能力的宿主基础：
+
+- 建立 Tauri 2 工程、品牌启动界面和 Windows/macOS 无安装包构建检查。
+- 启动器支持 `self_hosted` 与 `cloud_multi_tenant` 配置持久化；`local_private` 在本地数据适配器完成前保持锁定。
+- 前端 JSON、上传、下载、聊天流和服务端事件统一通过运行时 API URL 解析，为随机端口 sidecar 提供入口。
+- 远程地址仅允许 HTTPS 或本机回环 HTTP，禁止凭据、查询参数和片段；远程 WebView 不授予宿主 capability。
+
+本地 vertical slice 已推进到 SQLite Alpha、文件 BlobStore、进程内 JobRunner 和 FastAPI 能力握手；隔离测试已覆盖注册、目标、行动与文件上传。下一步实现嵌入式图、静态前端和 sidecar 启停/令牌握手，再解锁 `local_private`。
 
 ---
 

@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/layout/sidebar";
 import { AuthGate } from "@/components/auth/auth-gate";
 import { SSEProvider } from "@/components/sse/sse-provider";
+import { DesktopRuntimeGate } from "@/components/layout/desktop-runtime-gate";
 
 /**
  * AppShell: top-level layout wrapper that decides whether to render the
@@ -15,6 +16,9 @@ import { SSEProvider } from "@/components/sse/sse-provider";
  *   - /terms, /privacy — public legal documents
  *
  * All other routes get the full Sidebar + AuthGate treatment.
+ *
+ * DesktopRuntimeGate wraps the full app layout, showing a loading screen
+ * until the local Python worker is ready (desktop local mode only).
  *
  * This is a client component because ``usePathname`` is needed to
  * distinguish standalone routes from app routes, and the pathname is
@@ -34,17 +38,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return <>{children}</>;
   }
 
-  // Full app layout: Sidebar + AuthGate + main content area.
+  // Full app layout: DesktopRuntimeGate > Sidebar + AuthGate + main content area.
   return (
-    <AuthGate>
-      <SSEProvider>
-        <div className="flex h-dvh min-h-0 overflow-hidden">
-          <Sidebar />
-          <main className="main-shell min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain safe-top safe-bottom">
-            {children}
-          </main>
-        </div>
-      </SSEProvider>
-    </AuthGate>
+    <DesktopRuntimeGate>
+      <AuthGate>
+        <SSEProvider>
+          <div className="flex h-dvh min-h-0 overflow-hidden">
+            <Sidebar />
+            <main className="main-shell min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain safe-top safe-bottom">
+              {children}
+            </main>
+          </div>
+        </SSEProvider>
+      </AuthGate>
+    </DesktopRuntimeGate>
   );
 }

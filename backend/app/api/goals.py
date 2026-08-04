@@ -30,6 +30,7 @@ from app.schemas.entities import (
 )
 from app.services.goal_identity import find_equivalent_goal, lock_goal_identity
 from app.services.graph import GraphService
+from app.services.graph_sync import sync_goal_tree
 from app.services.prediction_outcomes import PredictionOutcomeService
 
 router = APIRouter(prefix="/goals", tags=["goals"])
@@ -132,7 +133,7 @@ def create_goal(
             db.add(Requirement(pathway_id=pathway.id, **r))
     db.commit()
     db.refresh(goal)
-    graph.upsert_goal(goal)
+    sync_goal_tree(graph, db, goal)
     return goal
 
 

@@ -73,11 +73,17 @@ node_modules/
 .pnp
 .pnp.js
 .next/
+frontend/.next-desktop/
 out/
 build/
 .vercel
 *.tsbuildinfo
 next-env.d.ts
+
+# Rust / Tauri
+target/
+desktop/src-tauri/binaries/*
+desktop/src-tauri/resources/sidecar-runtime/
 
 # Alembic
 backend/alembic/versions/__pycache__/

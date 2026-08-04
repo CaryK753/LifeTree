@@ -14,6 +14,7 @@ APP_NAME = "LifeTree"
 @dataclass(frozen=True, slots=True)
 class LocalStoragePaths:
     data: Path
+    database: Path
     config: Path
     cache: Path
     objects: Path
@@ -38,6 +39,7 @@ def resolve_local_storage_paths(data_dir: Path | str | None = None) -> LocalStor
 
     return LocalStoragePaths(
         data=data,
+        database=data / "lifetree.sqlite3",
         config=config,
         cache=cache,
         objects=data / "objects",

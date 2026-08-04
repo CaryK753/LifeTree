@@ -4,8 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, useSettings } from "@/lib/hooks";
 import {
   api,
-  API_PREFIX,
+  apiUrl,
   getAccessToken,
+  getDesktopHeaders,
   request,
   type AboutInfo,
   type UpdateCheck,
@@ -228,8 +229,11 @@ function BackupCard() {
   // the JSONL endpoint and double-encode the JSON endpoint.
   async function fetchAuthed(path: string): Promise<Response> {
     const token = getAccessToken();
-    const res = await fetch(`${API_PREFIX}${path}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    const res = await fetch(apiUrl(path), {
+      headers: {
+        ...getDesktopHeaders(),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
     });
     if (!res.ok) {
       throw new Error(`${res.status} ${res.statusText}`);

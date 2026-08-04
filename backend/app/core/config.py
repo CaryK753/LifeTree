@@ -29,11 +29,11 @@ class Settings(BaseSettings):
     app_cors_origins: str = "http://localhost:13000"
 
     # ---------- Runtime storage ----------
-    # ``local`` currently enables the desktop-ready directory and secret
-    # foundations only. Database/blob/job adapters remain server-backed until
-    # their explicit ports are implemented.
+    # ``local`` enables the Alpha SQLite, filesystem blob, and in-process job
+    # adapters. Embedded graph/vector adapters and desktop packaging remain pending.
     lifetree_storage_mode: Literal["server", "local"] = "server"
     lifetree_data_dir: Path | None = None
+    lifetree_desktop_token: SecretStr = SecretStr("")
 
     # ---------- PostgreSQL ----------
     postgres_user: str = "lifetree"

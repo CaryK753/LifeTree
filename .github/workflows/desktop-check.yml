@@ -1,0 +1,80 @@
+name: Check Desktop Host
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - "backend/app/api/runtime.py"
+      - "backend/app/core/local_storage.py"
+      - "backend/app/db/postgres.py"
+      - "backend/app/models/**"
+      - "backend/app/services/runtime/**"
+      - "backend/tests/test_local_runtime_adapters.py"
+      - ".github/workflows/desktop-check.yml"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "backend/app/api/runtime.py"
+      - "backend/app/core/local_storage.py"
+      - "backend/app/db/postgres.py"
+      - "backend/app/models/**"
+      - "backend/app/services/runtime/**"
+      - "backend/tests/test_local_runtime_adapters.py"
+      - ".github/workflows/desktop-check.yml"
+  workflow_dispatch:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install local runtime dependencies
+        run: python -m pip install -e "backend[desktop,dev]"
+
+      - name: Test local runtime adapters
+        run: python -m pytest backend/tests/test_local_runtime_adapters.py backend/tests/test_local_storage_foundation.py backend/tests/test_embedded_graph_store.py backend/tests/test_local_vector_search.py backend/tests/test_local_encryption.py backend/tests/test_sqlite_migrations.py backend/tests/test_desktop_security.py backend/tests/test_desktop_sidecar.py -q
+
+      - name: Build desktop sidecar
+        run: python backend/scripts/build_desktop_sidecar.py
+
+      - name: Test desktop host
+        working-directory: desktop
+        run: npm run check
+
+      - name: Build desktop binary
+        working-directory: desktop
+        run: npm run build -- --no-bundle

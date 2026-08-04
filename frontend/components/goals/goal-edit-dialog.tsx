@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -168,10 +169,10 @@ export function GoalEditDialog({
 
               <div className="space-y-1.5">
                 <Label>{t("goals.form.targetDate")}</Label>
-                <Input
-                  type="date"
+                <DateInput
                   value={form.target_date}
                   onChange={(e) => setForm({ ...form, target_date: e.target.value })}
+                  label={t("goals.form.targetDate")}
                 />
               </div>
 

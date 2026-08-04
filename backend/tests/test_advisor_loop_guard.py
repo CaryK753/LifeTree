@@ -1,5 +1,18 @@
 from app.services.advisor.graph import SYSTEM_PROMPT
-from app.services.advisor.loop_guard import ToolLoopGuard
+from app.services.advisor.loop_guard import (
+    ADVISOR_RECURSION_LIMIT,
+    DEFAULT_MAX_TOOL_CALLS,
+    ToolLoopGuard,
+)
+
+
+def test_default_budget_allows_128_tool_calls() -> None:
+    guard = ToolLoopGuard(max_identical_calls=65)
+
+    for index in range(DEFAULT_MAX_TOOL_CALLS):
+        assert guard.record("search", {"page": index}) is None
+    assert guard.record("search", {"page": 65}) == "tool_call_budget_exceeded"
+    assert ADVISOR_RECURSION_LIMIT > DEFAULT_MAX_TOOL_CALLS * 2
 
 
 def test_identical_tool_call_stops_before_third_execution() -> None:

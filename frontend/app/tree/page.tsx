@@ -67,7 +67,7 @@ export default function DecisionTreeIndexPage() {
             : g.status === "draft" ? "medium"
             : "high";
           return (
-            <Link key={g.id} href={`/tree/${g.id}`} className="block group">
+            <Link key={g.id} href={`/tree/view?goalId=${encodeURIComponent(g.id)}`} className="block group">
               <Card className="hover:border-brand-500/40 transition-colors h-full">
                 <CardHeader>
                   <div className="flex items-start justify-between gap-2">

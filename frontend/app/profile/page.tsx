@@ -17,6 +17,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
+import { TimeInput } from "@/components/ui/date-input";
 import {
   Select,
   SelectContent,
@@ -786,13 +788,13 @@ export default function ProfilePage() {
                 <Label className="text-[10px] text-zinc-500 mb-1 block">
                   {t("profile.field.quietHoursStart")}
                 </Label>
-                <Input
-                  type="time"
+                <TimeInput
                   value={form.quiet_hours_start}
                   onChange={(e) => {
                     setForm((prev) => ({ ...prev, quiet_hours_start: e.target.value }));
                     setDirty(true);
                   }}
+                  label={t("profile.field.quietHoursStart")}
                   className="h-9 text-sm"
                 />
               </div>
@@ -800,13 +802,13 @@ export default function ProfilePage() {
                 <Label className="text-[10px] text-zinc-500 mb-1 block">
                   {t("profile.field.quietHoursEnd")}
                 </Label>
-                <Input
-                  type="time"
+                <TimeInput
                   value={form.quiet_hours_end}
                   onChange={(e) => {
                     setForm((prev) => ({ ...prev, quiet_hours_end: e.target.value }));
                     setDirty(true);
                   }}
+                  label={t("profile.field.quietHoursEnd")}
                   className="h-9 text-sm"
                 />
               </div>
@@ -1405,13 +1407,13 @@ function MemoryBoard() {
             </Select>
             <div className="flex items-center gap-1.5 text-xs text-zinc-400">
               <span>{t("memory.importance")}</span>
-              <input
-                type="range"
+              <Slider
                 min={0}
                 max={1}
                 step={0.1}
                 value={newImportance}
                 onChange={(e) => setNewImportance(Number(e.target.value))}
+                label={t("memory.importance")}
                 className="w-24 accent-brand-500"
               />
               <span className="text-zinc-300 w-8">{newImportance.toFixed(1)}</span>
@@ -1489,13 +1491,13 @@ function MemoryBoard() {
                         </Select>
                         <div className="flex items-center gap-1.5 text-xs text-zinc-400">
                           <span>{t("memory.importance")}</span>
-                          <input
-                            type="range"
+                          <Slider
                             min={0}
                             max={1}
                             step={0.1}
                             value={editImportance}
                             onChange={(e) => setEditImportance(Number(e.target.value))}
+                            label={t("memory.importance")}
                             className="w-24 accent-brand-500"
                           />
                           <span className="text-zinc-300 w-8">{editImportance.toFixed(1)}</span>

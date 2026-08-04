@@ -445,7 +445,7 @@ LifeTree 支持两种使用模式，由环境变量 `LIFETREE_USE_MODE` 控制�
 - **单用户模式（`single`，默认）**：仍需注册和登录。首个账号自动成为管理员；首个账号创建后，服务端自动禁止新增注册。它等价于开启“禁止注册”的单账号实例。
 - **多用户模式（`multi`）**：必须使用 PostgreSQL、Neo4j、Redis、MinIO、Celery 等全量服务部署。首个注册账号自动成为管理员；管理员也可通过 `LIFETREE_ADMIN_USER_IDS` 补充提权。
 
-本地 SQLite 存储只规划用于 `single` 模式，不能用于 `multi`。当前版本已经完成模式认证边界和用户数据模型，但 SQLite 仓储适配器尚未完成；现阶段两种模式仍使用 PostgreSQL。这样可以避免在事务、向量检索和知识图谱同步尚未抽象完成时制造“看似本地、实际仍依赖远端组件”的混合模式。
+本地 SQLite 存储只用于 `single` 模式，不能用于 `multi`。`LIFETREE_STORAGE_MODE=local` 已提供 SQLite Alpha、内容寻址文件存储和进程内任务执行器，目标、行动与上传 vertical slice 已通过隔离测试。嵌入式图、向量索引、sidecar 打包、静态桌面前端、正式迁移器和加密仍在开发中，因此桌面启动器暂不解锁 `local_private`。
 
 支持的登录方式：
 

@@ -15,6 +15,7 @@ def test_portable_local_storage_layout(tmp_path: Path) -> None:
     paths = resolve_local_storage_paths(tmp_path / "LifeTree Data")
 
     assert paths.data == (tmp_path / "LifeTree Data").resolve()
+    assert paths.database == paths.data / "lifetree.sqlite3"
     assert paths.config == paths.data / "config"
     assert paths.cache == paths.data / "cache"
 

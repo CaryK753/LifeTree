@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import { cookies } from "next/headers";
 import "./globals.css";
 import { ToastProvider } from "@/components/ui/toast";
 import { RegisterSW } from "@/components/pwa/register-sw";
@@ -9,24 +8,14 @@ import { I18nProvider } from "@/lib/i18n/provider";
 import {
   DEFAULT_LOCALE,
   MESSAGES,
-  isLocale,
-  type Locale,
 } from "@/lib/i18n/messages";
 
-async function resolveLocaleFromCookie(): Promise<Locale> {
-  const cookieStore = await cookies();
-  const stored = cookieStore.get("lifetree.locale")?.value;
-  if (isLocale(stored)) return stored;
-  return DEFAULT_LOCALE;
-}
+const defaultMessages = MESSAGES[DEFAULT_LOCALE];
 
-export async function generateMetadata(): Promise<Metadata> {
-  const locale = await resolveLocaleFromCookie();
-  const dict = MESSAGES[locale] ?? MESSAGES[DEFAULT_LOCALE];
-  return {
-    title: dict["app.name"] ?? "LifeTree",
-    description: dict["app.tagline"] ?? "",
-    applicationName: "LifeTree",
+export const metadata: Metadata = {
+  title: defaultMessages["app.name"] ?? "LifeTree",
+  description: defaultMessages["app.tagline"] ?? "",
+  applicationName: "LifeTree",
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
@@ -54,8 +43,7 @@ export async function generateMetadata(): Promise<Metadata> {
     "mobile-web-app-capable": "yes",
     "apple-mobile-web-app-status-bar-style": "black-translucent",
   },
-  };
-}
+};
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -71,17 +59,16 @@ export const viewport: Viewport = {
   colorScheme: "dark light",
 };
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const locale = await resolveLocaleFromCookie();
   return (
     // suppressHydrationWarning: next-themes injects the `dark`/`light`
     // class on <html> before React hydrates, so the server-rendered HTML
     // won't match. This is the documented next-themes setup.
-    <html lang={locale} suppressHydrationWarning>
+    <html lang={DEFAULT_LOCALE} suppressHydrationWarning>
       <head>
         {/* Inline PWA-detection script — runs synchronously BEFORE first
             paint so the ``html.pwa`` class is set before any CSS applies.

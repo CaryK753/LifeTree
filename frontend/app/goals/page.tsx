@@ -7,6 +7,7 @@ import { api, ALL_GOAL_STATUSES, type GoalStatus } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -186,11 +187,11 @@ export default function GoalsPage() {
               </div>
               <div className="space-y-1.5 md:col-span-2">
                 <Label>{t("goals.form.targetDate")}</Label>
-                <Input
-                  type="date"
+                <DateInput
                   value={form.target_date}
                   min={todayLocalISO()}
                   onChange={(e) => setForm({ ...form, target_date: e.target.value })}
+                  label={t("goals.form.targetDate")}
                 />
               </div>
             </div>
@@ -316,7 +317,7 @@ export default function GoalsPage() {
             : g.status === "draft" ? "medium"
             : "high";
           return (
-          <Link key={g.id} href={`/goals/${g.id}`} className="block group">
+          <Link key={g.id} href={`/goals/view?id=${encodeURIComponent(g.id)}`} className="block group">
             <Card className="hover:border-brand-500/40 transition-colors h-full">
               <CardHeader>
                 <div className="flex items-start justify-between gap-2">

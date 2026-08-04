@@ -38,6 +38,7 @@ from app.services.advisor import (
     messages_to_langchain,
 )
 from app.services.advisor.loop_guard import (
+    ADVISOR_RECURSION_LIMIT,
     RECURSION_LIMIT_MESSAGE,
     TOOL_LOOP_MESSAGE,
     ToolLoopGuard,
@@ -458,7 +459,10 @@ async def chat_stream(
             async for event in graph.astream_events(
                 {"messages": lc_messages},
                 version="v2",
-                config={"max_concurrency": 1, "recursion_limit": 40},
+                config={
+                    "max_concurrency": 1,
+                    "recursion_limit": ADVISOR_RECURSION_LIMIT,
+                },
             ):
                 kind = event.get("event")
                 if kind == "on_chat_model_stream":

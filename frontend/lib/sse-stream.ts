@@ -1,13 +1,9 @@
-import { API_PREFIX, STREAM_BASE_URL, getAccessToken } from "./api";
+import { getAccessToken, getDesktopHeaders, streamApiUrl } from "./api";
 
 export interface ServerEvent {
   event: string;
   data: string;
 }
-
-const SSE_ENDPOINT = STREAM_BASE_URL
-  ? `${STREAM_BASE_URL}${API_PREFIX}/sse`
-  : `${API_PREFIX}/sse`;
 
 function parseEvent(block: string): ServerEvent | null {
   let event = "message";
@@ -29,8 +25,11 @@ export async function streamServerEvents(
   onEvent: (event: ServerEvent) => void
 ): Promise<void> {
   const token = getAccessToken();
-  const response = await fetch(SSE_ENDPOINT, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  const response = await fetch(streamApiUrl("/sse"), {
+    headers: {
+      ...getDesktopHeaders(),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     signal,
   });
   if (!response.ok || !response.body) {

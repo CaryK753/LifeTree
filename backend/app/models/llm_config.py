@@ -17,18 +17,19 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.postgres import Base
 from app.models.base import TimestampMixin
+from app.models.types import JSON_DOCUMENT, EncryptedText
 
 
 class LLMProvider(TimestampMixin, Base):
     """A model supplier (OpenAI, DeepSeek, Anthropic, 阿里云百炼, …).
 
-    The ``api_key`` is stored in plaintext — same security level as the
-    previous JSON file (this is a single-user app).
+    The ``api_key`` is transparently encrypted at rest in local storage mode
+    via :class:`EncryptedText`; server mode stores it as plaintext (same as
+    the previous JSON file behaviour).
     """
 
     __tablename__ = "llm_providers"
@@ -43,7 +44,7 @@ class LLMProvider(TimestampMixin, Base):
         String(32), nullable=False, default="openai_compatible"
     )
     base_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    api_key: Mapped[str] = mapped_column(Text, default="", server_default="")
+    api_key: Mapped[str] = mapped_column(EncryptedText, default="", server_default="")
 
     models: Mapped[list[LLMModel]] = relationship(
         back_populates="provider", cascade="all, delete-orphan"
@@ -74,7 +75,7 @@ class LLMModel(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False)
     capabilities: Mapped[list[Any]] = mapped_column(
-        JSONB, nullable=False, default=list, server_default="[]"
+        JSON_DOCUMENT, nullable=False, default=list, server_default="[]"
     )
 
     provider: Mapped[LLMProvider] = relationship(back_populates="models")

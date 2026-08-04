@@ -167,6 +167,8 @@ class SearchService:
         if not query or not query.strip():
             return []
 
+        from app.core.config import get_settings
+
         # Embed the query
         query_vec: list[float] | None = None
         try:
@@ -180,6 +182,17 @@ class SearchService:
 
         if query_vec is None:
             return self._event_ilike_fallback(query, limit)
+
+        if get_settings().lifetree_storage_mode == "local":
+            from app.services.runtime.vector_search import search_event_vectors
+
+            results = search_event_vectors(
+                self.db,
+                user_id=self.user_id,
+                query_vector=query_vec,
+                limit=limit,
+            )
+            return results or self._event_ilike_fallback(query, limit)
 
         # Check dimension compatibility with stored embeddings
         sample = self.db.scalar(

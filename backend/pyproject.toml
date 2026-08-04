@@ -46,6 +46,12 @@ dependencies = [
 [project.optional-dependencies]
 local = [
     "keyring>=25.2",
+    "cryptography>=42.0",
+]
+desktop = [
+    "keyring>=25.2",
+    "cryptography>=42.0",
+    "pyinstaller>=6.10",
 ]
 dev = [
     "pytest>=8.2",

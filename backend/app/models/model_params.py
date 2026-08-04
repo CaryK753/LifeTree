@@ -26,11 +26,11 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import Date, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.postgres import Base
 from app.models.base import TimestampMixin, UUIDPkMixin
+from app.models.types import JSON_DOCUMENT
 
 
 class ModelParam(TimestampMixin, Base):
@@ -114,7 +114,7 @@ class PredictionOutcome(UUIDPkMixin, TimestampMixin, Base):
     predicted_p90: Mapped[float | None] = mapped_column(Float, nullable=True)
     predicted_at: Mapped[datetime | None] = mapped_column(String(64), nullable=True)
     model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    factor_snapshot: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    factor_snapshot: Mapped[list[dict[str, Any]]] = mapped_column(JSON_DOCUMENT, default=list)
 
     # Actual outcome
     actual_outcome: Mapped[str] = mapped_column(String(16), nullable=False)

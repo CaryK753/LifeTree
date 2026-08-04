@@ -12,11 +12,11 @@ from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.postgres import Base
 from app.models.base import TimestampMixin, UUIDPkMixin
+from app.models.types import JSON_DOCUMENT
 
 # ---------- InformationSource ----------
 
@@ -59,7 +59,7 @@ class InformationSource(UUIDPkMixin, TimestampMixin, Base):
     credibility_score: Mapped[float] = mapped_column(Float, default=0.5)
 
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
     # Original user upload reference (if kind=user_upload). Holds either a
     # UUID (legacy) or a MinIO object key like "uploads/<uuid>/<filename>".
@@ -129,8 +129,8 @@ class Event(UUIDPkMixin, TimestampMixin, Base):
     effective_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # old→new (stringified to support arbitrary types)
-    old_value: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
-    new_value: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
+    old_value: Mapped[Any | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    new_value: Mapped[Any | None] = mapped_column(JSON_DOCUMENT, nullable=True)
 
     # Risk flag assigned by LLM extraction layer
     risk_flag_level: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -149,7 +149,7 @@ class Event(UUIDPkMixin, TimestampMixin, Base):
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
 
     # Free-form metadata
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
     # Knowledge half-life (days) — overrides default if set
     half_life_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -176,7 +176,7 @@ class MetricSnapshot(UUIDPkMixin, TimestampMixin, Base):
     unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=func.now())
 
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
 
 # ---------- Assertion (unconfirmed claim) ----------
@@ -198,7 +198,7 @@ class Assertion(UUIDPkMixin, TimestampMixin, Base):
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
     predicate: Mapped[str] = mapped_column(String(128), default="claims")
     claim: Mapped[str] = mapped_column(Text, nullable=False)
-    object_value: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
+    object_value: Mapped[Any | None] = mapped_column(JSON_DOCUMENT, nullable=True)
 
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
     # 0..1 — credibility-weighted confidence
@@ -216,7 +216,7 @@ class Assertion(UUIDPkMixin, TimestampMixin, Base):
     resolved_by_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
 
 # ---------- Relationship (causal / correlation declaration) ----------
@@ -248,7 +248,7 @@ class Relationship(UUIDPkMixin, TimestampMixin, Base):
     weight: Mapped[float] = mapped_column(Float, default=0.0)
 
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
 
 Index("ix_events_subject_action", Event.subject, Event.action)

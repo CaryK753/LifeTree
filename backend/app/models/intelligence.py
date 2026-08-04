@@ -16,11 +16,11 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.postgres import Base
 from app.models.base import TimestampMixin, UUIDPkMixin
+from app.models.types import JSON_DOCUMENT
 
 
 class CalibrationReport(UUIDPkMixin, TimestampMixin, Base):
@@ -43,8 +43,8 @@ class CalibrationReport(UUIDPkMixin, TimestampMixin, Base):
     drift_score: Mapped[float] = mapped_column(Float, default=0.0)
     drift_detected: Mapped[bool] = mapped_column(default=False)
     calibrated: Mapped[bool] = mapped_column(default=False)
-    reliability_curve: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    reliability_curve: Mapped[list[dict[str, Any]]] = mapped_column(JSON_DOCUMENT, default=list)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
 
 class EvolutionMilestone(UUIDPkMixin, TimestampMixin, Base):
@@ -79,7 +79,7 @@ class EvolutionMilestone(UUIDPkMixin, TimestampMixin, Base):
         String(36), ForeignKey("events.id", ondelete="SET NULL"), nullable=True
     )
     comparison_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
 
 class RiskProposal(UUIDPkMixin, TimestampMixin, Base):
@@ -102,8 +102,8 @@ class RiskProposal(UUIDPkMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(16), default="proposed")
     cluster_size: Mapped[int] = mapped_column(Integer, default=0)
     affected_goals_count: Mapped[int] = mapped_column(Integer, default=0)
-    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
-    impact_preview: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSON_DOCUMENT, default=list)
+    impact_preview: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
     adopted_risk_factor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
 
@@ -128,7 +128,7 @@ class SourceAccuracyLog(UUIDPkMixin, TimestampMixin, Base):
     posterior_alpha: Mapped[float] = mapped_column(Float, nullable=False)
     posterior_beta: Mapped[float] = mapped_column(Float, nullable=False)
     resulting_score: Mapped[float] = mapped_column(Float, nullable=False)
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
 
 class ConflictResolution(UUIDPkMixin, TimestampMixin, Base):
@@ -144,7 +144,7 @@ class ConflictResolution(UUIDPkMixin, TimestampMixin, Base):
     predicate: Mapped[str] = mapped_column(String(32), nullable=False)
     winning_source_id: Mapped[str] = mapped_column(String(36), nullable=False)
     winning_object_id: Mapped[str] = mapped_column(String(36), nullable=False)
-    losing_source_ids: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    losing_source_ids: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list)
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 

@@ -7,11 +7,11 @@ from enum import Enum
 from typing import Any
 
 from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.postgres import Base
 from app.models.base import TimestampMixin, UUIDPkMixin
+from app.models.types import JSON_DOCUMENT
 
 # ---------- Notifications ----------
 
@@ -52,12 +52,12 @@ class NotificationLog(UUIDPkMixin, TimestampMixin, Base):
     risk_factor_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
 
     # Personalized impact summary
-    impact_summary: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    impact_summary: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
 
 class WebPushSubscription(UUIDPkMixin, TimestampMixin, Base):
@@ -98,19 +98,19 @@ class RiskAssessment(UUIDPkMixin, TimestampMixin, Base):
     overall_risk: Mapped[float] = mapped_column(Float, default=0.0)
 
     # Per-factor breakdown
-    factor_scores: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    factor_scores: Mapped[list[dict[str, Any]]] = mapped_column(JSON_DOCUMENT, default=list)
     # e.g. [{"factor_id": "...", "name": "Policy Shift", "score": 0.62,
     #        "contribution": 0.32}]
 
     # Survival-style cumulative probability over time
-    success_curve: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    success_curve: Mapped[list[dict[str, Any]]] = mapped_column(JSON_DOCUMENT, default=list)
     # e.g. [{"t": "2027-01-01", "p": 0.12}, ...]
 
     computed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.utcnow()
     )
 
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
 
 # ---------- Risk Propagation Log ----------
@@ -123,7 +123,7 @@ class RiskPropagationLog(UUIDPkMixin, TimestampMixin, Base):
     event_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     goal_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
 
-    path: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    path: Mapped[list[dict[str, Any]]] = mapped_column(JSON_DOCUMENT, default=list)
     # Sequence of nodes the risk traversed: [{"type": "RiskFactor",
     #   "id": "...", "name": "..."}, ...]
 

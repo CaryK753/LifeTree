@@ -21,11 +21,11 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import Date, DateTime, Float, ForeignKey, Index, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.postgres import Base
 from app.models.base import SoftDeleteMixin, TimestampMixin, UUIDPkMixin
+from app.models.types import JSON_DOCUMENT
 
 
 class ActionStatus(str):
@@ -112,7 +112,7 @@ class Action(UUIDPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     # Link back to the ScenarioRun that produced this action, if any.
     source_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
 
     def __repr__(self) -> str:
         return f"<Action {self.title} [{self.status}]>"
