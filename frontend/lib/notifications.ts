@@ -41,10 +41,11 @@ function browserNotificationAvailable(): boolean {
   return typeof window !== "undefined" && "Notification" in window;
 }
 
-/** 当前通知权限状态。 */
+/** 当前通知权限状态（同步快查，不阻塞）。 */
 export function notificationPermission(): NotificationPermission | "unsupported" | "granted" {
   if (isTauriHost()) {
-    // Tauri 端的权限由 capability 控制，前端视作 "granted"。
+    // Tauri 端：capability 已静态授予，前端视作 "granted"。
+    // 首次启动时 macOS 可能弹出系统授权弹窗，但一旦授权后状态恒为 granted。
     return "granted";
   }
   if (browserNotificationAvailable()) {
@@ -54,22 +55,45 @@ export function notificationPermission(): NotificationPermission | "unsupported"
 }
 
 /**
+ * 异步检查 Tauri 通知权限的真实状态。
+ * 在 Tauri 环境下调用 notification 插件的 is_permission_granted 命令。
+ * 非 Tauri 环境返回 browser Notification.permission。
+ */
+async function tauriNotificationGranted(): Promise<boolean | null> {
+  if (!isTauriHost()) return null;
+  try {
+    const result = await tauriInvoke().invoke(
+      "plugin:notification|is_permission_granted"
+    );
+    return Boolean(result);
+  } catch {
+    // 插件不可用或命令未授权 — 视作未授权
+    return false;
+  }
+}
+
+/**
  * 请求通知权限。
  *
- * - Tauri 环境：调用 notification 插件的 request_permission 命令
- *   （capability 中已静态授予，通常直接成功）。
+ * - Tauri 环境：先检查是否已授权，未授权时调用 notification 插件的
+ *   request_permission 命令触发系统授权弹窗（macOS/Windows 首次启动时）。
  * - 浏览器环境：调用 `Notification.requestPermission()`。
  *
  * @returns 是否已获得权限。
  */
 export async function requestNotificationPermission(): Promise<boolean> {
   if (isTauriHost()) {
+    // 先检查是否已授权，避免重复触发系统弹窗
+    const granted = await tauriNotificationGranted();
+    if (granted) return true;
     try {
       await tauriInvoke().invoke("plugin:notification|request_permission");
-      return true;
+      // request_permission 后再次检查实际状态
+      const nowGranted = await tauriNotificationGranted();
+      return nowGranted ?? false;
     } catch {
-      // 静默失败：capability 已授予时不应走到这里
-      return true;
+      // 插件调用失败 — 可能是用户拒绝或 capability 未配置
+      return false;
     }
   }
   if (!browserNotificationAvailable()) {
@@ -107,11 +131,21 @@ export interface SystemNotificationOptions {
  *
  * 静默失败策略：任何环境下的失败都不会抛出异常，调用方负责应用内 toast 回退。
  *
+ * 在 Tauri 环境下，首次发送通知前会自动请求权限（macOS/Windows 首次
+ * 启动时弹出系统授权对话框）。用户授权后通知将投递到操作系统通知中心。
+ *
  * @returns 是否成功投递。
  */
 export async function sendSystemNotification(opts: SystemNotificationOptions): Promise<boolean> {
   // 1. Tauri 桌面端：通过 __TAURI_INTERNALS__.invoke 调用 notification 插件。
   if (isTauriHost()) {
+    // 先确保权限已授予（首次会触发系统弹窗）
+    const granted = await tauriNotificationGranted();
+    if (granted === false) {
+      // 尝试请求权限
+      const requested = await requestNotificationPermission();
+      if (!requested) return false;
+    }
     try {
       await tauriInvoke().invoke("plugin:notification|send_notification", {
         options: {
