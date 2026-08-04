@@ -85,9 +85,16 @@ jobs:
 
       - name: Build signed desktop app
         working-directory: desktop
-        run: npm run build
+        run: |
+          npx tauri build --target ${{ matrix.target }}
+          # macOS post-build fixup (xattr clearing + adhoc re-signing)
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            node scripts/post-build-fix.mjs --target ${{ matrix.target }}
+          fi
+        shell: bash
         env:
-          CARGO_BUILD_TARGET: ${{ matrix.target }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
 
       - name: Create GitHub Release if needed
         shell: bash

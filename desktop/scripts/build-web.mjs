@@ -15,10 +15,11 @@ const desktop = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const frontend = resolve(desktop, "../frontend");
 const output = resolve(desktop, "dist");
 const exportedFrontend = resolve(frontend, ".next-desktop");
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 
+// Windows 上 Node.js 的 spawnSync 调用 .cmd/.bat 文件必须启用 shell，
+// 否则报 EINVAL（Node 22+ 更严格）。统一用 shell:true 在所有平台上都安全。
 function run(args, cwd) {
-  const result = spawnSync(npm, args, { cwd, stdio: "inherit" });
+  const result = spawnSync("npm", args, { cwd, stdio: "inherit", shell: true });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
 }

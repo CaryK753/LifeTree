@@ -14,7 +14,7 @@
 // Usage:  node scripts/post-build-fix.mjs
 // (called automatically by `npm run build` via the afterBuildCommand hook)
 
-import { existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,11 +23,36 @@ const here = dirname(fileURLToPath(import.meta.url));
 const desktop = resolve(here, "..");
 const iconsDir = resolve(desktop, "src-tauri/icons");
 
-// Locate the built .app bundle
-const appBundle = resolve(
-  desktop,
-  "src-tauri/target/release/bundle/macos/LifeTree.app",
-);
+// 解析命令行参数 --target <triple>
+const args = process.argv.slice(2);
+let targetTriple = "";
+const targetIdx = args.indexOf("--target");
+if (targetIdx !== -1 && args[targetIdx + 1]) {
+  targetTriple = args[targetIdx + 1];
+}
+
+// Locate the built .app bundle.
+// `tauri build --target <triple>` 放在 target/<triple>/release/bundle/
+// 不带 --target 时放在 target/release/bundle/
+function findAppBundle() {
+  const candidates = [];
+  if (targetTriple) {
+    candidates.push(resolve(desktop, `src-tauri/target/${targetTriple}/release/bundle/macos/LifeTree.app`));
+  }
+  candidates.push(resolve(desktop, "src-tauri/target/release/bundle/macos/LifeTree.app"));
+  // 自动扫描 target/*/release/bundle/macos/
+  const targetDir = resolve(desktop, "src-tauri/target");
+  if (existsSync(targetDir)) {
+    for (const entry of readdirSync(targetDir, { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name.includes("-")) {
+        candidates.push(resolve(targetDir, entry.name, "release/bundle/macos/LifeTree.app"));
+      }
+    }
+  }
+  return candidates.find(existsSync) || candidates[0];
+}
+
+const appBundle = findAppBundle();
 
 // Only relevant on macOS
 if (process.platform !== "darwin") {

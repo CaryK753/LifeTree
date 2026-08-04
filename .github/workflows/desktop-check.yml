@@ -75,6 +75,6 @@ jobs:
         working-directory: desktop
         run: npm run check
 
-      - name: Build desktop binary
-        working-directory: desktop
-        run: npm run build -- --no-bundle
+      - name: Build desktop binary (compile only, no bundling/signing)
+        working-directory: desktop/src-tauri
+        run: cargo build --release
