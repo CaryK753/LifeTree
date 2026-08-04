@@ -125,12 +125,18 @@ for src_name, out_name in tray_variants:
     img = load_source(src_name)
     save_resized(img, 64, out_name)
 
-# macOS 菜单栏专用白色图标：使用 ClearDark 的 alpha 通道作为形状蒙版，
-# 所有不透明像素填充为纯白（255,255,255），在深色菜单栏上清晰可见。
+# macOS 菜单栏专用白色图标：从 Dark 源图提取绿色树形轮廓，
+# 转为纯白像素，背景完全透明。避免 iOS squircle 背景填充整个图标区域。
 print("  generating tray-white-64.png (macOS menu bar)")
-cleardark = load_source("lifetree-iOS-ClearDark-1024@1x.png")
-white_img = Image.new("RGBA", cleardark.size, (255, 255, 255, 0))
-white_img.putalpha(cleardark.split()[3])
+dark_src = load_source("lifetree-iOS-Dark-1024@1x.png")
+import numpy as np
+dark_arr = np.array(dark_src)
+r, g, b = dark_arr[:,:,0], dark_arr[:,:,1], dark_arr[:,:,2]
+# 绿色树形检测：G 通道明显大于 R 和 B
+green_mask = (g > r.astype('int16') + 15) & (g > b.astype('int16') + 15) & (g > 80)
+white_arr = np.zeros((1024, 1024, 4), dtype='uint8')
+white_arr[green_mask] = [255, 255, 255, 255]
+white_img = Image.fromarray(white_arr, 'RGBA')
 save_resized(white_img, 64, "tray-white-64.png")
 `;
 
