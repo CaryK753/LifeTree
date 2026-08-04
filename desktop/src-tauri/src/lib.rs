@@ -514,26 +514,36 @@ fn initial_background_script() -> &'static str {
 /// user can switch between local service / self-hosted / cloud instances.
 #[tauri::command]
 async fn switch_instance(app: AppHandle) -> Result<(), String> {
-    // Close the main window if open
+    // IMPORTANT: Create the bootstrap window BEFORE closing the main
+    // window. On Windows, closing the last visible window causes the app
+    // to exit — so we must ensure the launcher is visible first.
+    //
+    // We always destroy and recreate the bootstrap window to guarantee a
+    // clean state. On Windows, the hidden bootstrap window may have been
+    // navigated to the local sidecar URL (e.g. http://127.0.0.1:PORT/auth)
+    // by prior runtime restore logic, and a relative eval() would resolve
+    // against the wrong base URL. Recreating from scratch ensures the
+    // launcher page loads from the bundled assets.
+    if let Some(old) = app.get_webview_window("bootstrap") {
+        let _ = old.destroy();
+    }
+    WebviewWindowBuilder::new(
+        &app,
+        "bootstrap",
+        WebviewUrl::App("launcher/index.html".into()),
+    )
+    .title("LifeTree")
+    .inner_size(640.0, 760.0)
+    .min_inner_size(480.0, 640.0)
+    .center()
+    .visible(true)
+    .build()
+    .map_err(|e| format!("打开启动器失败：{e}"))?;
+
+    // Now safe to close the main window — the bootstrap launcher is
+    // already visible and the app won't exit.
     if let Some(main_window) = app.get_webview_window("lifetree") {
         main_window.close().map_err(|e| e.to_string())?;
-    }
-    // Show or create the bootstrap launcher window
-    if let Some(bootstrap) = app.get_webview_window("bootstrap") {
-        bootstrap.show().map_err(|e| e.to_string())?;
-        bootstrap.set_focus().map_err(|e| e.to_string())?;
-    } else {
-        WebviewWindowBuilder::new(
-            &app,
-            "bootstrap",
-            WebviewUrl::App("launcher/index.html".into()),
-        )
-        .title("LifeTree")
-        .inner_size(640.0, 760.0)
-        .min_inner_size(480.0, 640.0)
-        .center()
-        .build()
-        .map_err(|e| format!("打开启动器失败：{e}"))?;
     }
     Ok(())
 }
