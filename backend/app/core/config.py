@@ -85,6 +85,42 @@ class Settings(BaseSettings):
     vapid_public_key: str = ""
     vapid_contact: str = "mailto:admin@lifetree.local"
 
+    def model_post_init(self, __context: object) -> None:
+        """Auto-generate VAPID key pair on first run if not configured.
+
+        Web Push notifications require a VAPID key pair to identify the
+        application server. Rather than force every deployment to manually
+        generate and configure keys, we auto-generate a pair at startup
+        when both keys are empty. This makes browser push notifications
+        work out of the box — the only requirement is user authorization
+        in the browser.
+        """
+        if not self.vapid_private_key.get_secret_value() and not self.vapid_public_key:
+            try:
+                import base64
+
+                from cryptography.hazmat.primitives import serialization
+                from cryptography.hazmat.primitives.asymmetric import ec
+
+                private_key = ec.generate_private_key(ec.SECP256R1())
+
+                private_der = private_key.private_bytes(
+                    encoding=serialization.Encoding.DER,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption(),
+                )
+                self.vapid_private_key = SecretStr(
+                    base64.urlsafe_b64encode(private_der).decode().rstrip("=")
+                )
+
+                public_numbers = private_key.public_key().public_numbers()
+                pub_bytes = b"\x04" + public_numbers.x.to_bytes(32, "big") + public_numbers.y.to_bytes(32, "big")
+                self.vapid_public_key = base64.urlsafe_b64encode(pub_bytes).decode().rstrip("=")
+            except Exception:
+                # cryptography not installed (e.g. minimal env) — silently
+                # leave keys empty; web push stays "未配置" but app runs.
+                pass
+
     # ---------- Plugins ----------
     # Directory where user-uploaded plugin .py files are stored.
     # Relative to the backend working directory; created on demand.

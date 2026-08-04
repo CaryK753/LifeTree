@@ -124,7 +124,8 @@ impl RuntimeSupervisor {
 
         let port = reserve_loopback_port()?;
         let token = generate_token()?;
-        let child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .arg("--port")
             .arg(port.to_string())
             .arg("--data-dir")
@@ -136,7 +137,19 @@ impl RuntimeSupervisor {
             )
             .stdin(Stdio::null())
             .stdout(Stdio::from(log_file))
-            .stderr(Stdio::from(err_file))
+            .stderr(Stdio::from(err_file));
+
+        // Windows: prevent the sidecar (PyInstaller console binary) from
+        // popping up a cmd.exe window. Without this flag the console
+        // window stays open and closing it kills the backend process.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let child = command
             .spawn()
             .map_err(|error| format!("启动 Python worker 失败：{error}"))?;
 
