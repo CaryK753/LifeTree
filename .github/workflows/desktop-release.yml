@@ -25,8 +25,12 @@ jobs:
         include:
           - os: macos-14
             target: aarch64-apple-darwin
-          - os: macos-13
-            target: x86_64-apple-darwin
+          # macos-13 (x86_64-apple-darwin) removed: GitHub is
+          # deprecating macos-13 runners and they sit queued for
+          # 30+ minutes, blocking the manifest job (and therefore
+          # latest.json) indefinitely. Intel Mac users can use the
+          # arm64 build via Rosetta. Re-add when GitHub stabilises
+          # macos-14 x86_64 or macos-15 runners.
           - os: windows-2022
             target: x86_64-pc-windows-msvc
 
