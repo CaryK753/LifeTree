@@ -11,6 +11,9 @@ on:
       - "backend/app/models/**"
       - "backend/app/services/runtime/**"
       - "backend/tests/test_local_runtime_adapters.py"
+      - "backend/tests/test_desktop_sidecar.py"
+      - "backend/tests/test_desktop_security.py"
+      - "backend/pyproject.toml"
       - ".github/workflows/desktop-check.yml"
   pull_request:
     paths:
@@ -21,6 +24,9 @@ on:
       - "backend/app/models/**"
       - "backend/app/services/runtime/**"
       - "backend/tests/test_local_runtime_adapters.py"
+      - "backend/tests/test_desktop_sidecar.py"
+      - "backend/tests/test_desktop_security.py"
+      - "backend/pyproject.toml"
       - ".github/workflows/desktop-check.yml"
   workflow_dispatch:
 
