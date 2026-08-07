@@ -21,6 +21,15 @@ from urllib.request import Request, urlopen
 import pytest
 from cryptography.fernet import Fernet
 
+
+def _read_backend_version() -> str:
+    """Read the backend version from pyproject.toml (same logic as app.api._read_version)."""
+    toml_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    for line in toml_path.read_text(encoding="utf-8").splitlines():
+        if line.strip().startswith("version"):
+            return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return "0.0.0"
+
 TOKEN_HEADER = "x-lifetree-desktop-token"
 STARTUP_TIMEOUT = 45.0
 HEALTH_POLL = 0.5
@@ -102,7 +111,7 @@ def test_sidecar_boots_and_serves_local_private(tmp_path: Path) -> None:
         # /health is public (no token required).
         status, body = _get_json(f"http://127.0.0.1:{port}/health")
         assert status == 200
-        assert body == {"status": "ok", "version": "0.1.0"}
+        assert body == {"status": "ok", "version": _read_backend_version()}
 
         # /api/v1/* requires the desktop token.
         status, _ = _get_json(f"http://127.0.0.1:{port}/api/v1/runtime/capabilities")
