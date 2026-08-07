@@ -111,6 +111,15 @@ class LLMConfig(BaseModel):
     models: list[Model] = Field(default_factory=list)
     role_assignments: dict[Role, str] = Field(default_factory=dict)
     tavily_api_key: str = ""
+    # Multi-source search engines (§A.3 of cross-validation spec). Each
+    # engine key is stored independently; the default engine and enabled
+    # list control which engines the CrawlerService facade will dispatch
+    # to when the caller doesn't specify one explicitly.
+    exa_api_key: str = ""
+    bocha_api_key: str = ""
+    anysearch_api_key: str = ""
+    search_default_engine: str = "tavily"
+    search_engines_enabled: list[str] = Field(default_factory=lambda: ["tavily"])
     # Third-party service keys (kept here so the whole config is one document)
     mineru_api_key: str = ""
     mineru_base_url: str = "https://mineru.net/api/v4"
@@ -158,6 +167,15 @@ class LLMConfigView(BaseModel):
     role_assignments: dict[Role, str]
     tavily_api_key_configured: bool
     tavily_api_key_preview: str
+    # Multi-source search engines (§A.3)
+    exa_api_key_configured: bool
+    exa_api_key_preview: str
+    bocha_api_key_configured: bool
+    bocha_api_key_preview: str
+    anysearch_api_key_configured: bool
+    anysearch_api_key_preview: str
+    search_default_engine: str
+    search_engines_enabled: list[str]
     # Convenience flags: which roles have a working model assigned
     roles_configured: dict[Role, bool]
     # Mineru file-parsing service
@@ -192,6 +210,11 @@ CONFIG_PATH = Path(__file__).resolve().parents[2] / ".llm_config.json"
 
 # app_config keys (single source of truth — keep in sync with load/save).
 _KEY_TAVILY = "tavily_api_key"
+_KEY_EXA = "exa_api_key"
+_KEY_BOCHA = "bocha_api_key"
+_KEY_ANYSEARCH = "anysearch_api_key"
+_KEY_SEARCH_DEFAULT_ENGINE = "search_default_engine"
+_KEY_SEARCH_ENGINES_ENABLED = "search_engines_enabled"
 _KEY_MINERU_KEY = "mineru_api_key"
 _KEY_MINERU_URL = "mineru_base_url"
 _KEY_SMTP_HOST = "smtp_host"
@@ -203,6 +226,14 @@ _KEY_SMTP_SENDER_NAME = "smtp_sender_name"
 _KEY_SMTP_USE_TLS = "smtp_use_tls"
 _KEY_SMTP_USE_SSL = "smtp_use_ssl"
 _KEY_ROLE_ASSIGNMENTS = "role_assignments"
+
+# Default enabled engines when ``search_engines_enabled`` is absent.
+_DEFAULT_SEARCH_ENGINES_ENABLED: list[str] = ["tavily"]
+_DEFAULT_SEARCH_DEFAULT_ENGINE = "tavily"
+# All engines known to the system — used for validation only.
+_KNOWN_SEARCH_ENGINES: frozenset[str] = frozenset(
+    {"tavily", "exa", "bocha", "anysearch"}
+)
 
 _DEFAULT_MINERU_URL = "https://mineru.net/api/v4"
 _DEFAULT_SMTP_FROM = "notify@lifetree.local"
@@ -448,6 +479,30 @@ def _load_from_db() -> LLMConfig | None:
             role_assignments = {}
 
         tavily = _decode_app_config_value(_KEY_TAVILY, config_rows.get(_KEY_TAVILY), "") or ""
+        exa_key = _decode_app_config_value(_KEY_EXA, config_rows.get(_KEY_EXA), "") or ""
+        bocha_key = _decode_app_config_value(_KEY_BOCHA, config_rows.get(_KEY_BOCHA), "") or ""
+        anysearch_key = _decode_app_config_value(
+            _KEY_ANYSEARCH, config_rows.get(_KEY_ANYSEARCH), ""
+        ) or ""
+        search_default_engine = (
+            _decode_value(
+                config_rows.get(_KEY_SEARCH_DEFAULT_ENGINE),
+                _DEFAULT_SEARCH_DEFAULT_ENGINE,
+            )
+            or _DEFAULT_SEARCH_DEFAULT_ENGINE
+        )
+        if not isinstance(search_default_engine, str) or not search_default_engine:
+            search_default_engine = _DEFAULT_SEARCH_DEFAULT_ENGINE
+        search_engines_enabled = _decode_value(
+            config_rows.get(_KEY_SEARCH_ENGINES_ENABLED),
+            list(_DEFAULT_SEARCH_ENGINES_ENABLED),
+        )
+        if not isinstance(search_engines_enabled, list) or not search_engines_enabled:
+            search_engines_enabled = list(_DEFAULT_SEARCH_ENGINES_ENABLED)
+        # Filter to known engines only — drop unknown entries defensively.
+        search_engines_enabled = [
+            e for e in search_engines_enabled if e in _KNOWN_SEARCH_ENGINES
+        ] or list(_DEFAULT_SEARCH_ENGINES_ENABLED)
         mineru_key = _decode_app_config_value(
             _KEY_MINERU_KEY, config_rows.get(_KEY_MINERU_KEY), ""
         ) or ""
@@ -484,6 +539,11 @@ def _load_from_db() -> LLMConfig | None:
             models=models,
             role_assignments=role_assignments,
             tavily_api_key=tavily,
+            exa_api_key=exa_key,
+            bocha_api_key=bocha_key,
+            anysearch_api_key=anysearch_key,
+            search_default_engine=search_default_engine,
+            search_engines_enabled=search_engines_enabled,
             mineru_api_key=mineru_key,
             mineru_base_url=mineru_url,
             smtp_host=smtp_host,
@@ -614,6 +674,11 @@ def save_config(cfg: LLMConfig) -> None:
 
             # --- app_config: upsert all known keys ---
             _set_app_config(session, _KEY_TAVILY, cfg.tavily_api_key)
+            _set_app_config(session, _KEY_EXA, cfg.exa_api_key)
+            _set_app_config(session, _KEY_BOCHA, cfg.bocha_api_key)
+            _set_app_config(session, _KEY_ANYSEARCH, cfg.anysearch_api_key)
+            _set_app_config(session, _KEY_SEARCH_DEFAULT_ENGINE, cfg.search_default_engine)
+            _set_app_config(session, _KEY_SEARCH_ENGINES_ENABLED, list(cfg.search_engines_enabled))
             _set_app_config(session, _KEY_MINERU_KEY, cfg.mineru_api_key)
             _set_app_config(session, _KEY_MINERU_URL, cfg.mineru_base_url)
             _set_app_config(session, _KEY_SMTP_HOST, cfg.smtp_host)
@@ -663,6 +728,14 @@ def to_view(cfg: LLMConfig) -> LLMConfigView:
         role_assignments=dict(cfg.role_assignments),
         tavily_api_key_configured=bool(cfg.tavily_api_key),
         tavily_api_key_preview=_mask(cfg.tavily_api_key),
+        exa_api_key_configured=bool(cfg.exa_api_key),
+        exa_api_key_preview=_mask(cfg.exa_api_key),
+        bocha_api_key_configured=bool(cfg.bocha_api_key),
+        bocha_api_key_preview=_mask(cfg.bocha_api_key),
+        anysearch_api_key_configured=bool(cfg.anysearch_api_key),
+        anysearch_api_key_preview=_mask(cfg.anysearch_api_key),
+        search_default_engine=cfg.search_default_engine,
+        search_engines_enabled=list(cfg.search_engines_enabled),
         roles_configured=roles_configured,
         mineru_api_key_configured=bool(cfg.mineru_api_key),
         mineru_api_key_preview=_mask(cfg.mineru_api_key),
@@ -813,6 +886,83 @@ def set_tavily_key(cfg: LLMConfig, key: str) -> None:
     cfg.tavily_api_key = key or ""
 
 
+def set_exa_key(cfg: LLMConfig, key: str) -> None:
+    """Set the Exa search-engine API key. Empty string clears it."""
+    cfg.exa_api_key = key or ""
+
+
+def set_bocha_key(cfg: LLMConfig, key: str) -> None:
+    """Set the Bocha (博查) search-engine API key. Empty string clears it."""
+    cfg.bocha_api_key = key or ""
+
+
+def set_anysearch_key(cfg: LLMConfig, key: str) -> None:
+    """Set the AnySearch search-engine API key. Empty string clears it."""
+    cfg.anysearch_api_key = key or ""
+
+
+def set_search_default_engine(cfg: LLMConfig, engine: str) -> bool:
+    """Set the default search engine.
+
+    Returns False if ``engine`` is not a known engine name.
+    """
+    if engine not in _KNOWN_SEARCH_ENGINES:
+        return False
+    cfg.search_default_engine = engine
+    # Ensure the default engine is also in the enabled list.
+    if engine not in cfg.search_engines_enabled:
+        cfg.search_engines_enabled.append(engine)
+    return True
+
+
+def set_search_engines_enabled(cfg: LLMConfig, engines: list[str]) -> bool:
+    """Set the list of enabled search engines.
+
+    Returns False if any engine is unknown or the list is empty.
+    """
+    if not engines:
+        return False
+    unknown = [e for e in engines if e not in _KNOWN_SEARCH_ENGINES]
+    if unknown:
+        return False
+    # Preserve order, drop duplicates.
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for e in engines:
+        if e not in seen:
+            seen.add(e)
+            deduped.append(e)
+    cfg.search_engines_enabled = deduped
+    # If the current default engine is no longer enabled, fall back to the
+    # first enabled engine.
+    if cfg.search_default_engine not in deduped:
+        cfg.search_default_engine = deduped[0]
+    return True
+
+
+def get_search_default_engine() -> str:
+    """Return the default search engine from the DB-backed config."""
+    return load_config().search_default_engine or _DEFAULT_SEARCH_DEFAULT_ENGINE
+
+
+def get_search_engines_enabled() -> list[str]:
+    """Return the list of enabled search engines from the DB-backed config."""
+    cfg = load_config()
+    return list(cfg.search_engines_enabled) or list(_DEFAULT_SEARCH_ENGINES_ENABLED)
+
+
+def get_exa_key() -> str:
+    return load_config().exa_api_key
+
+
+def get_bocha_key() -> str:
+    return load_config().bocha_api_key
+
+
+def get_anysearch_key() -> str:
+    return load_config().anysearch_api_key
+
+
 def set_mineru_key(cfg: LLMConfig, key: str, base_url: str | None = None) -> None:
     """Update Mineru API key. Optionally also update base_url.
 
@@ -922,6 +1072,9 @@ _KEY_PASSKEY_LOGIN_ENABLED = "passkey_login_enabled"
 _SENSITIVE_APP_CONFIG_KEYS: frozenset[str] = frozenset(
     {
         _KEY_TAVILY,        # tavily_api_key
+        _KEY_EXA,           # exa_api_key
+        _KEY_BOCHA,         # bocha_api_key
+        _KEY_ANYSEARCH,     # anysearch_api_key
         _KEY_MINERU_KEY,    # mineru_api_key
         _KEY_SMTP_PASSWORD, # smtp_password
     }
@@ -1359,13 +1512,18 @@ __all__ = [
     "delete_model",
     "delete_oauth_provider",
     "delete_provider",
+    "get_anysearch_key",
+    "get_bocha_key",
     "get_email_verification_enabled",
     "get_disable_registration",
+    "get_exa_key",
     "get_mineru_config",
     "get_oauth_provider_by_id",
     "get_oauth_providers",
     "get_passkey_login_enabled",
     "get_public_auth_config",
+    "get_search_default_engine",
+    "get_search_engines_enabled",
     "get_service_address",
     "get_smtp_config",
     "get_tavily_key",
@@ -1373,10 +1531,15 @@ __all__ = [
     "load_config",
     "resolve_role",
     "save_config",
+    "set_anysearch_key",
+    "set_bocha_key",
     "set_email_verification_enabled",
     "set_disable_registration",
+    "set_exa_key",
     "set_mineru_key",
     "set_passkey_login_enabled",
+    "set_search_default_engine",
+    "set_search_engines_enabled",
     "set_service_address",
     "set_use_mode",
     "set_oauth_providers",

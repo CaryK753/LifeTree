@@ -12,6 +12,11 @@ The endpoints here are thin HTTP wrappers around registry mutations:
     DELETE /settings/models/{id}           — delete model
     PUT    /settings/roles                 — set role→model assignments
     PUT    /settings/tavily                — set Tavily API key
+    PUT    /settings/exa                   — set Exa API key
+    PUT    /settings/bocha                 — set Bocha API key
+    PUT    /settings/anysearch             — set AnySearch API key
+    GET    /settings/search-engine         — get default engine + enabled list
+    PUT    /settings/search-engine         — set default engine + enabled list
     POST   /settings/test/{role}           — smoke-test the model for a role
     POST   /settings/test/provider/{id}    — smoke-test a provider's auth
 
@@ -49,11 +54,16 @@ from app.llm.registry import (
     load_config,
     resolve_role,
     save_config,
+    set_anysearch_key,
+    set_bocha_key,
     set_disable_registration,
     set_email_verification_enabled,
+    set_exa_key,
     set_mineru_key,
     set_passkey_login_enabled,
     set_role_assignment,
+    set_search_default_engine,
+    set_search_engines_enabled,
     set_service_address,
     set_smtp_config,
     set_tavily_key,
@@ -113,6 +123,44 @@ class RoleAssignments(BaseModel):
 
 class TavilyUpdate(BaseModel):
     api_key: str = Field("", description="Empty string clears.")
+
+
+class SearchEngineKeyUpdate(BaseModel):
+    """Generic payload for setting a search-engine API key.
+
+    Used by ``PUT /settings/exa``, ``PUT /settings/bocha``,
+    ``PUT /settings/anysearch`` — same shape as ``TavilyUpdate``.
+    """
+
+    api_key: str = Field("", description="Empty string clears.")
+
+
+class SearchEngineConfigUpdate(BaseModel):
+    """Payload for ``PUT /settings/search-engine``.
+
+    Either field is optional; ``default_engine`` and ``engines`` are
+    validated against the known engine names ("tavily"/"exa"/"bocha"/"anysearch").
+    The default engine must be in the enabled list — passing a default
+    that isn't in ``engines`` returns 400.
+    """
+
+    default_engine: str | None = Field(
+        None, description='One of "tavily" / "exa" / "bocha" / "anysearch".'
+    )
+    engines: list[str] | None = Field(
+        None,
+        description='List of enabled engines, e.g. ["tavily","exa","bocha"]. '
+        "Order is preserved; duplicates are dropped. Must be non-empty.",
+    )
+
+
+class SearchEngineConfigView(BaseModel):
+    """Response for ``GET /settings/search-engine``."""
+
+    default_engine: str
+    engines: list[str]
+    available_engines: list[str]  # all known engine names
+    configured_engines: list[str]  # engines with a non-empty API key
 
 
 class MineruUpdate(BaseModel):
@@ -179,14 +227,17 @@ def _restricted_view(cfg: LLMConfig) -> LLMConfigView:
 
     Hides all admin-configured secrets:
       - All provider ``api_key_configured`` → False, ``api_key_preview`` → ""
-      - Tavily / Mineru / SMTP ``*_configured`` → False, ``*_preview`` → ""
+      - Tavily / Exa / Bocha / AnySearch / Mineru / SMTP ``*_configured`` → False, ``*_preview`` → ""
       - Provider ``base_url`` retained (so the user knows the endpoint)
       - Models, role_assignments, roles_configured retained (so the user
         knows which model is used for each role)
+      - ``search_default_engine`` / ``search_engines_enabled`` retained (so
+        the user knows which engines are active without seeing their keys)
 
     The non-admin user can therefore *see* the platform configuration
-    shape (which providers/models exist, which roles are assigned) but
-    cannot see any of the actual keys configured by the admin.
+    shape (which providers/models exist, which roles are assigned, which
+    search engines are enabled) but cannot see any of the actual keys
+    configured by the admin.
     """
     view = to_view(cfg)
     for p in view.providers:
@@ -194,6 +245,12 @@ def _restricted_view(cfg: LLMConfig) -> LLMConfigView:
         p.api_key_preview = ""
     view.tavily_api_key_configured = False
     view.tavily_api_key_preview = ""
+    view.exa_api_key_configured = False
+    view.exa_api_key_preview = ""
+    view.bocha_api_key_configured = False
+    view.bocha_api_key_preview = ""
+    view.anysearch_api_key_configured = False
+    view.anysearch_api_key_preview = ""
     view.mineru_api_key_configured = False
     view.mineru_api_key_preview = ""
     view.smtp_password_configured = False
@@ -415,6 +472,122 @@ async def put_tavily(payload: TavilyUpdate, user: CurrentUser) -> LLMConfigView:
     return _load_and_save(lambda cfg: set_tavily_key(cfg, payload.api_key))
 
 
+# ---------- Multi-source search engines (§A.4) ----------
+#
+# Exa / Bocha / AnySearch API keys + default engine config.
+# All endpoints are admin-only in multi-user mode (same as ``/settings/tavily``).
+
+_KNOWN_SEARCH_ENGINES = ("tavily", "exa", "bocha", "anysearch")
+
+
+@router.put("/exa", response_model=LLMConfigView)
+async def put_exa(payload: SearchEngineKeyUpdate, user: CurrentUser) -> LLMConfigView:
+    """Set the Exa search-engine API key (admin only in multi-user mode)."""
+    _require_admin_in_multi_user(user)
+    return _load_and_save(lambda cfg: set_exa_key(cfg, payload.api_key))
+
+
+@router.put("/bocha", response_model=LLMConfigView)
+async def put_bocha(payload: SearchEngineKeyUpdate, user: CurrentUser) -> LLMConfigView:
+    """Set the Bocha (博查) search-engine API key."""
+    _require_admin_in_multi_user(user)
+    return _load_and_save(lambda cfg: set_bocha_key(cfg, payload.api_key))
+
+
+@router.put("/anysearch", response_model=LLMConfigView)
+async def put_anysearch(payload: SearchEngineKeyUpdate, user: CurrentUser) -> LLMConfigView:
+    """Set the AnySearch search-engine API key."""
+    _require_admin_in_multi_user(user)
+    return _load_and_save(lambda cfg: set_anysearch_key(cfg, payload.api_key))
+
+
+@router.get("/search-engine", response_model=SearchEngineConfigView)
+def get_search_engine_config(user: CurrentUser) -> SearchEngineConfigView:
+    """Return the default engine + enabled list + which engines have keys.
+
+    Non-admin users in multi-user mode can see the engine *names* (which
+    are active) but the ``configured_engines`` list reflects only whether
+    a key was set (without revealing the key itself).
+    """
+    cfg = load_config()
+    if _is_multi_user_mode() and user.role != "admin":
+        # Non-admin sees the engine list but not which keys are configured.
+        return SearchEngineConfigView(
+            default_engine=cfg.search_default_engine,
+            engines=list(cfg.search_engines_enabled),
+            available_engines=list(_KNOWN_SEARCH_ENGINES),
+            configured_engines=[],  # hide key-configured status
+        )
+    configured = [
+        e
+        for e in _KNOWN_SEARCH_ENGINES
+        if (
+            getattr(cfg, f"{e}_api_key", "") if e != "tavily" else cfg.tavily_api_key
+        )
+    ]
+    return SearchEngineConfigView(
+        default_engine=cfg.search_default_engine,
+        engines=list(cfg.search_engines_enabled),
+        available_engines=list(_KNOWN_SEARCH_ENGINES),
+        configured_engines=configured,
+    )
+
+
+@router.put("/search-engine", response_model=LLMConfigView)
+async def put_search_engine_config(
+    payload: SearchEngineConfigUpdate, user: CurrentUser
+) -> LLMConfigView:
+    """Set the default search engine and/or the enabled list.
+
+    Validation:
+      - ``default_engine`` must be one of the known engines.
+      - ``engines`` (if provided) must be non-empty and contain only known names.
+      - If both are provided, ``default_engine`` must be in ``engines``.
+    """
+    _require_admin_in_multi_user(user)
+
+    if payload.default_engine is not None and payload.default_engine not in _KNOWN_SEARCH_ENGINES:
+        raise HTTPException(
+            400,
+            f"Unknown engine: {payload.default_engine!r}. "
+            f"Must be one of {list(_KNOWN_SEARCH_ENGINES)}.",
+        )
+
+    if payload.engines is not None:
+        unknown = [e for e in payload.engines if e not in _KNOWN_SEARCH_ENGINES]
+        if unknown:
+            raise HTTPException(
+                400,
+                f"Unknown engines in list: {unknown}. "
+                f"Must be subset of {list(_KNOWN_SEARCH_ENGINES)}.",
+            )
+        if not payload.engines:
+            raise HTTPException(400, "Engines list must be non-empty.")
+
+    if (
+        payload.default_engine is not None
+        and payload.engines is not None
+        and payload.default_engine not in payload.engines
+    ):
+        raise HTTPException(
+            400,
+            f"default_engine {payload.default_engine!r} must be in engines list "
+            f"{payload.engines}.",
+        )
+
+    def _mut(cfg: LLMConfig) -> None:
+        if payload.engines is not None:
+            ok = set_search_engines_enabled(cfg, payload.engines)
+            if not ok:
+                raise HTTPException(400, "Failed to set engines list (invalid input).")
+        if payload.default_engine is not None:
+            ok = set_search_default_engine(cfg, payload.default_engine)
+            if not ok:
+                raise HTTPException(400, f"Unknown engine: {payload.default_engine!r}")
+
+    return _load_and_save(_mut)
+
+
 @router.put("/mineru", response_model=LLMConfigView)
 async def put_mineru(payload: MineruUpdate, user: CurrentUser) -> LLMConfigView:
     _require_admin_in_multi_user(user)
@@ -480,6 +653,33 @@ def get_tavily_key(user: CurrentUser) -> SecretReveal:
     _require_admin_in_multi_user(user)
     cfg = load_config()
     return SecretReveal(value=cfg.tavily_api_key or None, configured=bool(cfg.tavily_api_key))
+
+
+@router.get("/exa/key", response_model=SecretReveal)
+def get_exa_key(user: CurrentUser) -> SecretReveal:
+    """Return the full Exa search-engine API key."""
+    _require_admin_in_multi_user(user)
+    cfg = load_config()
+    return SecretReveal(value=cfg.exa_api_key or None, configured=bool(cfg.exa_api_key))
+
+
+@router.get("/bocha/key", response_model=SecretReveal)
+def get_bocha_key(user: CurrentUser) -> SecretReveal:
+    """Return the full Bocha (博查) search-engine API key."""
+    _require_admin_in_multi_user(user)
+    cfg = load_config()
+    return SecretReveal(value=cfg.bocha_api_key or None, configured=bool(cfg.bocha_api_key))
+
+
+@router.get("/anysearch/key", response_model=SecretReveal)
+def get_anysearch_key(user: CurrentUser) -> SecretReveal:
+    """Return the full AnySearch search-engine API key."""
+    _require_admin_in_multi_user(user)
+    cfg = load_config()
+    return SecretReveal(
+        value=cfg.anysearch_api_key or None,
+        configured=bool(cfg.anysearch_api_key),
+    )
 
 
 @router.get("/mineru/key", response_model=SecretReveal)

@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from app.api.actions import router as actions_router
 from app.api.admin import router as admin_router
+from app.api.agent_team import router as agent_team_router
 from app.api.auth import router as auth_router
 from app.api.backup import router as backup_router
 from app.api.changes_summary import router as changes_summary_router
@@ -26,6 +27,7 @@ from app.api.notifications import router as notifications_router
 from app.api.passkey import router as passkey_router
 from app.api.plugins import router as plugins_router
 from app.api.review import router as review_router
+from app.api.research import router as research_router
 from app.api.risk_discovery import router as risk_discovery_router
 from app.api.risk_factors import router as risk_factors_router
 from app.api.runtime import router as runtime_router
@@ -53,6 +55,8 @@ api_router.include_router(runtime_router)
 api_router.include_router(review_router)
 api_router.include_router(risk_discovery_router)
 api_router.include_router(cross_validation_router)
+api_router.include_router(research_router)
+api_router.include_router(agent_team_router)
 api_router.include_router(decision_tree_router)
 api_router.include_router(search_router)
 api_router.include_router(events_router)
@@ -83,29 +87,51 @@ async def meta() -> dict[str, str]:
 
 
 def _read_version() -> str:
-    """Read the backend version robustly.
+    """Read the backend version robustly across all deployment modes.
 
-    Tries ``importlib.metadata`` first (works in normal Python envs and
-    in PyInstaller bundles that include ``--copy-metadata=lifetree-backend``).
-    Falls back to parsing ``pyproject.toml`` directly (works even when the
-    package metadata is missing, e.g. stale PyInstaller builds).
+    Returns the newer of two sources so the Settings → About panel always
+    reflects the version declared in source — critical for local dev mode
+    where ``importlib.metadata`` is cached at ``pip install -e .`` time
+    and lags behind ``pyproject.toml`` edits.
+
+    Sources:
+      1. ``pyproject.toml`` (source of truth in dev mode)
+      2. ``importlib.metadata`` (works in Docker / PyInstaller bundles
+         that include ``--copy-metadata=lifetree-backend``)
     """
+    from pathlib import Path
+
+    def _parse_semver(v: str) -> tuple[int, int, int]:
+        parts = (v or "").lstrip("v").split(".")
+        try:
+            major = int(parts[0]) if len(parts) > 0 else 0
+            minor = int(parts[1]) if len(parts) > 1 else 0
+            patch = int(parts[2].split("-")[0]) if len(parts) > 2 else 0
+            return (major, minor, patch)
+        except ValueError:
+            return (0, 0, 0)
+
+    toml_version = "0.0.0"
     try:
-        from importlib.metadata import version as _pkg_version
-        return _pkg_version("lifetree-backend")
-    except Exception:
-        pass
-    # Fallback: read pyproject.toml next to the backend package.
-    try:
-        from pathlib import Path
         toml_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
         if toml_path.exists():
             for line in toml_path.read_text(encoding="utf-8").splitlines():
                 if line.strip().startswith("version"):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+                    toml_version = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    break
     except Exception:
         pass
-    return "0.0.0"
+
+    metadata_version = "0.0.0"
+    try:
+        from importlib.metadata import version as _pkg_version
+        metadata_version = _pkg_version("lifetree-backend")
+    except Exception:
+        pass
+
+    # Return the newer of the two so local dev edits to pyproject.toml
+    # take precedence over the stale install-time metadata cache.
+    return toml_version if _parse_semver(toml_version) >= _parse_semver(metadata_version) else metadata_version
 
 
 @api_router.get("/meta/about", tags=["meta"])

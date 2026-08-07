@@ -70,9 +70,16 @@ class _ImportSession(_Session):
 
 
 class _CrossSession(_Session):
-    def __init__(self, relationships, sources):
+    """Mock session for cross-validation resolve tests.
+
+    Returns ``assertions`` on the first ``scalars()`` call (the Assertion
+    query), and ``None`` on ``scalar()`` (the ConflictResolution existence
+    check).
+    """
+
+    def __init__(self, assertions, sources):
         super().__init__()
-        self.relationships = relationships
+        self.assertions = assertions
         self.sources = sources
         self.scalar_calls = 0
         self.committed = False
@@ -80,7 +87,11 @@ class _CrossSession(_Session):
     def scalars(self, statement):
         self.statement = str(statement)
         self.scalar_calls += 1
-        return iter(self.relationships if self.scalar_calls == 1 else [])
+        return iter(self.assertions if self.scalar_calls == 1 else [])
+
+    def scalar(self, statement):
+        self.statement = str(statement)
+        return None
 
     def get(self, model, object_id):
         if model is InformationSource:
@@ -147,15 +158,26 @@ def test_cross_validation_query_is_tenant_scoped() -> None:
     db = _Session()
     CrossValidationService(db, "user-1").detect_conflicts()
 
-    assert "JOIN information_sources" in db.statement
-    assert "information_sources.user_id" in db.statement
+    # After the §B.2 rewrite, conflicts are detected on Assertions (not
+    # Relationships). The query must still be tenant-scoped via user_id.
+    assert "assertions" in db.statement
+    assert "user_id" in db.statement
 
 
 def test_conflict_resolution_penalizes_only_disagreeing_sources() -> None:
-    relationships = [
-        SimpleNamespace(source_id="winner", object_id="value-a", object_type="Event"),
-        SimpleNamespace(source_id="supporter", object_id="value-a", object_type="Event"),
-        SimpleNamespace(source_id="loser", object_id="value-b", object_type="Event"),
+    assertions = [
+        SimpleNamespace(
+            id="a1", source_id="winner", object_value="value-a",
+            status="open", engine="tavily", conflicting_with_id=None,
+        ),
+        SimpleNamespace(
+            id="a2", source_id="supporter", object_value="value-a",
+            status="open", engine="exa", conflicting_with_id=None,
+        ),
+        SimpleNamespace(
+            id="a3", source_id="loser", object_value="value-b",
+            status="open", engine="bocha", conflicting_with_id=None,
+        ),
     ]
     sources = {
         source_id: SimpleNamespace(
@@ -165,7 +187,7 @@ def test_conflict_resolution_penalizes_only_disagreeing_sources() -> None:
         )
         for source_id in ("winner", "supporter", "loser")
     }
-    db = _CrossSession(relationships, sources)
+    db = _CrossSession(assertions, sources)
 
     result = CrossValidationService(db, "user-1").resolve_conflict(
         "subject-1", "AFFECTS", "winner"

@@ -132,7 +132,12 @@ class SourceAccuracyLog(UUIDPkMixin, TimestampMixin, Base):
 
 
 class ConflictResolution(UUIDPkMixin, TimestampMixin, Base):
-    """Auditable user decision for a cross-source conflict group."""
+    """Auditable user decision for a cross-source conflict group.
+
+    Extended in §B.1 to carry Assertion-level resolution metadata:
+    ``assertion_ids`` (all participants), ``winning_assertion_id``, and
+    ``cross_engine_consensus`` (the voting result from auto_merge_node).
+    """
 
     __tablename__ = "conflict_resolutions"
 
@@ -146,6 +151,19 @@ class ConflictResolution(UUIDPkMixin, TimestampMixin, Base):
     winning_object_id: Mapped[str] = mapped_column(String(36), nullable=False)
     losing_source_ids: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list)
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # §B.1 — Assertion-level resolution metadata.
+    # All Assertion IDs that participated in this conflict group.
+    assertion_ids: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list)
+    # The winning Assertion (may differ from winning_source_id when the
+    # resolution is at the Assertion level rather than the source level).
+    winning_assertion_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Cross-engine consensus result from auto_merge_node:
+    # {"value": <object_value>, "supporting_engines": ["tavily","exa"],
+    #  "engine_diversity_bonus": 1.6, "auto_merged": true}
+    cross_engine_consensus: Mapped[dict[str, Any]] = mapped_column(
+        JSON_DOCUMENT, default=dict
+    )
 
 
 Index("ix_calibration_reports_scope", CalibrationReport.goal_type, CalibrationReport.region)

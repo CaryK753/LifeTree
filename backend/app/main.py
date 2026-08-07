@@ -6,6 +6,7 @@ Wires routers, exception handlers, startup/shutdown lifecycle for DB drivers.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,6 +60,34 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         log.warning("app.blob_store_unavailable", error=str(exc))
 
+    # Reap chat streams left "running" by a previous process crash/restart.
+    #
+    # Chat streams run as in-process asyncio.Tasks — when the process dies,
+    # the task dies too, but the DB row stays in status="running" forever.
+    # On startup we mark any orphaned "running" streams as "failed" so the
+    # frontend can surface the error and the user can retry instead of
+    # waiting indefinitely for a response that will never arrive.
+    try:
+        from app.db.postgres import SessionLocal
+        from app.models.chat_stream import ChatStream
+        from sqlalchemy import update
+
+        with SessionLocal() as session:
+            result = session.execute(
+                update(ChatStream)
+                .where(ChatStream.status == "running")
+                .values(
+                    status="failed",
+                    error="process_restarted: the server restarted while this stream was running",
+                    completed_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+            if result.rowcount > 0:
+                log.info("app.chat_streams_reaped", count=result.rowcount)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("app.chat_streams_reap_failed", error=str(exc))
+
     yield
 
     log.info("app.shutdown")
@@ -71,7 +100,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(
         title="LifeTree API",
-        version="0.1.0",
+        version="0.2.3",
         description="Phase 1 MVP — knowledge-graph-driven decision support",
         lifespan=lifespan,
     )
@@ -93,7 +122,9 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["meta"])
     async def health() -> dict[str, str]:
-        return {"status": "ok", "version": "0.1.0"}
+        from app.api import _read_version
+
+        return {"status": "ok", "version": _read_version()}
 
     return app
 

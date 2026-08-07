@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { api, streamChat } from "@/lib/api";
+import { api, streamChat, resumeChatStream, type ChatChunk } from "@/lib/api";
 import { useT } from "@/lib/i18n/provider";
 import { useRuntimeCatalog, useUserProfile, useMcpServers, useUserSkills } from "@/lib/hooks";
 import { useToast } from "@/components/ui/toast";
@@ -83,6 +83,8 @@ import {
   PromptInputButton,
 } from "@/components/ai-elements/prompt-input";
 import { ChatModelSelector } from "@/components/chat/chat-model-selector";
+import { ResearchToolCard } from "@/components/research/research-tool-card";
+import { TeamToolCard } from "@/components/agent-team/team-tool-card";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   ChatMinimap,
@@ -223,6 +225,136 @@ export function ChatPanel({ goalId, scenarioId, modelId, onModelChange }: Props)
   useEffect(() => {
     textareaRef.current?.focus();
   }, [state.activeId]);
+
+  // ---------- Resume background chat streams on mount ----------
+  //
+  // On page reload, any message with ``streaming: true`` and a ``streamId``
+  // is backed by a persistent ChatStream on the backend. We check each
+  // one: if the stream already finished, we restore the final content
+  // directly; if it's still running, we reconnect via SSE and continue
+  // accumulating tokens / tool calls live.
+  //
+  // A ref guard ensures this only runs once per mount, even if React
+  // strict-mode double-invokes the effect in development.
+  const resumeAttemptedRef = useRef(false);
+  useEffect(() => {
+    if (resumeAttemptedRef.current) return;
+    resumeAttemptedRef.current = true;
+
+    const resumable: Array<{ convId: string; msgId: string; streamId: string }> = [];
+    for (const conv of state.conversations) {
+      for (const msg of conv.messages) {
+        if (msg.streaming && msg.streamId) {
+          resumable.push({ convId: conv.id, msgId: msg.id, streamId: msg.streamId });
+        }
+      }
+    }
+    if (resumable.length === 0) return;
+
+    const abort = new AbortController();
+    setBusy(true);
+
+    (async () => {
+      for (const { convId, msgId, streamId } of resumable) {
+        try {
+          // Quick-check: has the stream finished while we were away?
+          const streamState = await api.getChatStream(streamId);
+          if (
+            streamState.status === "completed" ||
+            streamState.status === "failed" ||
+            streamState.status === "cancelled"
+          ) {
+            // Stream is done — restore the final content directly.
+            patchMessage(convId, msgId, {
+              content: streamState.result_content ?? "",
+              streaming: false,
+              ...(streamState.result_tool_calls
+                ? {
+                    toolCalls: streamState.result_tool_calls.map((tc) => ({
+                      id: tc.id ?? uid(),
+                      name: tc.name,
+                      args: {},
+                      result: tc.result,
+                      startedAt: Date.now(),
+                      endedAt: Date.now(),
+                    })),
+                  }
+                : {}),
+            });
+            continue;
+          }
+
+          // Stream is still running — reconnect and replay events.
+          // Clear the partial content first so we rebuild from scratch
+          // (avoids duplication from events already rendered before reload).
+          // Note: reasoning must be set to "" (not undefined) because
+          // { ...m, ...p } skips undefined values, leaving stale reasoning.
+          patchMessage(convId, msgId, { content: "", toolCalls: [], reasoning: "" });
+
+          let acc = "";
+          let reasoningAcc = "";
+          const toolCalls: Record<string, ToolCall> = {};
+
+          for await (const chunk of resumeChatStream(streamId, abort.signal) as AsyncGenerator<ChatChunk>) {
+            const delta = chunk.delta ?? "";
+            if (delta) {
+              acc += delta;
+              patchMessage(convId, msgId, { content: acc, streaming: true });
+            }
+            if (chunk.reasoning_delta) {
+              reasoningAcc += chunk.reasoning_delta;
+              patchMessage(convId, msgId, { reasoning: reasoningAcc, streaming: true });
+            }
+            if (chunk.tool_call) {
+              const tc = chunk.tool_call;
+              const hasResult = tc.result !== null && tc.result !== undefined;
+              if (!hasResult) {
+                const id = tc.id || uid();
+                toolCalls[id] = {
+                  id,
+                  name: tc.name,
+                  args: tc.args ?? {},
+                  result: null,
+                  startedAt: Date.now(),
+                  contentOffset: acc.length,
+                };
+                upsertToolCall(convId, msgId, toolCalls[id]);
+              } else {
+                let matchId: string | undefined;
+                if (tc.id && toolCalls[tc.id]) {
+                  matchId = tc.id;
+                } else {
+                  matchId = Object.entries(toolCalls)
+                    .filter(([, v]) => v.name === tc.name && v.result === null && !v.error)
+                    .sort((a, b) => b[1].startedAt - a[1].startedAt)[0]?.[0];
+                }
+                if (matchId) {
+                  upsertToolCall(convId, msgId, {
+                    id: matchId,
+                    name: tc.name,
+                    result: tc.result,
+                    endedAt: Date.now(),
+                  });
+                }
+              }
+            }
+            if (chunk.finish_reason) break;
+          }
+
+          patchMessage(convId, msgId, { streaming: false });
+        } catch (err) {
+          if ((err as Error).name === "AbortError") continue;
+          // If resume fails (e.g. stream was deleted), just finalize the
+          // message with whatever content it already has.
+          patchMessage(convId, msgId, { streaming: false });
+        }
+      }
+      setBusy(false);
+    })();
+
+    return () => abort.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Auto-resize textarea.
   useEffect(() => {
@@ -432,6 +564,13 @@ export function ChatPanel({ goalId, scenarioId, modelId, onModelChange }: Props)
 
       try {
         for await (const chunk of stream) {
+          // The first chunk carries stream_id for background persistence.
+          // Store it on the message so we can resume after a page reload.
+          if (chunk.stream_id) {
+            patchMessage(convId, assistantId, { streamId: chunk.stream_id });
+            continue;
+          }
+
           const delta = chunk.delta ?? "";
           if (delta) {
             acc += delta;
@@ -1088,6 +1227,22 @@ function resultIsError(result: unknown): boolean {
  * default `mb-4` since spacing is handled by the parent flex gap.
  */
 function ToolCallView({ tool }: { tool: ToolCall }) {
+  // Research tools render as a clickable progress card instead of the
+  // generic JSON tool output. The card links to /research?job=<id>.
+  if (tool.name === "start_research" || tool.name === "get_research_status") {
+    return <ResearchToolCard tool={tool} />;
+  }
+
+  // AgentTeam tools render as a clickable orchestration card that links
+  // to /agent-team?job=<id>.
+  if (
+    tool.name === "start_team" ||
+    tool.name === "get_team_status" ||
+    tool.name === "poll_team"
+  ) {
+    return <TeamToolCard tool={tool} />;
+  }
+
   const resultHasError = resultIsError(tool.result);
   const failed = !!tool.error || resultHasError;
   const running = tool.result === null && !tool.error;

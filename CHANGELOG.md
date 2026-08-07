@@ -5,6 +5,108 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-08-07
+
+### Added
+
+#### Deep Research (深度研究)
+- Multi-source search engine aggregation: Tavily, Exa, 博查 (Bocha), and
+  AnySearch, each with declared domain strengths (general web/news,
+  academic/technical docs, Chinese news/policy, vertical structured data).
+- Cross-engine consensus voting for authenticity validation, with a
+  diversity bonus weight (`1.0 + 0.2 × number_of_distinct_engines`).
+- Six-step LangGraph research pipeline (planning → searching →
+  extracting → cross-validating → trend-detecting → reporting) with
+  Celery/InProcessJobRunner background execution and SSE progress streaming.
+- Trend analysis with change-point detection and scenario branching.
+- `/research` page with task list, launch form, real-time progress, and
+  full report rendering (summary, key findings, conflict table, trends,
+  sources, metadata). Chat-integrated tool cards link to the research page.
+- Research jobs support `persist` parameter; deep research forces
+  persistence, conversation mode defaults to no persistence.
+
+#### Agent Team (智能体小组讨论)
+- Multi-agent orchestration with seven-state pipeline (decomposing →
+  dispatching → running → aggregating → reviewing → completed/failed).
+- Specialist sub-agents execute decomposed subtasks in parallel; results
+  are aggregated with consensus, divergence, gaps, and warnings.
+- `/agent-team` page with task list/detail dual view, 3s SWR polling for
+  active tasks, and result rendering (summary, consensus, divergences,
+  gaps, sub-agent execution table, honesty statement).
+- Chat-integrated `start_team`/`get_team_status`/`poll_team` tool cards.
+
+#### Background Task Persistence
+- Chat conversations now run as background tasks: closing the browser tab
+  no longer stops an in-progress AI response. A new `ChatStream` model
+  persists SSE events to the database; the frontend auto-reconnects on
+  reload via `GET /chat/stream/{id}/events?last_seq=N`.
+- Deep research and Agent Team jobs already ran in the background via
+  Celery/InProcessJobRunner; list pages now poll every 3–4s while tasks
+  are active and stop when all are terminal.
+- Process-restart reaper: on startup, any `chat_streams` left in
+  `running` state by a crash/restart are marked `failed` so the frontend
+  can surface the error instead of waiting forever.
+
+#### Conversation Context Compression
+- Proactive compression: when estimated conversation tokens exceed 70%
+  of the model's context window, older turns are summarised by the
+  configured chat model into a compact system note — preserving semantic
+  continuity while drastically reducing token count.
+- Reactive compression: if the LLM API returns a `context_length_exceeded`
+  error (matched across OpenAI/Anthropic/DeepSeek/Google phrasings), the
+  history is force-compressed and the request retried once.
+- Compression keeps the first user message and the most recent 6 messages
+  verbatim; only the middle is summarised.
+
+#### i18n
+- Added 80+ `research.*` and 80+ `agentTeam.*` translation entries across
+  all 6 supported languages (zh-CN, zh-TW, en, es, de, fr).
+
+### Changed
+- Version number dynamically read from `pyproject.toml` in `/meta/about`
+  and `/health` endpoints; displayed on `/settings` page.
+- Deep research and Agent Team features require a configured `chat`
+  model; the backend returns HTTP 400 and the frontend shows a warning
+  if none is set.
+- Chat `POST /stream` accepts a `persist` parameter (default `true`);
+  ephemeral calls like title generation use `persist=false` to avoid
+  accumulating throw-away `ChatStream` rows.
+- Search results from the AnySearch engine now use the correct JSON-RPC
+  `/mcp` interface; Bocha response field mapping and Exa parameters
+  corrected.
+- Local development mode (no Redis) uses `InProcessJobRunner` for
+  research and Agent Team task scheduling instead of failing on
+  `Celery task.delay()`.
+
+### Fixed
+- **OAuth unbind was a no-op**: unbinding a third-party OAuth provider
+  from `/profile` did not actually prevent future logins via that
+  provider. The login flow used the legacy `user_profiles.external_id`
+  column as a lookup fallback (bypassing the `user_oauth_links` table)
+  and then silently re-created the binding. Fixed by: (1) clearing
+  `external_id` on unbind if it matches the provider, (2) removing the
+  `external_id` lookup fallback from the login flow, and (3) removing
+  the automatic link re-creation on login.
+- DELETE requests returning `204 No Content` no longer cause JSON parse
+  errors in the frontend `request()` helper.
+- `asyncio.CancelledError` (which inherits from `BaseException` in
+  Python 3.9+, not `Exception`) is now explicitly caught in the chat
+  background task, marking the stream as `cancelled` instead of leaving
+  it stuck in `running`.
+- SSE event generator now calls `db.expire_all()` before each poll so
+  the request session reads fresh data written by the background task's
+  independent session (preventing stale-cache reads where new tokens
+  never appeared).
+- `events` JSON array on `ChatStream` is capped at 2000 entries during
+  streaming and cleared on terminal state, preventing unbounded JSONB
+  growth and flush-time degradation for long conversations.
+- Frontend `resumeChatStream` now has the same auto-reconnect + `last_seq`
+  tracking as `streamChat`, so page-reload recovery survives transient
+  network failures.
+- Frontend chat-panel recovery clears `reasoning` with `""` (not
+  `undefined`) so the spread-merge `{ ...m, ...p }` actually overwrites
+  the stale value.
+
 ## [0.2.2] - 2026-08-03
 
 ### Added

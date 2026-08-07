@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import date as date_type
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException
 from langchain_core.tools import StructuredTool, tool
@@ -254,11 +254,65 @@ class WebSearchInput(BaseModel):
     max_results: int = Field(
         5, description="Max number of results to return (default 5, max 10)"
     )
+    engine: Literal["tavily", "exa", "bocha", "anysearch"] | None = Field(
+        None,
+        description=(
+            "Specific search engine to use. Omit (None) to use the user's "
+            "configured default engine."
+        ),
+    )
+    engines: list[Literal["tavily", "exa", "bocha", "anysearch"]] | None = Field(
+        None,
+        description=(
+            "List of engines for multi-engine parallel search (e.g. "
+            '["tavily","exa","bocha"]). Results are merged, deduped by URL, '
+            "and tagged with their source engine. Takes precedence over "
+            "``engine``. Use this for cross-validation scenarios where you "
+            "need the same fact from multiple independent sources."
+        ),
+    )
+    domain: str | None = Field(
+        None,
+        description=(
+            "Vertical domain hint (e.g. 'policy', 'academic', 'news', "
+            "'finance'). Consumed by AnySearch to hit vertical structured "
+            "data; ignored by other engines."
+        ),
+    )
+    persist: bool = Field(
+        False,
+        description=(
+            "If True, persist each search result as an InformationSource "
+            "(kind=public/news) and run the structuring pipeline on the "
+            "snippet. The source's ``meta.engine`` is set so downstream "
+            "cross-validation can compute cross_engine_consensus. Use "
+            "persist=True when the user wants the search results to "
+            "permanently enrich their knowledge graph. Default False "
+            "returns results as conversation context only."
+        ),
+    )
 
 
 class WebFetchInput(BaseModel):
     urls: list[str] = Field(
         ..., description="List of URLs to fetch and extract text from (max 5)"
+    )
+    engine: Literal["tavily", "exa", "bocha", "anysearch"] | None = Field(
+        None,
+        description=(
+            "Specific search engine to use for extraction. Omit (None) to "
+            "use the configured default. Note: Bocha has no native extract "
+            "API — when engine='bocha' the service transparently falls back "
+            "to Tavily extract if a Tavily key is configured."
+        ),
+    )
+    persist: bool = Field(
+        False,
+        description=(
+            "If True, persist each extracted page as an InformationSource "
+            "and run the structuring pipeline. Same semantics as "
+            "WebSearchInput.persist."
+        ),
     )
 
 
@@ -379,6 +433,74 @@ class ResolveConflictInput(BaseModel):
     winning_source_id: str = Field(..., description="ID of the source to treat as authoritative")
 
 
+class StartResearchInput(BaseModel):
+    question: str = Field(..., description="The research question to investigate")
+    engines: list[str] | None = Field(
+        None,
+        description="Engines to use (subset of configured engines). If empty, all configured engines are used.",
+    )
+    goal_id: str | None = Field(
+        None, description="Optional goal context to scope the research"
+    )
+    max_sub_questions: int | None = Field(
+        None, description="Max sub-questions in the research plan (default 5)"
+    )
+    max_total_sources: int | None = Field(
+        None, description="Max total URLs to collect (default 30)"
+    )
+
+
+class GetResearchStatusInput(BaseModel):
+    job_id: str = Field(..., description="ID of the research job to poll")
+
+
+class PollResearchInput(BaseModel):
+    job_id: str = Field(..., description="ID of the research job to poll")
+    timeout_seconds: int = Field(
+        60, ge=1, le=120, description="Max seconds to block waiting for completion"
+    )
+
+
+# ---------- AgentTeam tool schemas (§D.7) ----------
+
+
+class StartTeamInput(BaseModel):
+    objective: str = Field(
+        ..., description="The complex objective to delegate to the agent team"
+    )
+    template: str = Field(
+        "cross_domain_research",
+        description=(
+            "Team template. One of: cross_domain_research "
+            "(multi-domain parallel research), independent_validation "
+            "(independent fact-checking from different angles), "
+            "multi_pathway_compare (compare decision pathways), "
+            "risk_scan (multi-dimension risk scan), iterative_research "
+            "(research with gap-filling rounds)."
+        ),
+    )
+    goal_id: str | None = Field(
+        None, description="Optional goal context to scope the team's work"
+    )
+    max_specialists: int | None = Field(
+        None, description="Max specialist sub-agents (default 5, hard cap 8)"
+    )
+
+
+class GetTeamStatusInput(BaseModel):
+    job_id: str = Field(..., description="ID of the AgentTeam job to inspect")
+
+
+class PollTeamInput(BaseModel):
+    job_id: str = Field(..., description="ID of the AgentTeam job to poll")
+    timeout_seconds: int = Field(
+        120,
+        ge=1,
+        le=300,
+        description="Max seconds to block waiting for completion (AgentTeam jobs are longer)",
+    )
+
+
 class UpdateActionInput(BaseModel):
     action_id: str = Field(..., description="ID of the action to update")
     title: str | None = None
@@ -436,39 +558,116 @@ class AbandonBranchInput(BaseModel):
 
 
 async def _web_search(
-    query: str, max_results: int = 5, *, api_key: str | None = None, **kwargs: Any
+    query: str,
+    max_results: int = 5,
+    *,
+    api_key: str | None = None,
+    engine: str | None = None,
+    engines: list[str] | None = None,
+    domain: str | None = None,
+    persist: bool = False,
+    user_id: str | None = None,
+    **kwargs: Any,
 ) -> str:
-    """Search the web for fresh information using Tavily."""
-    svc = CrawlerService(api_key=api_key)
-    if not svc.available:
-        return (
-            "Web search is not available — no Tavily API key configured. "
-            "Ask the user to configure it in Settings."
+    """Search the web for fresh information using the configured search engine.
+
+    Multi-source search (§A.5 of cross-validation spec):
+      - ``engines`` takes precedence over ``engine``: when a list is given,
+        results are fetched in parallel from each engine, merged, and
+        deduped by URL. Each result is tagged with its source ``engine``.
+      - ``domain`` is consumed by AnySearch for vertical structured data;
+        other engines ignore it.
+      - ``persist=True`` writes each result as an InformationSource with
+        ``meta.engine`` set, then runs the structuring pipeline so the
+        snippet becomes Assertions/Events in the user's knowledge graph.
+
+    The ``api_key`` parameter is retained for backward compatibility — when
+    provided it overrides the per-user / global key for the chosen engine.
+    """
+    from app.services.search_engines import ALL_ENGINE_NAMES
+
+    # Multi-engine parallel search
+    if engines:
+        # Filter to engines with configured keys (the CrawlerService will
+        # skip engines without keys and log a warning).
+        svc = CrawlerService(api_key=api_key) if api_key else CrawlerService()
+        results = await svc.search_multi(
+            query,
+            engines=engines,
+            max_results=min(max_results, 10),
+            domain=domain,
+            topic="general",
         )
-    results = await svc.search(
-        query=query,
-        max_results=min(max_results, 10),
-        topic="general",
-    )
+        used_engines = [e for e in engines if e in ALL_ENGINE_NAMES]
+    else:
+        chosen = engine or "tavily"  # CrawlerService resolves actual default
+        if chosen not in ALL_ENGINE_NAMES:
+            return f"Unknown engine: {chosen!r}. Valid: {ALL_ENGINE_NAMES}"
+        svc = CrawlerService(api_key=api_key, engine=chosen)
+        if not svc.available:
+            return (
+                f"Web search is not available — no API key configured for "
+                f"engine {chosen!r}. Ask the user to configure it in Settings."
+            )
+        results = await svc.search(
+            query=query,
+            max_results=min(max_results, 10),
+            topic="general",
+            domain=domain,
+        )
+        used_engines = [chosen]
+
     if not results:
         return f"No results found for: {query}"
+
     parts: list[str] = []
     for i, r in enumerate(results, 1):
-        parts.append(f"{i}. [{r.title}]({r.url})\n   {r.content}")
+        engine_tag = f" [{r.engine}]" if r.engine else ""
+        parts.append(f"{i}. [{r.title}]({r.url}){engine_tag}\n   {r.content}")
         if r.published_at:
             parts.append(f"   Published: {r.published_at}")
+
+    if persist and user_id:
+        persisted = _persist_search_results(
+            results=results,
+            user_id=user_id,
+            query=query,
+        )
+        parts.append(
+            f"\n---\nPersisted {persisted} search result(s) to the knowledge "
+            f"graph as InformationSource(s) with engine provenance. "
+            f"Engines used: {', '.join(used_engines)}."
+        )
+
     return "\n\n".join(parts)
 
 
 async def _web_fetch(
-    urls: list[str], *, api_key: str | None = None, **kwargs: Any
+    urls: list[str],
+    *,
+    api_key: str | None = None,
+    engine: str | None = None,
+    persist: bool = False,
+    user_id: str | None = None,
+    **kwargs: Any,
 ) -> str:
-    """Extract clean text content from web pages using Tavily."""
-    svc = CrawlerService(api_key=api_key)
+    """Extract clean text content from web pages using the configured engine.
+
+    When ``persist=True``, each extracted page is written as an
+    InformationSource with ``meta.engine`` set, then the structuring
+    pipeline runs to extract Assertions/Events.
+    """
+    from app.services.search_engines import ALL_ENGINE_NAMES, get_default_search_engine
+
+    chosen = engine or get_default_search_engine()
+    if chosen not in ALL_ENGINE_NAMES:
+        return f"Unknown engine: {chosen!r}. Valid: {ALL_ENGINE_NAMES}"
+
+    svc = CrawlerService(api_key=api_key, engine=chosen)
     if not svc.available:
         return (
-            "Web fetch is not available — no Tavily API key configured. "
-            "Ask the user to configure it in Settings."
+            f"Web fetch is not available — no API key configured for engine "
+            f"{chosen!r}. Ask the user to configure it in Settings."
         )
     fetched = await svc.extract(urls=urls[:5])
     if not fetched:
@@ -480,7 +679,140 @@ async def _web_fetch(
         # Truncate per document to keep LLM context reasonable
         snippet = raw[:3000] if raw else "(No text extracted)"
         parts.append(f"=== Content from {url} ===\n{snippet}")
+
+    if persist and user_id:
+        persisted = _persist_extracted_pages(
+            pages=fetched,
+            user_id=user_id,
+            engine_name=chosen,
+        )
+        parts.append(
+            f"\n---\nPersisted {persisted} extracted page(s) to the knowledge "
+            f"graph with engine={chosen} provenance."
+        )
+
     return "\n\n".join(parts)
+
+
+def _persist_search_results(
+    *,
+    results: list[Any],  # list[CrawlResult]
+    user_id: str,
+    query: str,
+) -> int:
+    """Persist search hits as InformationSource + run structuring pipeline.
+
+    Each result is written with ``meta.engine`` set to its source engine
+    so downstream cross-validation can compute ``cross_engine_consensus``.
+    Returns the number of sources persisted.
+
+    Uses a fresh SessionLocal (not the request-level session) because the
+    structuring pipeline commits internally and we don't want to interfere
+    with the advisor's main transaction.
+    """
+    from app.services.structuring import StructuringService
+
+    persisted = 0
+    with SessionLocal() as session:
+        structuring = StructuringService(session)
+        for r in results:
+            engine_name = r.engine or "tavily"
+            credibility = _credibility_from_score(r.score)
+            source_kind = "news" if credibility in ("medium", "high") else "public"
+            try:
+                # Parse published_at if available
+                published_at = None
+                if r.published_at:
+                    try:
+                        from datetime import datetime as _dt
+
+                        published_at = _dt.fromisoformat(
+                            r.published_at.replace("Z", "+00:00")
+                        )
+                    except (ValueError, TypeError):
+                        pass
+
+                structuring.ingest_text(
+                    text=r.content or r.title or "",
+                    title=r.title or r.url,
+                    source_kind=source_kind,
+                    url=r.url,
+                    published_at=published_at,
+                    user_id=user_id,
+                    skip_llm=False,
+                    meta={
+                        "engine": engine_name,
+                        "search_query": query,
+                        "search_score": float(r.score),
+                    },
+                )
+                persisted += 1
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "web_search.persist_failed",
+                    url=r.url,
+                    engine=engine_name,
+                    error=str(exc),
+                )
+    return persisted
+
+
+def _persist_extracted_pages(
+    *,
+    pages: list[Any],  # list[ExtractResult]
+    user_id: str,
+    engine_name: str,
+) -> int:
+    """Persist extracted pages as InformationSource + run structuring pipeline."""
+    from app.services.structuring import StructuringService
+
+    persisted = 0
+    with SessionLocal() as session:
+        structuring = StructuringService(session)
+        for page in pages:
+            if page.failed:
+                continue
+            try:
+                structuring.ingest_text(
+                    text=page.content or "",
+                    title=page.url,
+                    source_kind="public",
+                    url=page.url,
+                    user_id=user_id,
+                    skip_llm=False,
+                    meta={
+                        "engine": engine_name,
+                        "extraction_source": "web_fetch",
+                    },
+                )
+                persisted += 1
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "web_fetch.persist_failed",
+                    url=page.url,
+                    engine=engine_name,
+                    error=str(exc),
+                )
+    return persisted
+
+
+def _credibility_from_score(score: float) -> str:
+    """Map a search-engine relevance score to a credibility rating.
+
+    Per §A.5 of the spec:
+      - score >= 0.8 → medium
+      - score >= 0.5 → low
+      - score <  0.5 → pending
+    """
+    try:
+        s = float(score)
+    except (TypeError, ValueError):
+        return "pending"
+    if s >= 0.8:
+        return "medium"
+    if s >= 0.5:
+        return "low"
+    return "pending"
 
 
 # ---------- Tool factory ----------
@@ -517,6 +849,26 @@ def build_advisor_tools(
     user_service_config = db.get(UserServiceConfig, user_id)
     user_tavily_key = (
         user_service_config.tavily_api_key if user_service_config else None
+    ) or None
+    # Per-user search-engine key overrides (§A.3). When the user has
+    # configured their own key for an engine, it takes precedence over the
+    # admin-configured global key. The CrawlerService facade resolves keys
+    # via the registry when api_key=None, so we only need to pass the
+    # per-user key for the engine the user has overridden.
+    user_engine_keys: dict[str, str] = {}
+    if user_service_config:
+        for eng, attr in (
+            ("tavily", "tavily_api_key"),
+            ("exa", "exa_api_key"),
+            ("bocha", "bocha_api_key"),
+            ("anysearch", "anysearch_api_key"),
+        ):
+            k = getattr(user_service_config, attr, "") or ""
+            if k:
+                user_engine_keys[eng] = k
+    # The user's preferred default engine (overrides the global default).
+    user_default_engine = (
+        user_service_config.search_default_engine if user_service_config else None
     ) or None
 
     # ---------- Query tools ----------
@@ -1368,14 +1720,88 @@ def build_advisor_tools(
     # ---------- Web tools ----------
 
     @tool("web_fetch", args_schema=WebFetchInput)
-    async def web_fetch(urls: list[str]) -> str:
-        """Extract clean text content from one or more web pages. Use this after web_search to read full articles, or when the user provides a URL. Pass up to 5 URLs."""
-        return await _web_fetch(urls, api_key=user_tavily_key)
+    async def web_fetch(
+        urls: list[str],
+        engine: Literal["tavily", "exa", "bocha", "anysearch"] | None = None,
+        persist: bool = False,
+    ) -> str:
+        """Extract clean text content from one or more web pages.
+
+        Use this after web_search to read full articles, or when the user
+        provides a URL. Pass up to 5 URLs.
+
+        Args:
+            engine: Search engine to use for extraction. Omit to use the
+                user's configured default. Bocha has no native extract API
+                — it transparently falls back to Tavily extract when
+                available.
+            persist: If True, persist each extracted page to the knowledge
+                graph as an InformationSource with engine provenance, then
+                run the structuring pipeline to extract facts/events.
+        """
+        # Resolve per-user key override for the chosen engine.
+        chosen = engine or user_default_engine
+        key_override = user_engine_keys.get(chosen) if chosen else user_tavily_key
+        return await _web_fetch(
+            urls,
+            api_key=key_override,
+            engine=engine,
+            persist=persist,
+            user_id=user_id,
+        )
 
     @tool("web_search", args_schema=WebSearchInput)
-    async def web_search(query: str, max_results: int = 5) -> str:
-        """Search the web for current information using Tavily. Use this when the user asks about recent events, current facts, news, or anything not in the local knowledge graph. Returns a list of results with title, URL, and snippet."""
-        return await _web_search(query, max_results, api_key=user_tavily_key)
+    async def web_search(
+        query: str,
+        max_results: int = 5,
+        engine: Literal["tavily", "exa", "bocha", "anysearch"] | None = None,
+        engines: list[Literal["tavily", "exa", "bocha", "anysearch"]] | None = None,
+        domain: str | None = None,
+        persist: bool = False,
+    ) -> str:
+        """Search the web for current information using the configured engine.
+
+        Use this when the user asks about recent events, current facts,
+        news, or anything not in the local knowledge graph. Returns a list
+        of results with title, URL, snippet, and source engine.
+
+        Multi-source search (§A.5):
+          - Pass ``engines`` (a list) to search multiple engines in parallel.
+            Results are merged, deduped by URL, and tagged with their
+            source engine. Use this for cross-validation — the same fact
+            from multiple independent engines is far more trustworthy.
+          - Pass ``domain`` to hint the vertical domain (consumed by
+            AnySearch for structured data; ignored by other engines).
+          - Set ``persist=True`` to write each result to the knowledge graph
+            as an InformationSource with engine provenance. The structuring
+            pipeline then extracts Assertions/Events for cross-validation.
+
+        Engine selection priority: ``engines`` > ``engine`` > user's
+        configured default > global default.
+        """
+        # For multi-engine search, we don't pass a single api_key — the
+        # CrawlerService resolves each engine's key from per-user / global
+        # config. For single-engine search, pass the per-user key override.
+        if engines:
+            return await _web_search(
+                query,
+                max_results,
+                engines=list(engines),
+                domain=domain,
+                persist=persist,
+                user_id=user_id,
+            )
+        chosen = engine or user_default_engine or "tavily"
+        key_override = user_engine_keys.get(chosen) if chosen else user_tavily_key
+        return await _web_search(
+            query,
+            max_results,
+            api_key=key_override,
+            engine=engine,
+            domain=domain,
+            persist=persist,
+            user_id=user_id,
+        )
 
     # ---------- Source discovery tools (P1 信源自动发现) ----------
 
@@ -1775,15 +2201,17 @@ def build_advisor_tools(
         """Fetch a URL and structure its content into the knowledge graph.
 
         Combines web_fetch + structuring in one step: extracts text from the
-        URL via Tavily, then runs LLM extraction to produce Events /
-        Relationships. Use when the user shares a link to an article,
+        URL via the configured search engine (Tavily by default, or whichever
+        engine the user has configured), then runs LLM extraction to produce
+        Events / Relationships. Use when the user shares a link to an article,
         announcement, or official page.
         """
-        if not user_tavily_key:
-            return {"error": "no_tavily_key", "message": "Web fetch requires a Tavily API key. Ask the user to configure it in Settings."}
-        text = await _web_fetch([url], api_key=user_tavily_key)
-        if not text or text.startswith("No text"):
-            return {"error": "fetch_failed", "url": url}
+        # Use the user's preferred default engine (or Tavily fallback).
+        chosen = user_default_engine or "tavily"
+        key_override = user_engine_keys.get(chosen) if chosen else user_tavily_key
+        text = await _web_fetch([url], api_key=key_override, engine=chosen)
+        if not text or text.startswith("No text") or text.startswith("Web fetch is not available"):
+            return {"error": "fetch_failed", "url": url, "message": text}
         with SessionLocal() as session:
             from app.services.structuring import StructuringService
             svc = StructuringService(session)
@@ -1794,11 +2222,16 @@ def build_advisor_tools(
                     source_kind=source_type,
                     url=url,
                     user_id=user_id,
+                    meta={
+                        "engine": chosen,
+                        "extraction_source": "ingest_url",
+                    },
                 )
                 atom_count = len(extraction.events) + len(extraction.relationships) if extraction else 0
                 return {
                     "source_id": source.id,
                     "url": url,
+                    "engine": chosen,
                     "atoms_extracted": atom_count,
                     "structured": extraction is not None,
                 }
@@ -1893,6 +2326,514 @@ def build_advisor_tools(
             return svc.resolve_conflict(subject_id, predicate, winning_source_id)
         except Exception as exc:  # noqa: BLE001
             return {"error": "resolve_failed", "message": str(exc)}
+
+    # ---------- Deep research tools (§C.4) ----------
+
+    @tool("start_research", args_schema=StartResearchInput)
+    def start_research(
+        question: str,
+        engines: list[str] | None = None,
+        goal_id: str | None = None,
+        max_sub_questions: int | None = None,
+        max_total_sources: int | None = None,
+    ) -> dict[str, Any]:
+        """Launch a deep-research job that runs asynchronously.
+
+        Use when the user asks a complex question requiring multi-source
+        investigation across different domains (e.g. policy + academic +
+        Chinese-language news). The job runs as a Celery task with a 10-min
+        soft timeout and progresses through planning → searching → extracting
+        → structuring → validating → synthesizing.
+
+        Returns immediately with ``job_id`` and ``status='planning'``. Call
+        ``get_research_status`` or ``poll_research`` in subsequent turns to
+        retrieve results. The user can also view progress at /research/{job_id}.
+
+        Args:
+            question: The research question (3-2000 chars).
+            engines: Engines to use (subset of configured). Empty = all configured.
+            goal_id: Optional goal context to scope the research.
+            max_sub_questions: Max sub-questions in the plan (default 5).
+            max_total_sources: Max URLs to collect (default 30).
+        """
+        from app.models.research import ResearchJob, ResearchStatus
+
+        # Resolve engines to configured ones with API keys.
+        try:
+            from app.services.search_engines import ALL_ENGINE_NAMES
+        except Exception:  # noqa: BLE001
+            ALL_ENGINE_NAMES = ["tavily", "exa", "bocha", "anysearch"]
+
+        def _engine_has_key(name: str) -> bool:
+            try:
+                from app.llm.registry import (
+                    get_anysearch_key,
+                    get_bocha_key,
+                    get_exa_key,
+                    get_tavily_key,
+                )
+
+                getters = {
+                    "tavily": get_tavily_key,
+                    "exa": get_exa_key,
+                    "bocha": get_bocha_key,
+                    "anysearch": get_anysearch_key,
+                }
+                g = getters.get(name)
+                return bool(g and g())
+            except Exception:
+                return False
+
+        candidates = engines or ALL_ENGINE_NAMES
+        resolved = [e for e in candidates if e in ALL_ENGINE_NAMES and _engine_has_key(e)]
+        if not resolved:
+            return {
+                "error": "no_search_engines_configured",
+                "message": (
+                    "Configure at least one search engine API key in Settings "
+                    "before starting a research job."
+                ),
+            }
+
+        scope: dict[str, Any] = {}
+        if goal_id or goal_id_context:
+            scope["goal_id"] = goal_id or goal_id_context
+        if max_sub_questions is not None:
+            scope["max_sub_questions"] = max_sub_questions
+        if max_total_sources is not None:
+            scope["max_total_sources"] = max_total_sources
+
+        with SessionLocal() as session:
+            job = ResearchJob(
+                user_id=user_id,
+                question=question.strip(),
+                scope=scope,
+                engines=resolved,
+                status=ResearchStatus.PLANNING.value,
+                progress=0.0,
+                current_step="queued",
+            )
+            session.add(job)
+            session.commit()
+            session.refresh(job)
+            job_id = job.id
+
+            try:
+                from app.services.runtime.job_runner import get_job_runner
+                from app.workers.research_tasks import run_research_job
+
+                get_job_runner().submit(run_research_job, job_id=job_id)
+            except Exception as exc:  # noqa: BLE001
+                log.error(
+                    "advisor.tool.start_research_dispatch_failed",
+                    job_id=job_id,
+                    error=str(exc),
+                )
+                job.status = ResearchStatus.FAILED.value
+                job.error = f"celery_dispatch_failed: {exc}"[:500]
+                session.commit()
+                return {
+                    "error": "dispatch_failed",
+                    "job_id": job_id,
+                    "message": str(exc),
+                }
+
+        log.info(
+            "advisor.tool.start_research",
+            job_id=job_id,
+            question=question[:80],
+            engines=resolved,
+        )
+        return {
+            "job_id": job_id,
+            "status": "planning",
+            "engines": resolved,
+            "message": (
+                "Research job started. Use get_research_status to poll, or "
+                "view progress at /research/{}".format(job_id)
+            ),
+        }
+
+    @tool("get_research_status", args_schema=GetResearchStatusInput)
+    def get_research_status(job_id: str) -> dict[str, Any]:
+        """Check the status of a deep-research job.
+
+        Returns ``status`` (planning / searching / extracting / structuring /
+        validating / synthesizing / completed / failed / cancelled),
+        ``progress`` (0..1), ``current_step``, and — when complete — the full
+        ``report`` (summary, key_findings, conflicts, trends, sources,
+        research_metadata).
+
+        Use this in a follow-up turn after ``start_research`` to retrieve
+        results. For long-running jobs, prefer polling every 30-60s.
+        """
+        from app.models.research import ResearchJob
+
+        with SessionLocal() as session:
+            job = session.get(ResearchJob, job_id)
+            if job is None:
+                return {"error": "job_not_found", "job_id": job_id}
+            if job.user_id != user_id:
+                return {"error": "forbidden", "job_id": job_id}
+
+            result: dict[str, Any] = {
+                "job_id": job.id,
+                "status": job.status,
+                "progress": job.progress,
+                "current_step": job.current_step,
+                "engines": list(job.engines or []),
+                "sources_collected": len(job.source_ids or []),
+                "assertions_extracted": len(job.assertion_ids or []),
+                "conflicts_detected": len(job.conflict_ids or []),
+                "failure_count": job.failure_count or 0,
+            }
+            if job.error:
+                result["error"] = job.error
+            if job.status == "completed" and job.report:
+                result["report"] = job.report
+            return result
+
+    @tool("poll_research", args_schema=PollResearchInput)
+    def poll_research(
+        job_id: str, timeout_seconds: int = 60
+    ) -> dict[str, Any]:
+        """Block waiting for a research job to complete (max 120s).
+
+        Subscribes to the Redis pub/sub channel ``lifetree:research:{job_id}``
+        and returns as soon as the job reaches a terminal status (completed /
+        failed / cancelled) or the timeout expires. Use for short research
+        jobs when you want to surface results in the same turn; for long
+        jobs, prefer ``get_research_status`` across multiple turns.
+
+        Returns the same payload as ``get_research_status``.
+        """
+        import time
+
+        from app.models.research import ResearchJob, ResearchStatus
+
+        # First validate ownership and check current state.
+        with SessionLocal() as session:
+            job = session.get(ResearchJob, job_id)
+            if job is None:
+                return {"error": "job_not_found", "job_id": job_id}
+            if job.user_id != user_id:
+                return {"error": "forbidden", "job_id": job_id}
+            if job.status in (
+                ResearchStatus.COMPLETED.value,
+                ResearchStatus.FAILED.value,
+                ResearchStatus.CANCELLED.value,
+            ):
+                # Already terminal — return immediately.
+                result: dict[str, Any] = {
+                    "job_id": job.id,
+                    "status": job.status,
+                    "progress": job.progress,
+                    "current_step": job.current_step,
+                }
+                if job.error:
+                    result["error"] = job.error
+                if job.status == "completed" and job.report:
+                    result["report"] = job.report
+                return result
+
+        # Poll the DB at 2s intervals. (Redis pub/sub would be more
+        # responsive, but the advisor tool runs synchronously inside a
+        # thread-pool worker — blocking on redis.asyncio is awkward here.
+        # 2s polling is cheap and bounded by timeout_seconds.)
+        deadline = time.monotonic() + timeout_seconds
+        terminal_statuses = (
+            ResearchStatus.COMPLETED.value,
+            ResearchStatus.FAILED.value,
+            ResearchStatus.CANCELLED.value,
+        )
+        while time.monotonic() < deadline:
+            time.sleep(2)
+            with SessionLocal() as session:
+                fresh = session.get(ResearchJob, job_id)
+                if fresh is None:
+                    return {"error": "job_not_found", "job_id": job_id}
+                if fresh.status in terminal_statuses:
+                    result = {
+                        "job_id": fresh.id,
+                        "status": fresh.status,
+                        "progress": fresh.progress,
+                        "current_step": fresh.current_step,
+                        "sources_collected": len(fresh.source_ids or []),
+                        "assertions_extracted": len(fresh.assertion_ids or []),
+                        "conflicts_detected": len(fresh.conflict_ids or []),
+                    }
+                    if fresh.error:
+                        result["error"] = fresh.error
+                    if fresh.status == "completed" and fresh.report:
+                        result["report"] = fresh.report
+                    return result
+
+        # Timeout — return the latest status without blocking further.
+        with SessionLocal() as session:
+            fresh = session.get(ResearchJob, job_id)
+            if fresh is None:
+                return {"error": "job_not_found", "job_id": job_id}
+            return {
+                "job_id": fresh.id,
+                "status": fresh.status,
+                "progress": fresh.progress,
+                "current_step": fresh.current_step,
+                "timed_out": True,
+                "message": (
+                    "Polling timed out after {}s; the job is still running. "
+                    "Call get_research_status in a later turn to retrieve results."
+                ).format(timeout_seconds),
+            }
+
+    # ---------- AgentTeam tools (§D.7) ----------
+
+    @tool("start_team", args_schema=StartTeamInput)
+    def start_team(
+        objective: str,
+        template: str = "cross_domain_research",
+        goal_id: str | None = None,
+        max_specialists: int | None = None,
+    ) -> dict[str, Any]:
+        """Launch an AgentTeam job that runs asynchronously.
+
+        Use when the user's request is complex enough to warrant
+        multi-agent collaboration: cross-domain research, independent
+        fact validation, multi-pathway comparison, multi-dimension risk
+        scanning, or iterative research with gap-filling. The job runs
+        as a Celery task with a 15-min soft timeout and progresses
+        through decomposing → dispatching → running → aggregating →
+        reviewing → completed.
+
+        The main agent (Orchestrator) splits the objective into subtasks,
+        dispatches them to specialist sub-agents (each with an
+        independent context and pruned toolset), aggregates results,
+        optionally reviews for gaps and dispatches another round
+        (≤ 2 iterations for ``iterative_research``), then produces a
+        final output shaped by the template.
+
+        Returns immediately with ``job_id`` and ``status='decomposing'``.
+        Call ``get_team_status`` or ``poll_team`` in subsequent turns to
+        retrieve results. The user can also view progress at
+        /agent-team/{job_id}.
+
+        Args:
+            objective: The complex objective (3-4000 chars).
+            template: Team template (see StartTeamInput.template).
+            goal_id: Optional goal context.
+            max_specialists: Max specialist sub-agents (default 5).
+
+        When to use vs. ``start_research``:
+        - ``start_research``: single-threaded multi-source research on
+          one question. Use for "research X for me."
+        - ``start_team``: multi-agent collaboration on a complex
+          objective requiring decomposition, parallel work, or
+          independent validation. Use for "validate this claim from
+          multiple angles" or "compare these pathways in depth."
+        """
+        from app.models.agent_team import TEAM_TEMPLATES, AgentTeamJob, TeamStatus
+
+        if template not in TEAM_TEMPLATES:
+            return {
+                "error": "invalid_template",
+                "message": (
+                    f"Template '{template}' is not valid. Choose one of: "
+                    f"{', '.join(TEAM_TEMPLATES)}"
+                ),
+            }
+
+        scope: dict[str, Any] = {}
+        if goal_id or goal_id_context:
+            scope["goal_id"] = goal_id or goal_id_context
+        if max_specialists is not None:
+            scope["max_specialists"] = max(1, min(int(max_specialists), 8))
+
+        from datetime import datetime, timezone
+
+        with SessionLocal() as session:
+            job = AgentTeamJob(
+                user_id=user_id,
+                template=template,
+                objective=objective.strip(),
+                scope=scope,
+                status=TeamStatus.DECOMPOSING.value,
+                progress=0.0,
+                current_step="queued",
+                started_at=datetime.now(timezone.utc),
+            )
+            session.add(job)
+            session.commit()
+            session.refresh(job)
+            job_id = job.id
+
+            try:
+                from app.services.runtime.job_runner import get_job_runner
+                from app.workers.agent_team_tasks import run_agent_team_job
+
+                get_job_runner().submit(run_agent_team_job, job_id=job_id)
+            except Exception as exc:  # noqa: BLE001
+                log.error(
+                    "advisor.tool.start_team_dispatch_failed",
+                    job_id=job_id,
+                    error=str(exc),
+                )
+                job.status = TeamStatus.FAILED.value
+                job.error = f"celery_dispatch_failed: {exc}"[:500]
+                session.commit()
+                return {
+                    "error": "dispatch_failed",
+                    "job_id": job_id,
+                    "message": str(exc),
+                }
+
+        log.info(
+            "advisor.tool.start_team",
+            job_id=job_id,
+            template=template,
+            objective=objective[:80],
+        )
+        return {
+            "job_id": job_id,
+            "status": "decomposing",
+            "template": template,
+            "message": (
+                "AgentTeam job started. Use get_team_status to poll, or "
+                "view progress at /agent-team/{}".format(job_id)
+            ),
+        }
+
+    @tool("get_team_status", args_schema=GetTeamStatusInput)
+    def get_team_status(job_id: str) -> dict[str, Any]:
+        """Check the status of an AgentTeam job.
+
+        Returns ``status`` (decomposing / dispatching / running /
+        aggregating / reviewing / completed / failed / cancelled),
+        ``progress`` (0..1), ``current_step``, ``iteration``,
+        ``specialist_count``, and — when complete — the ``final_output``
+        (shape depends on the template: research report / validation
+        verdict / pathway comparison table / risk inventory).
+
+        Use this in a follow-up turn after ``start_team`` to retrieve
+        results. For long-running jobs, prefer polling every 60-120s.
+        """
+        from app.models.agent_team import AgentTeamJob
+
+        with SessionLocal() as session:
+            job = session.get(AgentTeamJob, job_id)
+            if job is None:
+                return {"error": "job_not_found", "job_id": job_id}
+            if job.user_id != user_id:
+                return {"error": "forbidden", "job_id": job_id}
+
+            result: dict[str, Any] = {
+                "job_id": job.id,
+                "status": job.status,
+                "progress": job.progress,
+                "current_step": job.current_step,
+                "template": job.template,
+                "iteration": job.iterations or 0,
+                "specialist_count": len(job.specialist_results or []),
+                "failure_count": job.failure_count or 0,
+            }
+            if job.error:
+                result["error"] = job.error
+            if job.status == "completed" and job.final_output:
+                result["final_output"] = job.final_output
+            return result
+
+    @tool("poll_team", args_schema=PollTeamInput)
+    def poll_team(
+        job_id: str, timeout_seconds: int = 120
+    ) -> dict[str, Any]:
+        """Block waiting for an AgentTeam job to complete (max 300s).
+
+        Subscribes to the Redis pub/sub channel
+        ``lifetree:agent_team:{job_id}`` and returns as soon as the job
+        reaches a terminal status (completed / failed / cancelled) or
+        the timeout expires. Use for short team jobs when you want to
+        surface results in the same turn; for long jobs, prefer
+        ``get_team_status`` across multiple turns.
+
+        Returns the same payload as ``get_team_status``.
+        """
+        import time
+
+        from app.models.agent_team import AgentTeamJob, TeamStatus
+
+        # First validate ownership and check current state.
+        with SessionLocal() as session:
+            job = session.get(AgentTeamJob, job_id)
+            if job is None:
+                return {"error": "job_not_found", "job_id": job_id}
+            if job.user_id != user_id:
+                return {"error": "forbidden", "job_id": job_id}
+            if job.status in (
+                TeamStatus.COMPLETED.value,
+                TeamStatus.FAILED.value,
+                TeamStatus.CANCELLED.value,
+            ):
+                result: dict[str, Any] = {
+                    "job_id": job.id,
+                    "status": job.status,
+                    "progress": job.progress,
+                    "current_step": job.current_step,
+                    "template": job.template,
+                    "iteration": job.iterations or 0,
+                    "specialist_count": len(job.specialist_results or []),
+                }
+                if job.error:
+                    result["error"] = job.error
+                if job.status == "completed" and job.final_output:
+                    result["final_output"] = job.final_output
+                return result
+
+        # Poll the DB at 3s intervals (AgentTeam jobs are longer than
+        # research jobs; 3s keeps the polling cost low while still
+        # responsive to node-boundary progress updates).
+        deadline = time.monotonic() + timeout_seconds
+        terminal_statuses = (
+            TeamStatus.COMPLETED.value,
+            TeamStatus.FAILED.value,
+            TeamStatus.CANCELLED.value,
+        )
+        while time.monotonic() < deadline:
+            time.sleep(3)
+            with SessionLocal() as session:
+                fresh = session.get(AgentTeamJob, job_id)
+                if fresh is None:
+                    return {"error": "job_not_found", "job_id": job_id}
+                if fresh.status in terminal_statuses:
+                    result = {
+                        "job_id": fresh.id,
+                        "status": fresh.status,
+                        "progress": fresh.progress,
+                        "current_step": fresh.current_step,
+                        "template": fresh.template,
+                        "iteration": fresh.iterations or 0,
+                        "specialist_count": len(fresh.specialist_results or []),
+                    }
+                    if fresh.error:
+                        result["error"] = fresh.error
+                    if fresh.status == "completed" and fresh.final_output:
+                        result["final_output"] = fresh.final_output
+                    return result
+
+        # Timeout — return the latest status without blocking further.
+        with SessionLocal() as session:
+            fresh = session.get(AgentTeamJob, job_id)
+            if fresh is None:
+                return {"error": "job_not_found", "job_id": job_id}
+            return {
+                "job_id": fresh.id,
+                "status": fresh.status,
+                "progress": fresh.progress,
+                "current_step": fresh.current_step,
+                "template": fresh.template,
+                "timed_out": True,
+                "message": (
+                    "Polling timed out after {}s; the job is still running. "
+                    "Call get_team_status in a later turn to retrieve results."
+                ).format(timeout_seconds),
+            }
 
     # ---------- Profile & changes tools ----------
 
@@ -2412,6 +3353,14 @@ def build_advisor_tools(
         discover_risks,
         list_conflicts,
         resolve_conflict,
+        # Deep research (§C.4)
+        start_research,
+        get_research_status,
+        poll_research,
+        # AgentTeam (§D.7)
+        start_team,
+        get_team_status,
+        poll_team,
         # Memory
         remember,
         forget,

@@ -1,62 +1,117 @@
-"""Public-source crawler using Tavily search / extract / crawl APIs.
+"""Public-source crawler — facade over pluggable search engines.
 
-Per project plan §4.1, we outsource raw crawling to Tavily rather than
-building bespoke scrapers. User-defined sources are ingested via the
-structuring pipeline (`IngestTextRequest`).
+Originally a thin Tavily wrapper, now delegates to :mod:`app.services.search_engines`
+which supports Tavily, Exa, 博查, and AnySearch. The facade preserves the
+original ``CrawlResult`` / ``ExtractResult`` data classes and method signatures
+so existing callers (``api/crawler.py``, ``advisor/tools.py``, ``workers/tasks.py``,
+``source_discovery.py``) work without changes.
 
-Three endpoints are exposed:
-- ``search``: keyword search, returns snippets + url
-- ``extract``: full-page content for one or more URLs (markdown)
-- ``crawl``: graph-based crawl from a base URL, returns many pages
+Design doc: docs/specs/2026-08-07-cross-validation-deep-research-multi-source-search.md §A
 """
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
-
-import httpx
+from typing import Any
 
 from app.core.logging import get_logger
-from app.llm.registry import get_tavily_key
+from app.services.search_engines import get_engine, get_default_search_engine
+from app.services.search_engines.base import ExtractedPage, SearchEngine, SearchHit
 
 log = get_logger(__name__)
 
-TAVILY_SEARCH_URL = "https://api.tavily.com/search"
-TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
-TAVILY_CRAWL_URL = "https://api.tavily.com/crawl"
+
+# ---------- Legacy data classes (kept for backward compatibility) ----------
 
 
 @dataclass(slots=True)
 class CrawlResult:
+    """Normalized search result (legacy, kept for API compatibility)."""
+
     title: str
     url: str
     content: str
     score: float
     published_at: str | None = None
+    engine: str = ""  # populated when multi-engine search is used
 
 
 @dataclass(slots=True)
 class ExtractResult:
+    """Normalized extract result (legacy, kept for API compatibility)."""
+
     url: str
     content: str
     images: list[str] = field(default_factory=list)
     favicon: str | None = None
     failed: bool = False
     error: str | None = None
+    engine: str = ""
+
+
+# ---------- Engine key resolution ----------
+
+
+def _resolve_engine_key(engine_name: str, api_key: str | None) -> str:
+    """Resolve the API key for an engine.
+
+    If ``api_key`` is provided, use it. Otherwise read from registry.
+    """
+    if api_key is not None:
+        return api_key
+
+    try:
+        from app.llm.registry import (
+            get_anysearch_key,
+            get_bocha_key,
+            get_exa_key,
+            get_tavily_key,
+        )
+
+        key_getters = {
+            "tavily": get_tavily_key,
+            "exa": get_exa_key,
+            "bocha": get_bocha_key,
+            "anysearch": get_anysearch_key,
+        }
+        getter = key_getters.get(engine_name, get_tavily_key)
+        return getter()
+    except Exception:
+        return ""
+
+
+# ---------- Facade service ----------
 
 
 class CrawlerService:
-    """Thin wrapper around the Tavily search / extract / crawl APIs."""
+    """Facade over pluggable search engines.
 
-    def __init__(self, api_key: str | None = None) -> None:
-        # Read the key fresh on each construction so settings updates in the
-        # UI take effect without a process restart. CrawlerService instances
-        # are short-lived (one per request) so this is cheap.
-        self._api_key = api_key if api_key is not None else get_tavily_key()
+    Delegates ``search`` / ``extract`` / ``crawl`` to a concrete
+    :class:`SearchEngine` and converts results to the legacy
+    ``CrawlResult`` / ``ExtractResult`` types.
+    """
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        *,
+        engine: str | None = None,
+    ) -> None:
+        # Resolve which engine to use
+        self._engine_name = engine or get_default_search_engine()
+        resolved_key = _resolve_engine_key(self._engine_name, api_key)
+        self._engine: SearchEngine = get_engine(self._engine_name, api_key=resolved_key)
 
     @property
     def available(self) -> bool:
-        return bool(self._api_key)
+        return self._engine.available
+
+    @property
+    def engine_name(self) -> str:
+        return self._engine_name
+
+    # ---------- search ----------
 
     async def search(
         self,
@@ -66,47 +121,20 @@ class CrawlerService:
         topic: str = "general",
         region: str | None = None,
         days: int | None = None,
+        domain: str | None = None,
+        **kwargs: Any,
     ) -> list[CrawlResult]:
-        """Run an async Tavily search and return normalized results."""
-        if not self.available:
-            log.warning("crawler.no_api_key")
-            return []
-
-        payload: dict[str, object] = {
-            "api_key": self._api_key,
-            "query": query,
-            "max_results": max_results,
-            "topic": topic,
-            "include_answer": False,
-            "include_raw_content": False,
-        }
-        if region:
-            payload["country"] = region
-        if days is not None:
-            payload["days"] = days
-
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(TAVILY_SEARCH_URL, json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-        except httpx.HTTPError as exc:
-            log.error("crawler.search_failed", error=str(exc), query=query)
-            return []
-
-        results: list[CrawlResult] = []
-        for item in data.get("results", []):
-            results.append(
-                CrawlResult(
-                    title=item.get("title", ""),
-                    url=item.get("url", ""),
-                    content=item.get("content", ""),
-                    score=float(item.get("score", 0.0)),
-                    published_at=item.get("published_date"),
-                )
-            )
-        log.info("crawler.search_ok", query=query, n=len(results))
-        return results
+        """Run an async search and return normalized results."""
+        hits = await self._engine.search(
+            query,
+            max_results=max_results,
+            topic=topic,
+            region=region,
+            days=days,
+            domain=domain,
+            **kwargs,
+        )
+        return [self._hit_to_result(h) for h in hits]
 
     async def crawl_for_goal(
         self,
@@ -119,6 +147,8 @@ class CrawlerService:
         query = f"{goal_title} latest news policy update {scenario}".strip()
         return await self.search(query, max_results=max_results)
 
+    # ---------- extract ----------
+
     async def extract(
         self,
         urls: str | list[str],
@@ -129,59 +159,39 @@ class CrawlerService:
         include_images: bool = False,
         format: str = "markdown",
         timeout: float | None = None,
+        **kwargs: Any,
     ) -> list[ExtractResult]:
-        """Extract full page content from one or more URLs via Tavily Extract.
+        """Extract full page content from one or more URLs."""
+        pages = await self._engine.extract(
+            urls,
+            query=query,
+            extract_depth=extract_depth,
+            chunks_per_source=chunks_per_source,
+            include_images=include_images,
+            format=format,
+            timeout=timeout,
+            **kwargs,
+        )
+        results = [self._page_to_result(p) for p in pages]
 
-        Use this when ``search`` returned only a snippet and the user wants
-        the full article text. Returns markdown by default.
-        """
-        if not self.available:
-            log.warning("crawler.no_api_key")
-            return []
-
-        payload: dict[str, object] = {
-            "api_key": self._api_key,
-            "urls": urls,
-            "extract_depth": extract_depth,
-            "format": format,
-            "include_images": include_images,
-        }
-        if query:
-            payload["query"] = query
-            payload["chunks_per_source"] = max(1, min(5, chunks_per_source))
-        if timeout is not None:
-            payload["timeout"] = timeout
-
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(TAVILY_EXTRACT_URL, json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-        except httpx.HTTPError as exc:
-            log.error("crawler.extract_failed", error=str(exc))
-            return []
-
-        out: list[ExtractResult] = []
-        for item in data.get("results", []):
-            out.append(
-                ExtractResult(
-                    url=item.get("url", ""),
-                    content=item.get("raw_content", "") or "",
-                    images=item.get("images", []) or [],
-                    favicon=item.get("favicon"),
+        # Fallback: if engine returned all-failed (e.g. bocha extract unsupported),
+        # try Tavily extract as a graceful degradation.
+        if results and all(r.failed for r in results) and self._engine_name != "tavily":
+            tavily_key = _resolve_engine_key("tavily", None)
+            if tavily_key:
+                log.info("crawler.extract_fallback_to_tavily", engine=self._engine_name)
+                tavily_engine = get_engine("tavily", api_key=tavily_key)
+                tavily_pages = await tavily_engine.extract(
+                    urls,
+                    query=query,
+                    extract_depth=extract_depth,
+                    format=format,
                 )
-            )
-        for item in data.get("failed_results", []):
-            out.append(
-                ExtractResult(
-                    url=item.get("url", ""),
-                    content="",
-                    failed=True,
-                    error=item.get("error"),
-                )
-            )
-        log.info("crawler.extract_ok", n_ok=sum(1 for r in out if not r.failed), n_fail=sum(1 for r in out if r.failed))
-        return out
+                results = [self._page_to_result(p) for p in tavily_pages]
+
+        return results
+
+    # ---------- crawl ----------
 
     async def crawl(
         self,
@@ -196,53 +206,98 @@ class CrawlerService:
         select_paths: list[str] | None = None,
         exclude_paths: list[str] | None = None,
         timeout: float | None = None,
+        **kwargs: Any,
     ) -> list[ExtractResult]:
-        """Graph-based crawl from a base URL. Returns many pages.
+        """Graph-based crawl from a base URL."""
+        pages = await self._engine.crawl(
+            base_url,
+            instructions=instructions,
+            max_depth=max_depth,
+            max_breadth=max_breadth,
+            limit=limit,
+            extract_depth=extract_depth,
+            format=format,
+            select_paths=select_paths,
+            exclude_paths=exclude_paths,
+            timeout=timeout,
+            **kwargs,
+        )
+        return [self._page_to_result(p) for p in pages]
 
-        Use this when you need broad coverage of a documentation site or
-        similar. For a single page, prefer ``extract``.
+    # ---------- multi-engine parallel search ----------
+
+    async def search_multi(
+        self,
+        query: str,
+        *,
+        engines: list[str],
+        max_results: int = 10,
+        domain: str | None = None,
+        **kwargs: Any,
+    ) -> list[CrawlResult]:
+        """Search across multiple engines in parallel, merge and dedupe.
+
+        Each result is tagged with its source ``engine`` so downstream
+        cross-validation can compute ``cross_engine_consensus``.
         """
-        if not self.available:
-            log.warning("crawler.no_api_key")
-            return []
-
-        payload: dict[str, object] = {
-            "api_key": self._api_key,
-            "url": base_url,
-            "max_depth": max_depth,
-            "max_breadth": max_breadth,
-            "limit": limit,
-            "extract_depth": extract_depth,
-            "format": format,
-            "allow_external": False,
-        }
-        if instructions:
-            payload["instructions"] = instructions
-        if select_paths:
-            payload["select_paths"] = select_paths
-        if exclude_paths:
-            payload["exclude_paths"] = exclude_paths
-        if timeout is not None:
-            payload["timeout"] = timeout
-
-        try:
-            # Crawl can take a while — give it 150s to match Tavily's max.
-            async with httpx.AsyncClient(timeout=180) as client:
-                resp = await client.post(TAVILY_CRAWL_URL, json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-        except httpx.HTTPError as exc:
-            log.error("crawler.crawl_failed", error=str(exc), url=base_url)
-            return []
-
-        out: list[ExtractResult] = []
-        for item in data.get("results", []):
-            out.append(
-                ExtractResult(
-                    url=item.get("url", ""),
-                    content=item.get("raw_content", "") or "",
-                    favicon=item.get("favicon"),
+        tasks: list[asyncio.Task[list[SearchHit]]] = []
+        engine_names: list[str] = []
+        for eng in engines:
+            key = _resolve_engine_key(eng, None)
+            if not key:
+                log.warning("crawler.multi_engine_skip_no_key", engine=eng)
+                continue
+            eng_instance = get_engine(eng, api_key=key)
+            task = asyncio.create_task(
+                eng_instance.search(
+                    query, max_results=max_results, domain=domain, **kwargs
                 )
             )
-        log.info("crawler.crawl_ok", url=base_url, n=len(out))
-        return out
+            tasks.append(task)
+            engine_names.append(eng)
+
+        if not tasks:
+            return []
+
+        results_lists = await asyncio.gather(*tasks, return_exceptions=True)
+
+        all_hits: list[SearchHit] = []
+        for eng_name, res in zip(engine_names, results_lists):
+            if isinstance(res, Exception):
+                log.error("crawler.multi_engine_failed", engine=eng_name, error=str(res))
+                continue
+            all_hits.extend(res)
+
+        # Dedupe by URL, keep highest-score version
+        seen: dict[str, SearchHit] = {}
+        for hit in all_hits:
+            if hit.url not in seen or hit.score > seen[hit.url].score:
+                seen[hit.url] = hit
+
+        merged = sorted(seen.values(), key=lambda h: h.score, reverse=True)
+        return [self._hit_to_result(h) for h in merged]
+
+    # ---------- converters ----------
+
+    @staticmethod
+    def _hit_to_result(hit: SearchHit) -> CrawlResult:
+        return CrawlResult(
+            title=hit.title,
+            url=hit.url,
+            content=hit.snippet,
+            score=hit.score,
+            published_at=hit.published_at,
+            engine=hit.engine,
+        )
+
+    @staticmethod
+    def _page_to_result(page: ExtractedPage) -> ExtractResult:
+        return ExtractResult(
+            url=page.url,
+            content=page.content,
+            images=page.images,
+            favicon=page.favicon,
+            failed=page.failed,
+            error=page.error,
+            engine=page.engine,
+        )

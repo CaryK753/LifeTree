@@ -66,8 +66,12 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     llm_embedding_model: str = "text-embedding-3-small"
 
-    # ---------- Tavily (legacy — configure via WebUI) ----------
+    # ---------- Search engines (legacy — configure via WebUI) ----------
     tavily_api_key: SecretStr = SecretStr("")
+    exa_api_key: SecretStr = SecretStr("")
+    bocha_api_key: SecretStr = SecretStr("")
+    anysearch_api_key: SecretStr = SecretStr("")
+    search_default_engine: str = "tavily"
 
     # ---------- SMTP (legacy — configure via WebUI) ----------
     smtp_host: str = ""

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -155,11 +156,19 @@ class StructuringService:
         user_upload_id: str | None = None,
         user_id: str | None = None,
         skip_llm: bool = False,
+        meta: dict[str, Any] | None = None,
     ) -> tuple[InformationSource, StructuredExtraction | None]:
         """Persist the source, then run LLM extraction.
 
         Returns (source, extraction_or_None). If LLM is not configured or
         skip_llm=True, returns (source, None) after persisting the source.
+
+        Args:
+            meta: Optional metadata dict merged into ``InformationSource.meta``.
+                Used by the multi-source search layer to record which engine
+                produced the source (e.g. ``{"engine": "exa"}``), which is
+                later inherited by Assertions for cross-engine consensus
+                voting (§B.1 of the cross-validation spec).
         """
         credibility = self._default_credibility(source_kind, user_upload_id is not None)
 
@@ -173,6 +182,7 @@ class StructuringService:
             raw_text=text,
             user_upload_id=user_upload_id,
             user_id=user_id,
+            meta=dict(meta) if meta else {},
         )
         self.db.add(source)
         self.db.flush()
@@ -193,8 +203,24 @@ class StructuringService:
             self.db.commit()
             return source, None
 
-        self._persist_extraction(source, extraction, user_id=user_id)
+        _, assertion_ids = self._persist_extraction(source, extraction, user_id=user_id)
         self.db.commit()
+
+        # §B.3: trigger incremental conflict detection for newly-written
+        # Assertions. The scan is scoped to the (subject, predicate) pairs
+        # of these Assertions only (see detect_conflicts_node incremental
+        # mode), so it is cheap and does not scan the whole table.
+        if assertion_ids and user_id:
+            try:
+                from app.services.cross_validation import CrossValidationService
+
+                CrossValidationService(self.db, user_id).detect_conflicts_for_assertions(
+                    assertion_ids
+                )
+                self.db.commit()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("structuring.conflict_detection_failed", error=str(exc))
+
         return source, extraction
 
     # ---------------- Internals ----------------
@@ -233,9 +259,16 @@ class StructuringService:
         extraction: StructuredExtraction,
         *,
         user_id: str | None = None,
-    ) -> int:
-        """Write extracted atoms to PG (events/metrics/assertions/relationships)."""
+    ) -> tuple[int, list[str]]:
+        """Write extracted atoms to PG (events/metrics/assertions/relationships).
+
+        Returns ``(notifications_triggered, assertion_ids)``. The
+        ``assertion_ids`` are the IDs of newly-persisted Assertions, used
+        by :meth:`ingest_text` to trigger incremental conflict detection
+        (§B.3 of the cross-validation spec).
+        """
         notifications_triggered = 0
+        new_assertions: list[tuple[Assertion, Any]] = []
 
         # Embed events for similarity search (batch)
         event_texts = [
@@ -326,26 +359,40 @@ class StructuringService:
                 )
             )
 
-        # Assertions
+        # Assertions — inherit engine provenance from the source's meta.
+        engine = source.meta.get("engine") if source.meta else None
         for atom in extraction.assertions:
-            self.db.add(
-                Assertion(
-                    source_id=source.id,
-                    user_id=user_id,
-                    subject=atom.subject,
-                    predicate=atom.predicate,
-                    claim=atom.claim,
-                    object_value=atom.object_value,
-                    confidence=atom.confidence,
-                    valid_from=atom.valid_from,
-                    valid_to=atom.valid_to,
-                    observed_at=datetime.now(timezone.utc),
-                    content_hash=hashlib.sha256(
-                        f"{atom.subject}|{atom.predicate}|{atom.claim}".encode()
-                    ).hexdigest(),
-                    source_excerpt=atom.claim[:1000],
-                )
+            assertion = Assertion(
+                source_id=source.id,
+                user_id=user_id,
+                subject=atom.subject,
+                predicate=atom.predicate,
+                claim=atom.claim,
+                object_value=atom.object_value,
+                confidence=atom.confidence,
+                valid_from=atom.valid_from,
+                valid_to=atom.valid_to,
+                observed_at=datetime.now(timezone.utc),
+                content_hash=hashlib.sha256(
+                    f"{atom.subject}|{atom.predicate}|{atom.claim}".encode()
+                ).hexdigest(),
+                source_excerpt=atom.claim[:1000],
+                engine=engine,
             )
+            # §B.3: store LLM conflicts_with hint in meta for traceability.
+            if atom.conflicts_with:
+                assertion.meta = {"llm_conflicts_with_hint": atom.conflicts_with}
+            self.db.add(assertion)
+            new_assertions.append((assertion, atom))
+
+        # Flush to populate Assertion IDs (needed for conflict detection
+        # and for conflicts_with hint pre-linking).
+        if new_assertions:
+            self.db.flush()
+            if user_id:
+                for assertion, atom in new_assertions:
+                    if atom.conflicts_with:
+                        self._apply_conflicts_with_hint(assertion, user_id)
 
         # Relationships (resolved loosely by name; precise wiring happens
         # in graph_service when entities are first class)
@@ -363,7 +410,44 @@ class StructuringService:
                 )
             )
 
-        return notifications_triggered
+        assertion_ids = [a.id for a, _ in new_assertions]
+        return notifications_triggered, assertion_ids
+
+    @staticmethod
+    def _value_key(v: Any) -> str:
+        """Normalize an object_value for equality comparison."""
+        if v is None or v == "":
+            return "__none__"
+        return str(v)
+
+    def _apply_conflicts_with_hint(
+        self, assertion: Assertion, user_id: str
+    ) -> None:
+        """Pre-fill ``conflicting_with_id`` from the LLM hint (§B.3).
+
+        The LLM's ``conflicts_with`` field is a free-form string hint, not
+        a reliable predicate reference. We use it only as a signal to look
+        for an existing Assertion with the same (subject, predicate) but a
+        different ``object_value``. If found, we pre-link via
+        ``conflicting_with_id``. The authoritative conflict detection
+        (``detect_conflicts``) runs afterwards and may override this link.
+        """
+        existing = self.db.scalar(
+            select(Assertion).where(
+                Assertion.user_id == user_id,
+                Assertion.subject == assertion.subject,
+                Assertion.predicate == assertion.predicate,
+                Assertion.status.in_(["open", "confirmed"]),
+                Assertion.id != assertion.id,
+            )
+        )
+        if existing is None:
+            return
+        # Only pre-link if the object_values actually differ — otherwise
+        # it's a corroboration, not a conflict.
+        if self._value_key(existing.object_value) != self._value_key(assertion.object_value):
+            assertion.conflicting_with_id = existing.id
+            self.db.add(assertion)
 
     def _half_life_for(self, risk_type: str | None) -> int:
         defaults = {

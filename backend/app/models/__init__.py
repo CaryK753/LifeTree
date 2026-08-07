@@ -5,6 +5,7 @@ before Alembic or service code touches it.
 """
 
 from app.models.action import Action, ActionStatus
+from app.models.chat_stream import ChatStream
 from app.models.event import (
     Assertion,
     Event,
@@ -45,6 +46,7 @@ from app.models.notification import (
     RiskPropagationLog,
     WebPushSubscription,
 )
+from app.models.research import ResearchJob, ResearchStatus
 from app.models.scenario import (
     Scenario,
     ScenarioRun,
@@ -117,4 +119,9 @@ __all__ = [
     "AppConfig",
     # Source auto-discovery (P1)
     "SourceProposal",
+    # Deep research (§C.1)
+    "ResearchJob",
+    "ResearchStatus",
+    # Chat streams (background chat execution)
+    "ChatStream",
 ]

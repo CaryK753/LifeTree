@@ -25,6 +25,8 @@ import {
   X,
   Inbox,
   ListTodo,
+  Microscope,
+  Bot,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/provider";
@@ -63,6 +65,8 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "nav.group.insights",
     items: [
       { href: "/chat", labelKey: "nav.chat", icon: MessageSquare },
+      { href: "/research", labelKey: "nav.research", icon: Microscope },
+      { href: "/agent-team", labelKey: "nav.agentTeam", icon: Bot },
       { href: "/review", labelKey: "nav.reviewCenter", icon: Inbox },
       { href: "/sources", labelKey: "nav.sources", icon: ShieldCheck },
       { href: "/notifications", labelKey: "nav.notifications", icon: Bell },

@@ -13,7 +13,12 @@ celery_app = Celery(
     "lifetree",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.workers.tasks", "app.workers.intelligence_tasks"],
+    include=[
+        "app.workers.tasks",
+        "app.workers.intelligence_tasks",
+        "app.workers.research_tasks",
+        "app.workers.agent_team_tasks",
+    ],
 )
 
 celery_app.conf.update(
@@ -88,5 +93,11 @@ celery_app.conf.beat_schedule = {
     "compare-evolution-milestones": {
         "task": "app.workers.intelligence_tasks.compare_evolution_milestones",
         "schedule": crontab(minute=45, hour=3),
+    },
+    # §B.4: daily full conflict scan at 04:30 UTC (between scenario-prune
+    # at 04:00 and discover-emerging-risks at 05:15).
+    "scan-all-conflicts": {
+        "task": "app.workers.intelligence_tasks.scan_all_conflicts",
+        "schedule": crontab(minute=30, hour=4),
     },
 }

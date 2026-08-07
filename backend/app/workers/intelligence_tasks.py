@@ -5,11 +5,13 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from app.db.postgres import get_session
+from app.models.event import Assertion
 from app.models.goal import Goal, Pathway
 from app.models.scenario import Scenario
 from app.models.user import UserProfile
 from app.services.action_scheduler import ActionScheduler
 from app.services.calibration_monitor import CalibrationMonitor
+from app.services.cross_validation import CrossValidationService
 from app.services.evolution import EvolutionService
 from app.services.evolution_feedback import EvolutionFeedbackService
 from app.services.risk_discovery import RiskDiscoveryService
@@ -112,5 +114,45 @@ def compare_evolution_milestones() -> dict:
     db = get_session()
     try:
         return {"status": "ok", **EvolutionFeedbackService(db).compare_due()}
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.workers.intelligence_tasks.scan_all_conflicts")
+def scan_all_conflicts() -> dict:
+    """Daily full scan of all users' Assertion conflicts (§B.4).
+
+    Iterates over every user with open Assertions, runs the full
+    conflict-detection graph (detect → classify → auto_merge → trend →
+    spawn), and refreshes the Redis conflict cache. High-severity
+    conflicts surface in the Review Inbox via the cached ``list_conflicts``
+    call in ``/review/inbox``.
+
+    Scheduled daily at 04:30 UTC (between scenario-prune at 04:00 and
+    discover-emerging-risks at 05:15).
+    """
+    db = get_session()
+    try:
+        user_ids = list(db.scalars(
+            select(Assertion.user_id).where(
+                Assertion.user_id.isnot(None),
+                Assertion.status == "open",
+            ).distinct()
+        ))
+        total_groups = 0
+        for user_id in user_ids:
+            try:
+                groups = CrossValidationService(db, user_id).detect_conflicts()
+                total_groups += len(groups)
+                # detect_conflicts returns only non-auto-merged groups;
+                # the auto-merged count is logged inside the graph nodes.
+            except Exception:  # noqa: BLE001
+                # One user's failure shouldn't abort the whole scan.
+                continue
+        return {
+            "status": "ok",
+            "users_scanned": len(user_ids),
+            "conflict_groups_remaining": total_groups,
+        }
     finally:
         db.close()

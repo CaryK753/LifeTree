@@ -293,6 +293,14 @@ class ChatRequest(BaseModel):
     enabled_skills: list[str] | None = Field(
         None, description="Skill names to activate; None = all enabled"
     )
+    persist: bool = Field(
+        True,
+        description=(
+            "If True (default), create a ChatStream record so the response "
+            "survives a page reload. Set to False for ephemeral calls like "
+            "title generation where persistence is unnecessary."
+        ),
+    )
 
 
 class ChatToolCall(BaseModel):

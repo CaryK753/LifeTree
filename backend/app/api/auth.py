@@ -770,8 +770,13 @@ def oauth_callback(
         return _make_token_pair(target)
 
     # ---------- Login / Register flow ----------
-    # Try to find an existing user keyed by email, then external_id, then
-    # oauth link row. In register mode, finding an existing user is a 409.
+    # Try to find an existing user keyed by email first, then by an
+    # explicit ``user_oauth_links`` row. We deliberately do NOT look up
+    # by the legacy ``user_profiles.external_id`` column here — that
+    # column is kept for backwards compat with very old accounts, but
+    # using it for login would bypass the unbind flow (a user who
+    # unbound a provider could still log in via external_id, and the
+    # code below would silently re-create the binding).
     user: UserProfile | None = None
     if email:
         user = db.scalars(
@@ -779,22 +784,15 @@ def oauth_callback(
         ).first()
 
     if user is None and external_sub:
-        # Fallback: look up by external_id (provider-unique sub) or by
-        # an explicit oauth link row.
-        external_ids = {f"{alias}:{external_sub}" for alias in provider_aliases}
-        user = db.scalars(
-            select(UserProfile).where(UserProfile.external_id.in_(external_ids))
+        # Only look up via the explicit oauth link table.
+        link = db.scalars(
+            select(UserOAuthLink).where(
+                UserOAuthLink.provider_id.in_(provider_aliases),
+                UserOAuthLink.external_sub == external_sub,
+            )
         ).first()
-        if user is None:
-            # Also check user_oauth_links for a prior bind.
-            link = db.scalars(
-                select(UserOAuthLink).where(
-                    UserOAuthLink.provider_id.in_(provider_aliases),
-                    UserOAuthLink.external_sub == external_sub,
-                )
-            ).first()
-            if link is not None:
-                user = db.get(UserProfile, link.user_id)
+        if link is not None:
+            user = db.get(UserProfile, link.user_id)
 
     if user is not None:
         if oauth_mode == "register":
@@ -802,11 +800,10 @@ def oauth_callback(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Email or OAuth identity already registered — log in instead",
             )
-        # Update external_id if missing. Avatar and display_name are NOT
+        # Update external_id if missing (legacy backfill only — not used
+        # for login lookups anymore). Avatar and display_name are NOT
         # overwritten on subsequent logins — once the user has customized
-        # their profile, OAuth providers shouldn't clobber it. Only fill
-        # them in when they're empty (first-time OAuth-created accounts
-        # that never set a custom avatar/name).
+        # their profile, OAuth providers shouldn't clobber it.
         if not user.external_id and external_sub:
             user.external_id = f"{provider_id}:{external_sub}"
         if identity.avatar_url and not user.avatar_url:
@@ -815,25 +812,6 @@ def oauth_callback(
             user.email = email
         if display_name and not user.display_name:
             user.display_name = str(display_name)[:128]
-        # Make sure a link row exists (backfill for users created before
-        # the user_oauth_links table existed).
-        if external_sub:
-            existing_link = db.scalars(
-                select(UserOAuthLink).where(
-                    UserOAuthLink.user_id == user.id,
-                    UserOAuthLink.provider_id.in_(provider_aliases),
-                )
-            ).first()
-            if existing_link is None:
-                db.add(UserOAuthLink(
-                    user_id=user.id,
-                    provider_id=provider_id,
-                    external_sub=external_sub,
-                ))
-            elif existing_link.external_sub != external_sub:
-                existing_link.external_sub = external_sub
-            if existing_link is not None:
-                existing_link.provider_id = provider_id
         db.commit()
         db.refresh(user)
     else:
@@ -928,6 +906,12 @@ def unbind_oauth_provider(
     other OAuth bindings, they'd just lose the ability to log in (which
     they can recover via the "forgot password" / admin-reset flow). The
     frontend warns them about this before confirming.
+
+    This deletes the ``UserOAuthLink`` row AND clears the legacy
+    ``user_profiles.external_id`` field if it points to the same
+    provider. Without clearing ``external_id``, the OAuth login flow
+    would still find the user via the legacy fallback and silently
+    re-create the binding — making unbind a no-op.
     """
     provider = get_oauth_provider_by_id(provider_id)
     aliases = {provider_id}
@@ -942,6 +926,20 @@ def unbind_oauth_provider(
     if link is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OAuth provider is not bound to your account")
     db.delete(link)
+
+    # Clear the legacy external_id field if it matches this provider
+    # binding. external_id is a legacy column that predates the
+    # user_oauth_links table; the login flow checks it as a fallback,
+    # so leaving it populated would allow OAuth login even after unbind.
+    # Only clear if it matches this provider's sub — if the user has
+    # multiple legacy external_ids (unlikely but possible), we don't
+    # want to clobber a different provider's entry.
+    if user.external_id:
+        # external_id format is "provider_id:external_sub"
+        ext_provider = user.external_id.split(":", 1)[0] if ":" in user.external_id else None
+        if ext_provider and ext_provider in aliases:
+            user.external_id = None
+
     db.commit()
     log.info("auth.oauth_unbound", user_id=user.id, provider=provider_id)
     return {"ok": True}

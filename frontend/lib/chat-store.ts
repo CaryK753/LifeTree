@@ -17,7 +17,7 @@
  */
 
 import { useSyncExternalStore } from "react";
-import { api, streamChat, type ChatChunk } from "@/lib/api";
+import { api, streamChat, resumeChatStream, type ChatChunk } from "@/lib/api";
 
 // ---------- Types ----------
 
@@ -56,6 +56,17 @@ export interface ChatMessage {
     previewUrl?: string;
   }[];
   streaming?: boolean;
+  /**
+   * Persistent stream ID assigned by the backend. When non-null, this
+   * assistant message is backed by a ``ChatStream`` row that continues
+   * running in the background even if the browser tab is closed.
+   *
+   * On page reload, the chat panel checks for messages with
+   * ``streaming: true`` and a non-empty ``streamId``, then calls
+   * ``resumeChatStream(streamId)`` to reconnect and pick up where the
+   * stream left off.
+   */
+  streamId?: string;
   createdAt: number;
   /**
    * Previous assistant replies for the same user message.
@@ -186,6 +197,9 @@ async function generateTitle(firstUserMessage: string): Promise<string> {
             firstUserMessage.slice(0, 500),
         },
       ],
+      // Title generation is ephemeral — no need to persist a ChatStream
+      // record or support reconnection.
+      persist: false,
     });
     for await (const chunk of stream as AsyncGenerator<ChatChunk>) {
       if (chunk.delta) acc += chunk.delta;
@@ -247,10 +261,20 @@ function load(): StoreState {
 
   const conversations = safeReadJSON<Conversation[]>(conversationsKey(), []);
   const activeId = safeReadJSON<string | null>(activeKey(), null);
-  // Drop any half-finished streaming messages from a previous session.
+  // Handle half-finished streaming messages from a previous session.
+  //
+  // Messages with a ``streamId`` are backed by a persistent ChatStream on
+  // the backend — keep them in ``streaming: true`` state so the chat panel
+  // can resume them via ``resumeChatStream(streamId)`` on mount. The
+  // content accumulated so far is preserved (it was written to localStorage
+  // on the final patch before the page closed).
+  //
+  // Messages without a ``streamId`` are from the old (pre-background-task)
+  // streaming model where the generation died with the tab — finalize them
+  // and remove empty placeholders.
   for (const c of conversations) {
     for (const m of c.messages) {
-      if (m.streaming) {
+      if (m.streaming && !m.streamId) {
         m.streaming = false;
         if (!m.content && (m.toolCalls?.length ?? 0) === 0) {
           // Empty assistant placeholder from a crashed stream — remove it.
@@ -781,4 +805,4 @@ export function useChatStore(): StoreState {
 }
 
 // Re-export api for components that need direct access
-export { api, streamChat };
+export { api, streamChat, resumeChatStream };

@@ -87,7 +87,9 @@ class LLMModel(TimestampMixin, Base):
 class AppConfig(Base):
     """Key-value store for misc app config.
 
-    Keys: ``tavily_api_key``, ``mineru_api_key``, ``mineru_base_url``,
+    Keys: ``tavily_api_key``, ``exa_api_key``, ``bocha_api_key``,
+    ``anysearch_api_key``, ``search_default_engine``, ``search_engines_enabled``,
+    ``mineru_api_key``, ``mineru_base_url``,
     ``smtp_host``, ``smtp_port``, ``smtp_user``, ``smtp_password``,
     ``smtp_from``, ``smtp_use_tls``, ``role_assignments``.
 

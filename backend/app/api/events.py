@@ -190,6 +190,29 @@ def update_event_status(
             src.credibility = "medium"
             src.credibility_score = max(src.credibility_score, 0.5)
 
+    # §B.7: event-review reputation feedback. ``approve`` confirms the
+    # source's reliability, ``sink`` refutes it. Idempotent — the
+    # SourceAccuracyLog (source_id, evidence_key) unique constraint
+    # prevents double-counting. Skipped for ``keep_sunk`` (no-op).
+    if action in ("approve", "sink") and ev.source_id is not None:
+        src = db.get(InformationSource, ev.source_id)
+        if src is not None and (src.user_id == user.id or user.role == "admin"):
+            try:
+                from app.services.source_reputation import SourceReputationService
+
+                SourceReputationService(db, user.id).record_verdict(
+                    src,
+                    evidence_key=f"event_review:{ev.id}",
+                    confirmed=(action == "approve"),
+                    meta={"event_id": ev.id, "action": action},
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "events.reputation_feedback_failed",
+                    event_id=ev.id,
+                    error=str(exc),
+                )
+
     db.commit()
     db.refresh(ev)
 

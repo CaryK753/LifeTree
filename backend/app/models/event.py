@@ -205,7 +205,14 @@ class Assertion(UUIDPkMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(16), default="open")
     # 'open' | 'confirmed' | 'refuted' | 'superseded'
 
-    conflicting_with_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    conflicting_with_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("assertions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Search-engine provenance — inherited from InformationSource.meta.engine
+    # at ingestion time. Used by cross-engine consensus voting (§B.1).
+    engine: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     scenario_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
 
     valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

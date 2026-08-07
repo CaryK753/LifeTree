@@ -1,6 +1,6 @@
 [package]
 name = "lifetree-desktop"
-version = "0.2.2"
+version = "0.2.3"
 description = "LifeTree desktop runtime host"
 authors = ["wwj"]
 edition = "2021"

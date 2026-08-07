@@ -22,6 +22,10 @@ import {
   type PasskeyRead,
   type PublicAuthConfig,
   type RegisterWithCodeRequest,
+  type ResearchJobDetail,
+  type TeamJobDetail,
+  type TeamJobSummary,
+  type ResearchJobSummary,
   type UserProfileRead,
   type UnifiedReviewInbox,
 } from "./api";
@@ -378,6 +382,113 @@ export function useLifecycleEvents(status?: import("./api").DecayStatus) {
   return useSWR(
     ["lifecycle-events", status ?? "all"],
     () => api.listLifecycleEvents(status),
+    swrConfig
+  );
+}
+
+// ---------- Deep research (§C of the cross-validation spec) ----------
+
+/** List the current user's research jobs (newest first). */
+export function useResearchJobs(status?: string) {
+  return useSWR<ResearchJobSummary[]>(
+    ["research-jobs", status ?? "all"],
+    () => api.listResearchJobs(status),
+    {
+      ...swrConfig,
+      // Poll every 3s while any job in the list is still active so the
+      // user sees progress advance and new completions without being on
+      // the detail page. Stops automatically when all jobs are terminal.
+      refreshInterval: (data) => {
+        if (!data || data.length === 0) return 0;
+        const hasActive = data.some(
+          (j) =>
+            j.status !== "completed" &&
+            j.status !== "failed" &&
+            j.status !== "cancelled"
+        );
+        return hasActive ? 3000 : 0;
+      },
+    }
+  );
+}
+
+/** Fetch a single research job with the full report (when completed). */
+export function useResearchJob(jobId?: string) {
+  return useSWR<ResearchJobDetail>(
+    jobId ? ["research-job", jobId] : null,
+    () => api.getResearchJob(jobId!),
+    // Refresh every 2s while the job is in a non-terminal state so the
+    // progress bar advances without requiring an SSE subscription. SWR
+    // stops polling automatically once the component unmounts.
+    { ...swrConfig, refreshInterval: (data) =>
+      data && (data.status === "completed" || data.status === "failed" || data.status === "cancelled")
+        ? 0
+        : 2000
+    }
+  );
+}
+
+/** List configured search engines + their domain strengths. */
+export function useResearchEngines() {
+  return useSWR(
+    "research-engines",
+    () => api.listResearchEngines(),
+    swrConfig
+  );
+}
+
+// ---------- AgentTeam (§D of the cross-validation spec) ----------
+
+/** List the current user's AgentTeam jobs (newest first). */
+export function useTeamJobs(status?: string) {
+  return useSWR<TeamJobSummary[]>(
+    ["team-jobs", status ?? "all"],
+    () => api.listTeamJobs(status),
+    {
+      ...swrConfig,
+      // Poll every 4s while any job is active. AgentTeam jobs are
+      // longer-running than research, so a slightly longer interval
+      // keeps the list fresh without hammering the API.
+      refreshInterval: (data) => {
+        if (!data || data.length === 0) return 0;
+        const hasActive = data.some(
+          (j) =>
+            j.status !== "completed" &&
+            j.status !== "failed" &&
+            j.status !== "cancelled"
+        );
+        return hasActive ? 4000 : 0;
+      },
+    }
+  );
+}
+
+/** Fetch a single AgentTeam job with the final output (when completed). */
+export function useTeamJob(jobId?: string) {
+  return useSWR<TeamJobDetail>(
+    jobId ? ["team-job", jobId] : null,
+    () => api.getTeamJob(jobId!),
+    // Poll every 3s while the job is non-terminal. AgentTeam jobs are
+    // longer than research jobs (15-min soft timeout), so a slightly
+    // longer interval is appropriate.
+    {
+      ...swrConfig,
+      refreshInterval: (data) =>
+        data &&
+        (data.status === "completed" ||
+          data.status === "failed" ||
+          data.status === "cancelled")
+          ? 0
+          : 3000,
+    }
+  );
+}
+
+/** List available team templates + role specs. */
+export function useTeamTemplates() {
+  return useSWR(
+    "team-templates",
+    () => api.listTeamTemplates(),
     swrConfig
   );
 }

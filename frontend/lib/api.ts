@@ -184,7 +184,8 @@ export async function request<T>(
     }
     throw new ApiError(res.status, apiErrorMessage(res.status, path, details), details);
   }
-  if (init?.skipJson) return undefined as T;
+  // 204 No Content (or any empty body) → return undefined without parsing.
+  if (init?.skipJson || res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
@@ -489,7 +490,7 @@ export const api = {
     request<unknown>(`/cross-validation/resolve`, {
       method: "POST",
       body: JSON.stringify({
-        subject_id: conflict.subject_id,
+        subject_id: conflict.subject,
         predicate: conflict.predicate,
         winning_source_id: sourceId,
       }),
@@ -819,6 +820,32 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  // Multi-source search engines (§A.3). Same payload shape as setTavily.
+  setExa: (apiKey: string) =>
+    request<LLMConfigView>(`/settings/exa`, {
+      method: "PUT",
+      body: JSON.stringify({ api_key: apiKey }),
+    }),
+  setBocha: (apiKey: string) =>
+    request<LLMConfigView>(`/settings/bocha`, {
+      method: "PUT",
+      body: JSON.stringify({ api_key: apiKey }),
+    }),
+  setAnysearch: (apiKey: string) =>
+    request<LLMConfigView>(`/settings/anysearch`, {
+      method: "PUT",
+      body: JSON.stringify({ api_key: apiKey }),
+    }),
+
+  // Default engine + enabled-list management
+  getSearchEngineConfig: () =>
+    request<SearchEngineConfigView>(`/settings/search-engine`),
+  setSearchEngineConfig: (body: SearchEngineConfigUpdate) =>
+    request<LLMConfigView>(`/settings/search-engine`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
   setUseMode: (mode: "single" | "multi") =>
     request<{ mode: "single" | "multi" }>(`/settings/use-mode`, {
       method: "PUT",
@@ -913,6 +940,13 @@ export const api = {
     request<{ value: string | null; configured: boolean }>(`/settings/mineru/key`),
   getSmtpKey: () =>
     request<{ value: string | null; configured: boolean }>(`/settings/smtp/key`),
+  // Multi-source search-engine key reveal
+  getExaKey: () =>
+    request<{ value: string | null; configured: boolean }>(`/settings/exa/key`),
+  getBochaKey: () =>
+    request<{ value: string | null; configured: boolean }>(`/settings/bocha/key`),
+  getAnysearchKey: () =>
+    request<{ value: string | null; configured: boolean }>(`/settings/anysearch/key`),
 
   // SMTP test email
   testSmtp: (toAddr: string) =>
@@ -956,6 +990,90 @@ export const api = {
     request<{ status: string; archived: number }>(`/lifecycle/sweep`, {
       method: "POST",
     }),
+
+  // ---------- Deep research (§C of the cross-validation spec) ----------
+
+  listResearchEngines: () =>
+    request<{
+      engines: Array<{
+        name: string;
+        available: boolean;
+        domain_strengths: string[];
+      }>;
+    }>(`/research/engines`),
+
+  listResearchJobs: (status?: string, limit = 20, offset = 0) =>
+    request<ResearchJobSummary[]>(
+      `/research?limit=${limit}&offset=${offset}` +
+        (status ? `&status=${encodeURIComponent(status)}` : "")
+    ),
+
+  createResearchJob: (body: {
+    question: string;
+    scope?: Record<string, unknown>;
+    engines?: string[] | null;
+  }) =>
+    request<ResearchJobSummary>(`/research`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  getResearchJob: (jobId: string) =>
+    request<ResearchJobDetail>(`/research/${jobId}`),
+
+  cancelResearchJob: (jobId: string) =>
+    request<ResearchJobSummary>(`/research/${jobId}/cancel`, {
+      method: "POST",
+    }),
+
+  deleteResearchJob: (jobId: string) =>
+    request<void>(`/research/${jobId}`, { method: "DELETE" }),
+
+  // ---------- AgentTeam (§D of the cross-validation spec) ----------
+
+  listTeamTemplates: () =>
+    request<{ templates: TeamTemplateInfo[] }>(`/agent-team/templates`),
+
+  listTeamJobs: (status?: string, limit = 20, offset = 0) =>
+    request<TeamJobSummary[]>(
+      `/agent-team?limit=${limit}&offset=${offset}` +
+        (status ? `&status=${encodeURIComponent(status)}` : "")
+    ),
+
+  createTeamJob: (body: {
+    objective: string;
+    template: string;
+    scope?: Record<string, unknown>;
+  }) =>
+    request<TeamJobSummary>(`/agent-team`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  getTeamJob: (jobId: string) =>
+    request<TeamJobDetail>(`/agent-team/${jobId}`),
+
+  cancelTeamJob: (jobId: string) =>
+    request<TeamJobSummary>(`/agent-team/${jobId}/cancel`, {
+      method: "POST",
+    }),
+
+  deleteTeamJob: (jobId: string) =>
+    request<void>(`/agent-team/${jobId}`, { method: "DELETE" }),
+
+  // ---------- Chat streams (background chat execution) ----------
+
+  listChatStreams: (status?: string, limit = 20, offset = 0) =>
+    request<ChatStreamSummary[]>(
+      `/chat/streams?limit=${limit}&offset=${offset}` +
+        (status ? `&status=${encodeURIComponent(status)}` : "")
+    ),
+
+  getChatStream: (streamId: string) =>
+    request<ChatStreamState>(`/chat/stream/${streamId}`),
+
+  deleteChatStream: (streamId: string) =>
+    request<void>(`/chat/stream/${streamId}`, { method: "DELETE" }),
 };
 
 // ---------- Lifecycle (information half-life) types ----------
@@ -1157,16 +1275,51 @@ export interface ReviewRiskProposal {
   impact_preview: { suggested_pathway_id?: string | null };
 }
 
+export interface ReviewConflictValue {
+  value: unknown;
+  assertion_ids: string[];
+  engines: string[];
+  distinct_engine_count: number;
+  source_ids: string[];
+  min_source_credibility: string;
+  supporting_count: number;
+}
+
+export interface ReviewConflictAssertion {
+  id: string;
+  claim: string;
+  object_value: unknown;
+  confidence: number;
+  source_id: string | null;
+  source_title: string | null;
+  source_credibility: string;
+  source_credibility_score: number;
+  engine: string | null;
+  observed_at: string | null;
+  valid_from: string | null;
+  valid_to: string | null;
+  scenario_id: string | null;
+  source_excerpt: string | null;
+}
+
+export interface ReviewConflictCrossEngineConsensus {
+  value: unknown;
+  supporting_engines: string[];
+  engine_diversity_bonus: number;
+  distinct_engine_count: number;
+  auto_merged: boolean;
+  user_resolved?: boolean;
+}
+
 export interface ReviewConflict {
-  subject_id: string;
+  subject: string;
   predicate: string;
   severity: string;
-  conflicting_values: Array<{
-    object_id: string;
-    source_id: string | null;
-    source_title?: string | null;
-    source_credibility: number;
-  }>;
+  assertions: ReviewConflictAssertion[];
+  values: ReviewConflictValue[];
+  cross_engine_consensus: ReviewConflictCrossEngineConsensus | null;
+  auto_merged: boolean;
+  affected_goal_count: number;
 }
 
 export interface UnifiedReviewInbox {
@@ -1582,6 +1735,15 @@ export interface LLMConfigView {
   role_assignments: Partial<Record<Role, string>>;
   tavily_api_key_configured: boolean;
   tavily_api_key_preview: string;
+  // Multi-source search engines (§A.3 of cross-validation spec)
+  exa_api_key_configured: boolean;
+  exa_api_key_preview: string;
+  bocha_api_key_configured: boolean;
+  bocha_api_key_preview: string;
+  anysearch_api_key_configured: boolean;
+  anysearch_api_key_preview: string;
+  search_default_engine: string;
+  search_engines_enabled: string[];
   roles_configured: Record<Role, boolean>;
   mineru_api_key_configured: boolean;
   mineru_api_key_preview: string;
@@ -1596,6 +1758,20 @@ export interface LLMConfigView {
   smtp_sender_name: string;
   smtp_use_tls: boolean;
   smtp_use_ssl: boolean;
+}
+
+/** Response of GET /settings/search-engine. */
+export interface SearchEngineConfigView {
+  default_engine: string;
+  engines: string[];
+  available_engines: string[];
+  configured_engines: string[];
+}
+
+/** Payload for PUT /settings/search-engine. Either field is optional. */
+export interface SearchEngineConfigUpdate {
+  default_engine?: string | null;
+  engines?: string[] | null;
 }
 
 export interface RuntimeProvider extends ProviderView {
@@ -1849,6 +2025,221 @@ export interface LLMSettingsUpdateResponse {
   new_state: LLMConfigView;
 }
 
+// ---------- Deep research types (§C of the cross-validation spec) ----------
+
+export type ResearchStatus =
+  | "planning"
+  | "searching"
+  | "extracting"
+  | "structuring"
+  | "validating"
+  | "synthesizing"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface ResearchJobSummary {
+  id: string;
+  question: string;
+  status: ResearchStatus;
+  progress: number;
+  current_step: string | null;
+  engines: string[];
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface ResearchKeyFinding {
+  finding: string;
+  supporting_assertions?: string[];
+  conflicting_assertions?: string[];
+  confidence?: "high" | "medium" | "low";
+  cross_engine_consensus?: number;
+  trend?: "stable" | "changing" | "divergent" | "null" | string;
+  trend_detail?: string;
+  caveats?: string;
+}
+
+export interface ResearchConflictValue {
+  value: unknown;
+  engines?: string[];
+  source_ids?: string[];
+  supporting_count?: number;
+}
+
+export interface ResearchConflictSummary {
+  subject: string | null;
+  predicate: string | null;
+  severity?: "low" | "medium" | "high" | string;
+  values: ResearchConflictValue[];
+  cross_engine_consensus?: Record<string, unknown> | null;
+  auto_merged?: boolean;
+}
+
+export interface ResearchTrendSummary {
+  subject: string | null;
+  predicate: string | null;
+  direction?: "stable" | "changing" | "divergent" | string;
+  transition_point?: string | null;
+  confidence?: number;
+  timeline?: Array<{
+    value: unknown;
+    observed_at: string | null;
+    engine?: string | null;
+    assertion_id?: string;
+  }>;
+}
+
+export interface ResearchSourceSummary {
+  source_id: string | null;
+  title: string | null;
+  url: string | null;
+  engine: string | null;
+  score?: number;
+  extracted?: boolean;
+}
+
+export interface ResearchReport {
+  summary: string;
+  key_findings: ResearchKeyFinding[];
+  conflicts: ResearchConflictSummary[];
+  trends: ResearchTrendSummary[];
+  sources: ResearchSourceSummary[];
+  research_metadata?: {
+    engines_used?: string[];
+    engine_domain_coverage?: Record<string, boolean>;
+    total_sources_collected?: number;
+    total_assertions_extracted?: number;
+    total_events_extracted?: number;
+    total_metrics_extracted?: number;
+    total_conflicts_detected?: number;
+    total_trends_detected?: number;
+    llm_calls?: number;
+    failure_count?: number;
+    honesty_disclaimer?: string;
+  };
+}
+
+export interface ResearchJobDetail extends ResearchJobSummary {
+  scope: Record<string, unknown>;
+  plan: {
+    sub_questions?: Array<{
+      q: string;
+      engines?: string[];
+      max_sources?: number;
+      expected_domains?: string[];
+    }>;
+    rationale?: string;
+    expected_domains?: string[];
+  } | null;
+  source_ids: string[];
+  assertion_ids: string[];
+  conflict_ids: string[];
+  report: ResearchReport | null;
+  failure_count: number;
+}
+
+// ---------- AgentTeam types (§D of the cross-validation spec) ----------
+
+export type TeamStatus =
+  | "decomposing"
+  | "dispatching"
+  | "running"
+  | "aggregating"
+  | "reviewing"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface TeamTemplateInfo {
+  name: string;
+  description: string;
+  allowed_roles: string[];
+  max_iterations: number;
+  always_synthesize: boolean;
+}
+
+export interface TeamJobSummary {
+  id: string;
+  objective: string;
+  template: string;
+  status: TeamStatus;
+  progress: number;
+  current_step: string | null;
+  iterations: number;
+  specialist_count: number;
+  failure_count: number;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface TeamSpecialistSummary {
+  subtask_id?: string;
+  role?: string;
+  status?: string;
+  tool_calls?: number;
+  llm_calls?: number;
+  sources_count?: number;
+  assertions_count?: number;
+  error?: string | null;
+}
+
+export interface TeamFinalOutput {
+  template?: string;
+  objective?: string;
+  summary?: string;
+  consensus?: Array<Record<string, unknown>>;
+  divergences?: Array<Record<string, unknown>>;
+  gaps?: Array<Record<string, unknown>>;
+  warnings?: string[];
+  specialist_count?: number;
+  specialist_summaries?: TeamSpecialistSummary[];
+  iterations?: number;
+  review_gaps?: Array<Record<string, unknown>>;
+  team_metadata?: {
+    total_llm_calls?: number;
+    failure_count?: number;
+    honesty_disclaimer?: string;
+  };
+}
+
+export interface TeamJobDetail extends TeamJobSummary {
+  scope: Record<string, unknown>;
+  subtasks: Array<Record<string, unknown>>;
+  specialist_results: Array<Record<string, unknown>>;
+  aggregated: Record<string, unknown> | null;
+  review_gaps: Array<Record<string, unknown>>;
+  final_output: TeamFinalOutput | null;
+}
+
+// ---------- Chat stream types (background chat execution) ----------
+
+export type ChatStreamStatus = "running" | "completed" | "failed" | "cancelled";
+
+export interface ChatStreamSummary {
+  id: string;
+  status: ChatStreamStatus;
+  user_message_preview: string;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface ChatStreamState {
+  id: string;
+  status: ChatStreamStatus;
+  result_content: string | null;
+  result_tool_calls: Array<{ name: string; result: unknown; id?: string }> | null;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  event_count: number;
+}
+
 // ---------- SWR defaults ----------
 
 export const swrConfig: SWRConfiguration = {
@@ -1872,6 +2263,67 @@ export interface ChatChunk {
   finish_reason: string | null;
   usage?: Record<string, number>;
   reasoning_delta?: string | null;
+  /** Carried by the first chunk only — the persistent stream ID for reconnection. */
+  stream_id?: string;
+}
+
+// Max reconnect attempts before giving up. Each attempt waits a bit longer
+// (exponential backoff capped at 5s) so transient network blips recover
+// quickly but we don't spin forever on a hard outage.
+const STREAM_MAX_RECONNECT = 3;
+
+function authHeadersForStream(): Record<string, string> {
+  const token = getAccessToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/**
+ * Parse one SSE frame from the buffer. Returns the parsed JSON payload,
+ * the string "[DONE]" for the terminal sentinel, or ``null`` if the line
+ * is not a data line.
+ */
+function parseSseFrame(evt: string): string | object | null {
+  const dataLine = evt.split("\n").find((l) => l.startsWith("data: "));
+  if (!dataLine) return null;
+  const payload = dataLine.slice(6);
+  if (payload === "[DONE]") return "[DONE]";
+  try {
+    return JSON.parse(payload);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read SSE frames from a fetch Response body, yielding parsed payloads.
+ * Resolves when the stream ends (reader done) or throws on network error.
+ */
+async function* readSseFrames(
+  res: Response
+): AsyncGenerator<string | object> {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buffer.indexOf("\n\n")) !== -1) {
+        const evt = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        const parsed = parseSseFrame(evt);
+        if (parsed !== null) yield parsed;
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // already released
+    }
+  }
 }
 
 export async function* streamChat(
@@ -1883,6 +2335,13 @@ export async function* streamChat(
     web_search?: boolean;
     enabled_mcp_servers?: string[];
     enabled_skills?: string[];
+    /**
+     * If false, the backend skips ChatStream creation and streams
+     * directly. Used for ephemeral calls like title generation where
+     * persistence + reconnection is unnecessary.
+     * Default: true.
+     */
+    persist?: boolean;
   },
   signal?: AbortSignal
 ): AsyncGenerator<ChatChunk> {
@@ -1894,19 +2353,12 @@ export async function* streamChat(
   // Falls back to the proxy path when no backend URL is configured (e.g.
   // production behind a streaming-aware reverse proxy).
   const streamUrl = streamApiUrl("/chat/stream");
-  // Attach Bearer token — streamChat uses raw fetch (not ``request``) so
-  // it must add the Authorization header manually. Without this the backend
-  // returns 401 and the user sees "Chat stream failed".
-  const token = getAccessToken();
-  const authHeaders: Record<string, string> = token
-    ? { Authorization: `Bearer ${token}` }
-    : {};
   const res = await fetch(streamUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...getDesktopHeaders(),
-      ...authHeaders,
+      ...authHeadersForStream(),
     },
     body: JSON.stringify({ ...body, stream: true }),
     signal,
@@ -1914,38 +2366,158 @@ export async function* streamChat(
   if (!res.ok || !res.body) {
     throw new ApiError(res.status, "Chat stream failed");
   }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
 
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+  // The first SSE frame carries {stream_id} for reconnection. Once we
+  // have it, transient network errors trigger automatic reconnection
+  // (up to STREAM_MAX_RECONNECT times) via GET /chat/stream/{id}/events?last_seq=N.
+  let streamId: string | undefined;
+  // Track how many data events we've yielded so we can pass last_seq on
+  // reconnect and avoid replaying duplicates.
+  let eventCount = 0;
 
-      let idx: number;
-      while ((idx = buffer.indexOf("\n\n")) !== -1) {
-        const evt = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
-        const dataLine = evt.split("\n").find((l) => l.startsWith("data: "));
-        if (!dataLine) continue;
-        const payload = dataLine.slice(6);
-        if (payload === "[DONE]") return;
-        try {
-          yield JSON.parse(payload) as ChatChunk;
-        } catch {
-          // skip malformed lines
+  for (let attempt = 0; ; attempt++) {
+    if (attempt > 0) {
+      // Reconnect: fetch new SSE stream from the events endpoint, resuming
+      // after the last event we successfully yielded.
+      if (!streamId) throw new ApiError(0, "Chat stream reconnect failed: no stream_id");
+      const reconnectUrl =
+        streamApiUrl(`/chat/stream/${encodeURIComponent(streamId)}/events`) +
+        `?last_seq=${eventCount}`;
+      try {
+        const reconnectRes = await fetch(reconnectUrl, {
+          headers: { ...getDesktopHeaders(), ...authHeadersForStream() },
+          signal,
+        });
+        if (!reconnectRes.ok || !reconnectRes.body) {
+          throw new ApiError(reconnectRes.status, "Chat stream reconnect failed");
         }
+        // Replace the response reference and fall through to the read loop.
+        // We can't reassign ``res`` (it's const), so we read directly.
+        for await (const frame of readSseFrames(reconnectRes)) {
+          if (frame === "[DONE]") return;
+          if (typeof frame === "object" && "stream_id" in frame && !("delta" in frame)) {
+            // Skip stream_id frames on reconnect — we already yielded it.
+            continue;
+          }
+          eventCount++;
+          yield frame as ChatChunk;
+        }
+        return;
+      } catch (err) {
+        if ((err as Error).name === "AbortError") throw err;
+        if (attempt >= STREAM_MAX_RECONNECT) throw err;
+        await backoff(attempt, signal);
+        continue;
       }
     }
-  } finally {
-    // Ensure the reader is released on early return / abort so the
-    // underlying fetch connection is not left dangling.
+
+    // ---- Initial connection (attempt 0) ----
     try {
-      reader.releaseLock();
-    } catch {
-      // already released
+      for await (const frame of readSseFrames(res)) {
+        // First-ever frame: capture stream_id if present.
+        if (!streamId && typeof frame === "object" && "stream_id" in frame) {
+          streamId = (frame as { stream_id: string }).stream_id;
+          yield { delta: "", finish_reason: null, stream_id: streamId };
+          continue;
+        }
+        if (frame === "[DONE]") return;
+        eventCount++;
+        yield frame as ChatChunk;
+      }
+      // Stream ended normally (reader done without [DONE]) — exit.
+      return;
+    } catch (err) {
+      if ((err as Error).name === "AbortError") throw err;
+      if (!streamId || attempt >= STREAM_MAX_RECONNECT) throw err;
+      await backoff(attempt, signal);
+      // Loop continues to attempt+1, which hits the reconnect path above.
+    }
+  }
+}
+
+/** Exponential backoff with abort support. */
+function backoff(attempt: number, signal?: AbortSignal): Promise<void> {
+  const delay = Math.min(1000 * Math.pow(2, attempt), 5000);
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, delay);
+    if (signal) {
+      signal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new DOMException("Aborted", "AbortError"));
+        },
+        { once: true }
+      );
+    }
+  });
+}
+
+/**
+ * Resume a chat stream after a page reload or tab close.
+ *
+ * Connects to ``GET /chat/stream/{stream_id}/events`` and replays all
+ * events from the beginning (``last_seq=0``). The caller rebuilds the
+ * message state from the event stream — tokens accumulate into content,
+ * tool calls are upserted by ID.
+ *
+ * For a quick restore without re-streaming every token (e.g. when the
+ * stream is already completed), use ``api.getChatStream(streamId)`` to
+ * get the final assembled content + tool calls in one request.
+ */
+export async function* resumeChatStream(
+  streamId: string,
+  signal?: AbortSignal
+): AsyncGenerator<ChatChunk> {
+  // Track how many events we've yielded so we can pass last_seq on
+  // reconnect and avoid replaying duplicates (same pattern as streamChat).
+  let eventCount = 0;
+
+  for (let attempt = 0; attempt <= STREAM_MAX_RECONNECT; attempt++) {
+    const url =
+      streamApiUrl(`/chat/stream/${encodeURIComponent(streamId)}/events`) +
+      (eventCount > 0 ? `?last_seq=${eventCount}` : "");
+
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { ...getDesktopHeaders(), ...authHeadersForStream() },
+        signal,
+      });
+    } catch (err) {
+      if ((err as Error).name === "AbortError") throw err;
+      if (attempt >= STREAM_MAX_RECONNECT) throw err;
+      await backoff(attempt, signal);
+      continue;
+    }
+    if (!res.ok || !res.body) {
+      // 404 means the stream was deleted — don't retry, surface the error.
+      if (res.status === 404) {
+        throw new ApiError(404, "Chat stream not found");
+      }
+      if (attempt >= STREAM_MAX_RECONNECT) {
+        throw new ApiError(res.status, "Chat stream reconnect failed");
+      }
+      await backoff(attempt, signal);
+      continue;
+    }
+
+    try {
+      for await (const frame of readSseFrames(res)) {
+        if (frame === "[DONE]") return;
+        // Skip the initial stream_id frame on reconnect (caller already has it).
+        if (typeof frame === "object" && "stream_id" in frame && !("delta" in frame)) {
+          continue;
+        }
+        eventCount++;
+        yield frame as ChatChunk;
+      }
+      return;
+    } catch (err) {
+      if ((err as Error).name === "AbortError") throw err;
+      if (attempt >= STREAM_MAX_RECONNECT) throw err;
+      await backoff(attempt, signal);
+      // Loop continues to attempt+1 with updated last_seq.
     }
   }
 }

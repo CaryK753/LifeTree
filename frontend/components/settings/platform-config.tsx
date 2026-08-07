@@ -9,6 +9,7 @@ import {
   type ProviderView,
   type Role,
   type SmtpUpdate,
+  type SearchEngineConfigUpdate,
   type TestResult,
   type OAuthProviderView,
   type OAuthProviderCreate,
@@ -52,6 +53,7 @@ import {
   Eye,
   EyeOff,
   FileText,
+  Globe,
   ImageIcon,
   KeyRound,
   Layers,
@@ -362,6 +364,62 @@ export function PlatformConfig() {
     }
   }
 
+  async function handleExaSave(key: string) {
+    try {
+      const next = await api.setExa(key);
+      mutate(next, { revalidate: false });
+      toast({ title: t("settings.toast.exaSaved"), variant: "success" });
+    } catch (e: any) {
+      toast({
+        title: t("settings.toast.updateFailed"),
+        description: e?.message ?? t("settings.toast.retryLater"),
+        variant: "error",
+      });
+    }
+  }
+
+  async function handleBochaSave(key: string) {
+    try {
+      const next = await api.setBocha(key);
+      mutate(next, { revalidate: false });
+      toast({ title: t("settings.toast.bochaSaved"), variant: "success" });
+    } catch (e: any) {
+      toast({
+        title: t("settings.toast.updateFailed"),
+        description: e?.message ?? t("settings.toast.retryLater"),
+        variant: "error",
+      });
+    }
+  }
+
+  async function handleAnysearchSave(key: string) {
+    try {
+      const next = await api.setAnysearch(key);
+      mutate(next, { revalidate: false });
+      toast({ title: t("settings.toast.anysearchSaved"), variant: "success" });
+    } catch (e: any) {
+      toast({
+        title: t("settings.toast.updateFailed"),
+        description: e?.message ?? t("settings.toast.retryLater"),
+        variant: "error",
+      });
+    }
+  }
+
+  async function handleSearchEngineSave(patch: SearchEngineConfigUpdate) {
+    try {
+      const next = await api.setSearchEngineConfig(patch);
+      mutate(next, { revalidate: false });
+      toast({ title: t("settings.toast.searchEngineSaved"), variant: "success" });
+    } catch (e: any) {
+      toast({
+        title: t("settings.toast.updateFailed"),
+        description: e?.message ?? t("settings.toast.retryLater"),
+        variant: "error",
+      });
+    }
+  }
+
   const rolesConfigured = useMemo(() => {
     if (!settings) return 0;
     return ALL_ROLES.filter((r) => settings.roles_configured[r]).length;
@@ -439,6 +497,39 @@ export function PlatformConfig() {
         configured={settings?.tavily_api_key_configured ?? false}
         preview={settings?.tavily_api_key_preview ?? ""}
         onSave={handleTavilySave}
+      />
+
+      {/* ---------- Multi-source search engines (Exa / Bocha / AnySearch) ---------- */}
+      <SearchEngineKeyCard
+        engine="exa"
+        configured={settings?.exa_api_key_configured ?? false}
+        preview={settings?.exa_api_key_preview ?? ""}
+        onSave={handleExaSave}
+      />
+      <SearchEngineKeyCard
+        engine="bocha"
+        configured={settings?.bocha_api_key_configured ?? false}
+        preview={settings?.bocha_api_key_preview ?? ""}
+        onSave={handleBochaSave}
+      />
+      <SearchEngineKeyCard
+        engine="anysearch"
+        configured={settings?.anysearch_api_key_configured ?? false}
+        preview={settings?.anysearch_api_key_preview ?? ""}
+        onSave={handleAnysearchSave}
+      />
+
+      {/* ---------- Search-engine routing config (default + enabled list) ---------- */}
+      <SearchEngineConfigCard
+        defaultEngine={settings?.search_default_engine ?? "tavily"}
+        enabledEngines={settings?.search_engines_enabled ?? ["tavily"]}
+        configuredEngines={[
+          ...(settings?.tavily_api_key_configured ? ["tavily"] : []),
+          ...(settings?.exa_api_key_configured ? ["exa"] : []),
+          ...(settings?.bocha_api_key_configured ? ["bocha"] : []),
+          ...(settings?.anysearch_api_key_configured ? ["anysearch"] : []),
+        ]}
+        onSave={handleSearchEngineSave}
       />
 
       {/* ---------- Mineru ---------- */}
@@ -1379,6 +1470,286 @@ function TavilyCard({
           >
             {t("common.save")}
           </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ============== Multi-source search-engine key cards ==============
+//
+// Generic card for Exa / Bocha / AnySearch API keys. Same UI pattern as
+// TavilyCard (password input + eye toggle + save) but parameterised by
+// ``engine`` so we don't duplicate the component three times.
+
+type SearchEngineName = "exa" | "bocha" | "anysearch";
+
+const ENGINE_META: Record<
+  SearchEngineName,
+  {
+    applyUrl: string;
+    placeholder: string;
+    reveal: () => Promise<{ value: string | null; configured: boolean }>;
+  }
+> = {
+  exa: {
+    applyUrl: "https://exa.ai",
+    placeholder: "exa-...",
+    reveal: () => api.getExaKey(),
+  },
+  bocha: {
+    applyUrl: "https://open.bochaai.com",
+    placeholder: "sk-...",
+    reveal: () => api.getBochaKey(),
+  },
+  anysearch: {
+    applyUrl: "https://anysearch.com",
+    placeholder: "as-...",
+    reveal: () => api.getAnysearchKey(),
+  },
+};
+
+function SearchEngineKeyCard({
+  engine,
+  configured,
+  preview,
+  onSave,
+}: {
+  engine: SearchEngineName;
+  configured: boolean;
+  preview: string;
+  onSave: (key: string) => void;
+}) {
+  const t = useT();
+  const toast = useToast();
+  const [value, setValue] = useState("");
+  const [show, setShow] = useState(false);
+  const [revealing, setRevealing] = useState(false);
+  const meta = ENGINE_META[engine];
+
+  async function handleToggleShow() {
+    if (!show && configured && !value) {
+      setRevealing(true);
+      try {
+        const r = await meta.reveal();
+        if (r.value) setValue(r.value);
+      } catch (e: any) {
+        toast({
+          title: t("settings.provider.fetchKeyFailed"),
+          description: e?.message,
+          variant: "error",
+        });
+      } finally {
+        setRevealing(false);
+      }
+    }
+    setShow((v) => !v);
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle className="flex items-center gap-2">
+            <Search className="h-4 w-4 text-brand-600 dark:text-brand-400" />
+            {t(`settings.${engine}.title`)}
+          </CardTitle>
+          <CardDescription className="mt-1">
+            {t(`settings.${engine}.subtitle`)}
+            <a
+              href={meta.applyUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-1.5 inline-flex items-center gap-0.5 text-brand-600 dark:text-brand-400 hover:underline"
+            >
+              {t(`settings.${engine}.apply`)} <ExternalLink className="h-3 w-3" />
+            </a>
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {configured && (
+          <div className="flex items-center gap-2 text-xs">
+            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+            <span className="text-zinc-500 dark:text-zinc-400">
+              {t(`settings.${engine}.current`)}
+            </span>
+            <span className="font-mono text-zinc-700 dark:text-zinc-300">{preview}</span>
+          </div>
+        )}
+        <div className="flex gap-2">
+          <Input
+            type={show ? "text" : "password"}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder={
+              configured && !value
+                ? t("settings.provider.apiKeyConfiguredHint")
+                : meta.placeholder
+            }
+            autoComplete="off"
+            className="font-mono"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={handleToggleShow}
+            disabled={revealing}
+            title={show ? t("settings.provider.hide") : t("settings.provider.show")}
+          >
+            {revealing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : show ? (
+              <EyeOff className="h-4 w-4" />
+            ) : (
+              <Eye className="h-4 w-4" />
+            )}
+          </Button>
+          <Button
+            onClick={() => {
+              onSave(value);
+              setValue("");
+              setShow(false);
+            }}
+            disabled={!value.trim()}
+          >
+            {t("common.save")}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ============== Search-engine routing config ==============
+//
+// Card for selecting the default engine and toggling which engines are
+// enabled. Changes are saved instantly (no save button) — same pattern as
+// the role-assignment cards above.
+
+const ALL_SEARCH_ENGINES = ["tavily", "exa", "bocha", "anysearch"] as const;
+
+function SearchEngineConfigCard({
+  defaultEngine,
+  enabledEngines,
+  configuredEngines,
+  onSave,
+}: {
+  defaultEngine: string;
+  enabledEngines: string[];
+  configuredEngines: string[];
+  onSave: (patch: SearchEngineConfigUpdate) => void;
+}) {
+  const t = useT();
+
+  function handleToggleEngine(engine: string, enable: boolean) {
+    let next: string[];
+    if (enable) {
+      // Add to enabled list if not already present.
+      next = enabledEngines.includes(engine)
+        ? enabledEngines
+        : [...enabledEngines, engine];
+    } else {
+      // Remove from enabled list, but never allow an empty list.
+      next = enabledEngines.filter((e) => e !== engine);
+      if (next.length === 0) return;
+    }
+    // If the current default is no longer enabled, fall back to the first
+    // enabled engine (the backend also enforces this, but we send it
+    // explicitly so the UI stays in sync).
+    const patch: SearchEngineConfigUpdate = { engines: next };
+    if (!next.includes(defaultEngine)) {
+      patch.default_engine = next[0];
+    }
+    onSave(patch);
+  }
+
+  function handleDefaultChange(engine: string) {
+    if (engine === defaultEngine) return;
+    onSave({ default_engine: engine });
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle className="flex items-center gap-2">
+            <Globe className="h-4 w-4 text-brand-600 dark:text-brand-400" />
+            {t("settings.searchEngine.title")}
+          </CardTitle>
+          <CardDescription className="mt-1">
+            {t("settings.searchEngine.subtitle")}
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Default engine selector */}
+        <div className="space-y-1.5">
+          <Label className="text-sm font-medium">
+            {t("settings.searchEngine.defaultEngine")}
+          </Label>
+          <Select value={defaultEngine} onValueChange={handleDefaultChange}>
+            <SelectTrigger className="w-full sm:w-64">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {enabledEngines.map((engine) => (
+                <SelectItem key={engine} value={engine}>
+                  {t(`settings.searchEngine.engineName.${engine}`)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            {t("settings.searchEngine.defaultHint")}
+          </p>
+        </div>
+
+        {/* Enabled engines list */}
+        <div className="space-y-1.5">
+          <Label className="text-sm font-medium">
+            {t("settings.searchEngine.enabledEngines")}
+          </Label>
+          <div className="space-y-1">
+            {ALL_SEARCH_ENGINES.map((engine) => {
+              const enabled = enabledEngines.includes(engine);
+              const configured = configuredEngines.includes(engine);
+              return (
+                <div
+                  key={engine}
+                  className="flex items-center justify-between rounded-lg border border-zinc-200 dark:border-zinc-800 px-3 py-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">
+                      {t(`settings.searchEngine.engineName.${engine}`)}
+                    </span>
+                    {configured ? (
+                      <Badge
+                        className="text-[10px] bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+                      >
+                        {t("settings.searchEngine.configured")}
+                      </Badge>
+                    ) : (
+                      <Badge
+                        className="text-[10px] bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
+                      >
+                        {t("settings.searchEngine.notConfigured")}
+                      </Badge>
+                    )}
+                  </div>
+                  <Switch
+                    checked={enabled}
+                    onChange={() => handleToggleEngine(engine, !enabled)}
+                    disabled={enabled && enabledEngines.length <= 1}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            {t("settings.searchEngine.enabledHint")}
+          </p>
         </div>
       </CardContent>
     </Card>

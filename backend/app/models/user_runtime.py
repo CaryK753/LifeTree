@@ -24,6 +24,12 @@ class UserServiceConfig(TimestampMixin, Base):
     models: Mapped[list[dict[str, Any]]] = mapped_column(JSON_DOCUMENT, default=list)
     role_assignments: Mapped[dict[str, str]] = mapped_column(JSON_DOCUMENT, default=dict)
     tavily_api_key: Mapped[str] = mapped_column(Text, default="", server_default="")
+    exa_api_key: Mapped[str] = mapped_column(Text, default="", server_default="")
+    bocha_api_key: Mapped[str] = mapped_column(Text, default="", server_default="")
+    anysearch_api_key: Mapped[str] = mapped_column(Text, default="", server_default="")
+    search_default_engine: Mapped[str] = mapped_column(
+        String(32), default="", server_default=""
+    )
     mineru_api_key: Mapped[str] = mapped_column(Text, default="", server_default="")
     mineru_base_url: Mapped[str] = mapped_column(
         String(512), default="https://mineru.net/api/v4"
