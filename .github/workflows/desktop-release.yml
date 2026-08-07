@@ -207,4 +207,4 @@ jobs:
 
           echo "Manifest contents:"
           cat latest.json
-          gh release upload "$TAG" latest.json --clobber
+          gh release upload "$TAG" latest.json --clobber --repo "${{ github.repository }}"
