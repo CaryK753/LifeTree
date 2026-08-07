@@ -162,7 +162,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p release-assets
-          gh release download "$TAG" --dir release-assets --pattern '*.sig' || true
+          gh release download "$TAG" --repo "${{ github.repository }}" --dir release-assets --pattern '*.sig' || true
 
       - name: Publish signed update manifest
         shell: bash
